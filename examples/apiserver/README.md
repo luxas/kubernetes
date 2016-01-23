@@ -18,11 +18,6 @@
 If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
-<!-- TAG RELEASE_LINK, added by the munger automatically -->
-<strong>
-The latest release of this document can be found
-[here](http://releases.k8s.io/release-1.1/examples/spark/images/driver/README.md).
-
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
 </strong>
@@ -32,7 +27,19 @@ Documentation for other releases can be found at
 
 <!-- END MUNGE: UNVERSIONED_WARNING -->
 
+# API Server
+
+This is a work in progress example for an API Server.
+We are working on isolating the generic api server code from kubernetes specific
+API objects. Some relevant issues:
+
+* https://github.com/kubernetes/kubernetes/issues/17412
+* https://github.com/kubernetes/kubernetes/issues/2742
+* https://github.com/kubernetes/kubernetes/issues/13541
+
+This code here is to examplify what it takes to write your own API server.
+
 
 <!-- BEGIN MUNGE: GENERATED_ANALYTICS -->
-[![Analytics](https://kubernetes-site.appspot.com/UA-36037335-10/GitHub/examples/spark/images/driver/README.md?pixel)]()
+[![Analytics](https://kubernetes-site.appspot.com/UA-36037335-10/GitHub/examples/apiserver/README.md?pixel)]()
 <!-- END MUNGE: GENERATED_ANALYTICS -->
