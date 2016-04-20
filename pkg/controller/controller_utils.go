@@ -222,6 +222,9 @@ type Expectations interface {
 
 // ControlleeExpectations track controllee creates/deletes.
 type ControlleeExpectations struct {
+	// add and del are used with atomic operations so they must be
+	// 64-bit aligned, otherwise 32-bit will crash, due to a bug in go:
+	// https://github.com/golang/go/issues/599
 	add       int64
 	del       int64
 	key       string

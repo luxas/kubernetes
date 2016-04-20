@@ -45,14 +45,18 @@ type Tunneler interface {
 }
 
 type SSHTunneler struct {
+	// lastSync and lastSSHKeySync are used with atomic operations so they must be
+	// 64-bit aligned, otherwise 32-bit will crash, due to a bug in go:
+	// https://github.com/golang/go/issues/599
+	lastSync       int64 // Seconds since Epoch
+	lastSSHKeySync int64 // Seconds since Epoch
+
 	SSHUser        string
 	SSHKeyfile     string
 	InstallSSHKey  InstallSSHKey
 	HealthCheckURL *url.URL
 
 	tunnels        *ssh.SSHTunnelList
-	lastSync       int64 // Seconds since Epoch
-	lastSSHKeySync int64 // Seconds since Epoch
 	lastSyncMetric prometheus.GaugeFunc
 	clock          util.Clock
 
