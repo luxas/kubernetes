@@ -12,15 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM haproxy:1.5
+FROM BASEIMAGE
 MAINTAINER Muhammed Uluyol <uluyol@google.com>
 
-RUN apt-get update && apt-get install -y dnsutils
+# If we're building for another architecture than amd64, the CROSS_BUILD_ placeholder is removed so e.g. CROSS_BUILD_COPY turns into COPY
+# If we're building normally, for amd64, CROSS_BUILD lines are removed
+CROSS_BUILD_COPY qemu-ARCH-static /usr/bin/
 
-ADD proxy.conf.insecure.in /proxy.conf.in
-ADD run_proxy.sh /usr/bin/run_proxy
+RUN DEBIAN_FRONTEND=noninteractive apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y dnsutils \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN chown root:users /usr/bin/run_proxy
-RUN chmod 755 /usr/bin/run_proxy
+COPY proxy.conf.insecure.in /proxy.conf.in
+COPY run_proxy.sh /usr/bin/run_proxy
+
+RUN chown root:users /usr/bin/run_proxy \
+    && chmod 755 /usr/bin/run_proxy
 
 CMD ["/usr/bin/run_proxy"]
