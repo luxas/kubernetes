@@ -24,6 +24,7 @@ import (
 	"github.com/google/cadvisor/events"
 	cadvisorapi "github.com/google/cadvisor/info/v1"
 	cadvisorapiv2 "github.com/google/cadvisor/info/v2"
+	"github.com/google/cadvisor/metrics"
 )
 
 type cadvisorUnsupported struct {
@@ -79,4 +80,8 @@ func (cu *cadvisorUnsupported) WatchEvents(request *events.Request) (*events.Eve
 
 func (cu *cadvisorUnsupported) HasDedicatedImageFs() (bool, error) {
 	return false, unsupportedErr
+}
+
+func (cu *cadvisorUnsupported) PrometheusHandler() *metrics.PrometheusCollector {
+	return nil
 }

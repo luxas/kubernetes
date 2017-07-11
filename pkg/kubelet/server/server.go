@@ -29,12 +29,14 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"os"
 
 	restful "github.com/emicklei/go-restful"
 	"github.com/golang/glog"
 	cadvisorapi "github.com/google/cadvisor/info/v1"
 	cadvisorapiv2 "github.com/google/cadvisor/info/v2"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"k8s.io/api/core/v1"
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
@@ -56,6 +58,7 @@ import (
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	"k8s.io/kubernetes/pkg/kubelet/server/portforward"
 	remotecommandserver "k8s.io/kubernetes/pkg/kubelet/server/remotecommand"
+	"k8s.io/kubernetes/pkg/kubelet/cadvisor"
 	"k8s.io/kubernetes/pkg/kubelet/server/stats"
 	"k8s.io/kubernetes/pkg/kubelet/server/streaming"
 	"k8s.io/kubernetes/pkg/util/configz"
@@ -124,9 +127,10 @@ func ListenAndServeKubeletServer(
 	enableDebuggingHandlers,
 	enableContentionProfiling bool,
 	runtime kubecontainer.Runtime,
-	criHandler http.Handler) {
+	criHandler http.Handler,
+	cadvisorIface cadvisor.Interface) {
 	glog.Infof("Starting to listen on %s:%d", address, port)
-	handler := NewServer(host, resourceAnalyzer, auth, enableDebuggingHandlers, enableContentionProfiling, runtime, criHandler)
+	handler := NewServer(host, resourceAnalyzer, auth, enableDebuggingHandlers, enableContentionProfiling, runtime, criHandler, cadvisorIface)
 	s := &http.Server{
 		Addr:           net.JoinHostPort(address.String(), strconv.FormatUint(uint64(port), 10)),
 		Handler:        &handler,
@@ -144,9 +148,9 @@ func ListenAndServeKubeletServer(
 }
 
 // ListenAndServeKubeletReadOnlyServer initializes a server to respond to HTTP network requests on the Kubelet.
-func ListenAndServeKubeletReadOnlyServer(host HostInterface, resourceAnalyzer stats.ResourceAnalyzer, address net.IP, port uint, runtime kubecontainer.Runtime) {
+func ListenAndServeKubeletReadOnlyServer(host HostInterface, resourceAnalyzer stats.ResourceAnalyzer, address net.IP, port uint, runtime kubecontainer.Runtime, cadvisorIface cadvisor.Interface) {
 	glog.V(1).Infof("Starting to listen read-only on %s:%d", address, port)
-	s := NewServer(host, resourceAnalyzer, nil, false, false, runtime, nil)
+	s := NewServer(host, resourceAnalyzer, nil, false, false, runtime, nil, cadvisorIface)
 
 	server := &http.Server{
 		Addr:           net.JoinHostPort(address.String(), strconv.FormatUint(uint64(port), 10)),
@@ -201,7 +205,8 @@ func NewServer(
 	enableDebuggingHandlers,
 	enableContentionProfiling bool,
 	runtime kubecontainer.Runtime,
-	criHandler http.Handler) Server {
+	criHandler http.Handler,
+	cadvisorIface cadvisor.Interface) Server {
 	server := Server{
 		host:             host,
 		resourceAnalyzer: resourceAnalyzer,
@@ -213,6 +218,7 @@ func NewServer(
 		server.InstallAuthFilter()
 	}
 	server.InstallDefaultHandlers()
+	server.InstallMetricsEndpoint(cadvisorIface)
 	if enableDebuggingHandlers {
 		server.InstallDebuggingHandlers(criHandler)
 		if enableContentionProfiling {
@@ -277,7 +283,6 @@ func (s *Server) InstallDefaultHandlers() {
 	s.restfulCont.Add(ws)
 
 	s.restfulCont.Add(stats.CreateHandlers(statsPath, s.host, s.resourceAnalyzer))
-	s.restfulCont.Handle(metricsPath, prometheus.Handler())
 
 	ws = new(restful.WebService)
 	ws.
@@ -288,6 +293,16 @@ func (s *Server) InstallDefaultHandlers() {
 		Operation("getSpec").
 		Writes(cadvisorapi.MachineInfo{}))
 	s.restfulCont.Add(ws)
+}
+
+func (s *Server) InstallMetricsEndpoint(cadvisorIface cadvisor.Interface) {
+	r := prometheus.NewRegistry()
+	r.MustRegister(
+		cadvisorIface.PrometheusHandler(),
+		prometheus.NewGoCollector(),
+		prometheus.NewProcessCollector(os.Getpid(), ""),
+	)
+	s.restfulCont.Handle(metricsPath, promhttp.HandlerFor(r, promhttp.HandlerOpts{}))
 }
 
 const pprofBasePath = "/debug/pprof/"

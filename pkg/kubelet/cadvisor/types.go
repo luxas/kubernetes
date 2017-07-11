@@ -20,6 +20,7 @@ import (
 	"github.com/google/cadvisor/events"
 	cadvisorapi "github.com/google/cadvisor/info/v1"
 	cadvisorapiv2 "github.com/google/cadvisor/info/v2"
+	"github.com/google/cadvisor/metrics"
 )
 
 // Interface is an abstract interface for testability.  It abstracts the interface to cAdvisor.
@@ -44,4 +45,7 @@ type Interface interface {
 
 	// HasDedicatedImageFs returns true iff a dedicated image filesystem exists for storing images.
 	HasDedicatedImageFs() (bool, error)
+
+	// PrometheusHandler returns the cAdvisor "/metrics" handler container_* metrics 
+	PrometheusHandler() *metrics.PrometheusCollector
 }

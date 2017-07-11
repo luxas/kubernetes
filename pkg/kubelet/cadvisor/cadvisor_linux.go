@@ -158,6 +158,10 @@ func (cc *cadvisorClient) exportHTTP(address string, port uint) error {
 	return nil
 }
 
+func (cc *cadvisorClient) PrometheusHandler() *metrics.PrometheusCollector {
+	return metrics.NewPrometheusCollector(cc.Manager, containerLabels)
+}
+
 func (cc *cadvisorClient) ContainerInfo(name string, req *cadvisorapi.ContainerInfoRequest) (*cadvisorapi.ContainerInfo, error) {
 	return cc.GetContainerInfo(name, req)
 }
