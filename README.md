@@ -84,3 +84,6 @@ That said, if you have questions, reach out to us
 [troubleshooting guide]: https://kubernetes.io/docs/tasks/debug-application-cluster/troubleshooting/
 
 [![Analytics](https://kubernetes-site.appspot.com/UA-36037335-10/GitHub/README.md?pixel)]()
+
+
+katti och cecci är bäst!!
