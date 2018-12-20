@@ -17,9 +17,18 @@ limitations under the License.
 package validation
 
 import (
+	"k8s.io/apimachinery/pkg/apis/config"
 	"k8s.io/apimachinery/pkg/util/validation/field"
-	"k8s.io/apiserver/pkg/apis/config"
 )
+
+// ValidateClientConnectionConfiguration ensures validation of the ClientConnectionConfiguration struct
+func ValidateClientConnectionConfiguration(cc *config.ClientConnectionConfiguration, fldPath *field.Path) field.ErrorList {
+	allErrs := field.ErrorList{}
+	if cc.Burst < 0 {
+		allErrs = append(allErrs, field.Invalid(fldPath.Child("burst"), cc.Burst, "must be non-negative"))
+	}
+	return allErrs
+}
 
 // ValidateLeaderElectionConfiguration ensures validation of the LeaderElectionConfiguration struct
 func ValidateLeaderElectionConfiguration(cc *config.LeaderElectionConfiguration, fldPath *field.Path) field.ErrorList {

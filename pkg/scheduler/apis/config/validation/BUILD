@@ -7,10 +7,10 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/scheduler/apis/config:go_default_library",
-        "//staging/src/k8s.io/apimachinery/pkg/apis/config/validation:go_default_library",
         "//staging/src/k8s.io/apimachinery/pkg/util/validation:go_default_library",
         "//staging/src/k8s.io/apimachinery/pkg/util/validation/field:go_default_library",
-        "//staging/src/k8s.io/apiserver/pkg/apis/config/validation:go_default_library",
+        "//vendor/k8s.io/apimachinery/pkg/apis/config/validation:go_default_library",
+        "//vendor/k8s.io/apiserver/pkg/apis/config/validation:go_default_library",
     ],
 )
 
@@ -20,9 +20,9 @@ go_test(
     embed = [":go_default_library"],
     deps = [
         "//pkg/scheduler/apis/config:go_default_library",
-        "//staging/src/k8s.io/apimachinery/pkg/apis/config:go_default_library",
         "//staging/src/k8s.io/apimachinery/pkg/apis/meta/v1:go_default_library",
         "//staging/src/k8s.io/apiserver/pkg/apis/config:go_default_library",
+        "//vendor/k8s.io/apimachinery/pkg/apis/config:go_default_library",
     ],
 )
 
