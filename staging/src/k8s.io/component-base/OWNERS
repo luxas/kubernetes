@@ -1,0 +1,18 @@
+approvers:
+- luxas
+- sttts
+- mtaufen
+- DirectXMan12
+- liggitt
+reviewers:
+- luxas
+- sttts
+- mtaufen
+- liggitt
+- stewart-yu
+- dims
+- dixudx
+- rosti
+labels:
+- sig/cluster-lifecycle
+- sig/api-machinery
