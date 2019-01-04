@@ -17,9 +17,9 @@ limitations under the License.
 package config
 
 import (
-	apimachineryconfig "k8s.io/apimachinery/pkg/apis/config"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	apiserverconfig "k8s.io/apiserver/pkg/apis/config"
+	componentbaseconfig "k8s.io/component-base/config"
 )
 
 // GroupResource describes an group resource.
@@ -112,7 +112,7 @@ type GenericControllerManagerConfiguration struct {
 	MinResyncPeriod metav1.Duration
 	// ClientConnection specifies the kubeconfig file and client connection
 	// settings for the proxy server to use when communicating with the apiserver.
-	ClientConnection apimachineryconfig.ClientConnectionConfiguration
+	ClientConnection componentbaseconfig.ClientConnectionConfiguration
 	// How long to wait between starting controller managers
 	ControllerStartInterval metav1.Duration
 	// leaderElection defines the configuration of leader election client.

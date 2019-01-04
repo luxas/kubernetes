@@ -17,8 +17,8 @@ limitations under the License.
 package validation
 
 import (
-	"k8s.io/apimachinery/pkg/apis/config"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	"k8s.io/component-base/config"
 )
 
 // ValidateClientConnectionConfiguration ensures validation of the ClientConnectionConfiguration struct

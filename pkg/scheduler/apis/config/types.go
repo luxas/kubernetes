@@ -17,9 +17,9 @@ limitations under the License.
 package config
 
 import (
-	apimachineryconfig "k8s.io/apimachinery/pkg/apis/config"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	apiserverconfig "k8s.io/apiserver/pkg/apis/config"
+	componentbaseconfig "k8s.io/component-base/config"
 )
 
 const (
@@ -58,7 +58,7 @@ type KubeSchedulerConfiguration struct {
 
 	// ClientConnection specifies the kubeconfig file and client connection
 	// settings for the proxy server to use when communicating with the apiserver.
-	ClientConnection apimachineryconfig.ClientConnectionConfiguration
+	ClientConnection componentbaseconfig.ClientConnectionConfiguration
 	// HealthzBindAddress is the IP address and port for the health check server to serve on,
 	// defaulting to 0.0.0.0:10251
 	HealthzBindAddress string

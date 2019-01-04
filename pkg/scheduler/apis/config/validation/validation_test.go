@@ -20,9 +20,9 @@ import (
 	"testing"
 	"time"
 
-	apimachinery "k8s.io/apimachinery/pkg/apis/config"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	apiserver "k8s.io/apiserver/pkg/apis/config"
+	componentbase "k8s.io/component-base/config"
 	"k8s.io/kubernetes/pkg/scheduler/apis/config"
 )
 
@@ -33,7 +33,7 @@ func TestValidateKubeSchedulerConfiguration(t *testing.T) {
 		HealthzBindAddress:             "0.0.0.0:10254",
 		MetricsBindAddress:             "0.0.0.0:10254",
 		HardPodAffinitySymmetricWeight: 80,
-		ClientConnection: apimachinery.ClientConnectionConfiguration{
+		ClientConnection: componentbase.ClientConnectionConfiguration{
 			AcceptContentTypes: "application/json",
 			ContentType:        "application/json",
 			QPS:                10,

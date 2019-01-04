@@ -17,8 +17,8 @@ limitations under the License.
 package v1alpha1
 
 import (
-	"k8s.io/apimachinery/pkg/apis/config"
 	"k8s.io/apimachinery/pkg/conversion"
+	"k8s.io/component-base/config"
 )
 
 // Important! The public back-and-forth conversion functions for the types in this generic

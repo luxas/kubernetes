@@ -28,11 +28,11 @@ import (
 	"testing"
 	"time"
 
-	apimachineryconfig "k8s.io/apimachinery/pkg/apis/config"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/diff"
 	apiserverconfig "k8s.io/apiserver/pkg/apis/config"
 	apiserveroptions "k8s.io/apiserver/pkg/server/options"
+	componentbaseconfig "k8s.io/component-base/config"
 	kubeschedulerconfig "k8s.io/kubernetes/pkg/scheduler/apis/config"
 )
 
@@ -219,7 +219,7 @@ users:
 					LockObjectNamespace: "kube-system",
 					LockObjectName:      "kube-scheduler",
 				},
-				ClientConnection: apimachineryconfig.ClientConnectionConfiguration{
+				ClientConnection: componentbaseconfig.ClientConnectionConfiguration{
 					Kubeconfig:  configKubeconfig,
 					QPS:         50,
 					Burst:       100,
@@ -299,7 +299,7 @@ users:
 					LockObjectNamespace: "kube-system",
 					LockObjectName:      "kube-scheduler",
 				},
-				ClientConnection: apimachineryconfig.ClientConnectionConfiguration{
+				ClientConnection: componentbaseconfig.ClientConnectionConfiguration{
 					Kubeconfig:  flagKubeconfig,
 					QPS:         50,
 					Burst:       100,

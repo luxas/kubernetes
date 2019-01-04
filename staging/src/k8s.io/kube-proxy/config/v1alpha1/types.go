@@ -17,8 +17,8 @@ limitations under the License.
 package v1alpha1
 
 import (
-	apimachineryconfigv1alpha1 "k8s.io/apimachinery/pkg/apis/config/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	apimachineryconfigv1alpha1 "k8s.io/component-base/config/v1alpha1"
 )
 
 // KubeProxyIPTablesConfiguration contains iptables-related configuration
