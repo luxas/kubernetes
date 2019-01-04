@@ -62,8 +62,8 @@ type KubeSchedulerConfiguration struct {
 	MetricsBindAddress string `json:"metricsBindAddress"`
 
 	// DebuggingConfiguration holds configuration for Debugging related features
-	// TODO: We might wanna make this a substruct like Debugging apiserverconfig.DebuggingConfiguration
-	apiserverconfigv1alpha1.DebuggingConfiguration `json:",inline"`
+	// TODO: We might wanna make this a substruct like Debugging componentbaseconfigv1alpha1.DebuggingConfiguration
+	componentbaseconfigv1alpha1.DebuggingConfiguration `json:",inline"`
 
 	// DisablePreemption disables the pod preemption feature.
 	DisablePreemption bool `json:"disablePreemption"`

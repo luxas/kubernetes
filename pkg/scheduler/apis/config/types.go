@@ -18,7 +18,6 @@ package config
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	apiserverconfig "k8s.io/apiserver/pkg/apis/config"
 	componentbaseconfig "k8s.io/component-base/config"
 )
 
@@ -67,8 +66,8 @@ type KubeSchedulerConfiguration struct {
 	MetricsBindAddress string
 
 	// DebuggingConfiguration holds configuration for Debugging related features
-	// TODO: We might wanna make this a substruct like Debugging apiserverconfig.DebuggingConfiguration
-	apiserverconfig.DebuggingConfiguration
+	// TODO: We might wanna make this a substruct like Debugging componentbaseconfig.DebuggingConfiguration
+	componentbaseconfig.DebuggingConfiguration
 
 	// DisablePreemption disables the pod preemption feature.
 	DisablePreemption bool
@@ -130,7 +129,7 @@ type SchedulerPolicyConfigMapSource struct {
 // KubeSchedulerLeaderElectionConfiguration expands LeaderElectionConfiguration
 // to include scheduler specific configuration.
 type KubeSchedulerLeaderElectionConfiguration struct {
-	apiserverconfig.LeaderElectionConfiguration
+	componentbaseconfig.LeaderElectionConfiguration
 	// LockObjectNamespace defines the namespace of the lock object
 	LockObjectNamespace string
 	// LockObjectName defines the lock object name

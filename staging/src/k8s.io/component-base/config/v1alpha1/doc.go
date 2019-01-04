@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// +k8s:deepcopy-gen=package
-// +k8s:conversion-gen=k8s.io/component-base/config/
+// // +k8s:deepcopy-gen=package
+// +k8s:conversion-gen=k8s.io/component-base/config
 
 package v1alpha1 // import "k8s.io/component-base/config/v1alpha1"

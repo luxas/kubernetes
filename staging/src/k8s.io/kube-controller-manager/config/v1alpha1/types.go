@@ -164,7 +164,7 @@ type GenericControllerManagerConfiguration struct {
 	// How long to wait between starting controller managers
 	ControllerStartInterval metav1.Duration
 	// leaderElection defines the configuration of leader election client.
-	LeaderElection apiserverconfigv1alpha1.LeaderElectionConfiguration
+	LeaderElection componentbaseconfigv1alpha1.LeaderElectionConfiguration
 	// Controllers is the list of controllers to enable or disable
 	// '*' means "all enabled by default controllers"
 	// 'foo' means "enable 'foo'"
@@ -172,7 +172,7 @@ type GenericControllerManagerConfiguration struct {
 	// first item for a particular name wins
 	Controllers []string
 	// DebuggingConfiguration holds configuration for Debugging related features.
-	Debugging apiserverconfigv1alpha1.DebuggingConfiguration
+	Debugging componentbaseconfigv1alpha1.DebuggingConfiguration
 }
 
 // KubeCloudSharedConfiguration contains elements shared by both kube-controller manager
