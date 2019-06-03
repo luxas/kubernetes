@@ -19,6 +19,7 @@ package yaml
 import (
 	"fmt"
 
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/yaml"
 )
@@ -28,11 +29,13 @@ import (
 // fields.
 var DefaultMetaFactory = SimpleMetaFactory{}
 
+// SimpleMetaFactory implements the MetaFactory interface.
+var _ runtime.MetaFactory = &SimpleMetaFactory{}
+
 // SimpleMetaFactory provides default methods for retrieving the type and version of objects
 // that are identified with an "apiVersion" and "kind" fields in their YAML
 // serialization. It may be parameterized with the names of the fields in memory, or an
-// optional list of base structs to search for those fields in memory. This struct implements
-// the k8s.io/apimachinery/pkg/runtime/serializer/json.MetaFactory interface.
+// optional list of base structs to search for those fields in memory.
 type SimpleMetaFactory struct{}
 
 // Interpret will return the APIVersion and Kind of the YAML wire-format

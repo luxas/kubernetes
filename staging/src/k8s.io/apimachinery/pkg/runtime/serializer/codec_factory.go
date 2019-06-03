@@ -48,7 +48,7 @@ type serializerType struct {
 	StreamSerializer runtime.Serializer
 }
 
-func newSerializersForScheme(scheme *runtime.Scheme, mf json.MetaFactory) []serializerType {
+func newSerializersForScheme(scheme *runtime.Scheme, mf runtime.MetaFactory) []serializerType {
 	jsonSerializer := json.NewSerializer(mf, scheme, scheme, false)
 	jsonPrettySerializer := json.NewSerializer(mf, scheme, scheme, true)
 	yamlSerializer := json.NewYAMLSerializer(mf, scheme, scheme)

@@ -20,28 +20,23 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
-
-// MetaFactory is used to store and retrieve the version and kind
-// information for JSON objects in a serializer.
-type MetaFactory interface {
-	// Interpret should return the version and kind of the wire-format of
-	// the object.
-	Interpret(data []byte) (*schema.GroupVersionKind, error)
-}
 
 // DefaultMetaFactory is a default factory for versioning objects in JSON. The object
 // in memory and in the default JSON serialization will use the "kind" and "apiVersion"
 // fields.
 var DefaultMetaFactory = SimpleMetaFactory{}
 
+// SimpleMetaFactory implements the MetaFactory interface.
+var _ runtime.MetaFactory = &SimpleMetaFactory{}
+
 // SimpleMetaFactory provides default methods for retrieving the type and version of objects
 // that are identified with an "apiVersion" and "kind" fields in their JSON
 // serialization. It may be parameterized with the names of the fields in memory, or an
 // optional list of base structs to search for those fields in memory.
-type SimpleMetaFactory struct {
-}
+type SimpleMetaFactory struct{}
 
 // Interpret will return the APIVersion and Kind of the JSON wire-format
 // encoding of an object, or an error.

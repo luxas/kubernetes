@@ -163,6 +163,14 @@ type NestedObjectDecoder interface {
 	DecodeNestedObjects(d Decoder) error
 }
 
+// MetaFactory is used to store and retrieve the version and kind
+// information for JSON objects in a serializer.
+type MetaFactory interface {
+	// Interpret should return the version and kind of the wire-format of
+	// the object.
+	Interpret(data []byte) (*schema.GroupVersionKind, error)
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // Non-codec interfaces
 
