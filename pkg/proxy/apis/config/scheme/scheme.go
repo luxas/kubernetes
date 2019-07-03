@@ -22,6 +22,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/kubernetes/pkg/proxy/apis/config"
 	"k8s.io/kubernetes/pkg/proxy/apis/config/v1alpha1"
+	configserializer "k8s.io/component-base/config/serializer"
 )
 
 var (
@@ -30,6 +31,8 @@ var (
 	// Codecs provides methods for retrieving codecs and serializers for specific
 	// versions and content types.
 	Codecs = serializer.NewCodecFactory(Scheme)
+	// Serializer provides high-level encoding/decoding methods
+	Serializer = configserializer.NewConfigSerializer(Scheme)
 )
 
 func init() {
@@ -40,4 +43,5 @@ func init() {
 func AddToScheme(scheme *runtime.Scheme) {
 	utilruntime.Must(v1alpha1.AddToScheme(scheme))
 	utilruntime.Must(config.AddToScheme(scheme))
+	utilruntime.Must(scheme.SetVersionPriority(v1alpha1.SchemeGroupVersion))
 }

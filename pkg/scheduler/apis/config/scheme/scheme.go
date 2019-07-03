@@ -22,6 +22,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	kubeschedulerconfig "k8s.io/kubernetes/pkg/scheduler/apis/config"
 	kubeschedulerconfigv1alpha1 "k8s.io/kubernetes/pkg/scheduler/apis/config/v1alpha1"
+	configserializer "k8s.io/component-base/config/serializer"
 )
 
 var (
@@ -30,6 +31,9 @@ var (
 
 	// Codecs provides access to encoding and decoding for the scheme.
 	Codecs = serializer.NewCodecFactory(Scheme)
+
+	// Serializer has high-level encoding/decoding methods
+	Serializer = configserializer.NewConfigSerializer(Scheme)
 )
 
 func init() {
