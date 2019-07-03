@@ -19,6 +19,7 @@ package serializer
 import (
 	"mime"
 	"strings"
+	"fmt"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -238,6 +239,15 @@ func (f CodecFactory) CodecForVersions(encoder runtime.Encoder, decoder runtime.
 // DecoderToVersion returns a decoder that targets the provided group version.
 func (f CodecFactory) DecoderToVersion(decoder runtime.Decoder, gv runtime.GroupVersioner) runtime.Decoder {
 	return f.CodecForVersions(nil, decoder, nil, gv)
+}
+
+// EncoderForMediaType returns an encoder that targets the provided media type.
+func (f CodecFactory) EncoderForMediaType(mediaType string) (runtime.Encoder, error) {
+	info, ok := runtime.SerializerInfoForMediaType(f.SupportedMediaTypes(), mediaType)
+	if !ok {
+		return nil, fmt.Errorf("unable to locate encoder -- %q is not a supported media type", mediaType)
+	}
+	return info.Serializer, nil
 }
 
 // EncoderForVersion returns an encoder that targets the provided group version.

@@ -41,7 +41,6 @@ import (
 	cliflag "k8s.io/component-base/cli/flag"
 	componentbaseconfig "k8s.io/component-base/config"
 	"k8s.io/klog"
-	kubeschedulerconfigv1alpha1 "k8s.io/kube-scheduler/config/v1alpha1"
 	schedulerappconfig "k8s.io/kubernetes/cmd/kube-scheduler/app/config"
 	"k8s.io/kubernetes/pkg/client/leaderelectionconfig"
 	"k8s.io/kubernetes/pkg/master/ports"
@@ -73,8 +72,8 @@ type Options struct {
 
 // NewOptions returns default scheduler app options.
 func NewOptions() (*Options, error) {
-	cfg, err := newDefaultComponentConfig()
-	if err != nil {
+	cfg := &kubeschedulerconfig.KubeSchedulerConfiguration{}
+	if err := kubeschedulerscheme.Serializer.DefaultInternal(cfg); err != nil {
 		return nil, err
 	}
 
@@ -129,16 +128,6 @@ func splitHostIntPort(s string) (string, int, error) {
 	return host, portInt, err
 }
 
-func newDefaultComponentConfig() (*kubeschedulerconfig.KubeSchedulerConfiguration, error) {
-	cfgv1alpha1 := kubeschedulerconfigv1alpha1.KubeSchedulerConfiguration{}
-	kubeschedulerscheme.Scheme.Default(&cfgv1alpha1)
-	cfg := kubeschedulerconfig.KubeSchedulerConfiguration{}
-	if err := kubeschedulerscheme.Scheme.Convert(&cfgv1alpha1, &cfg, nil); err != nil {
-		return nil, err
-	}
-	return &cfg, nil
-}
-
 // Flags returns flags for a specific scheduler by section name
 func (o *Options) Flags() (nfs cliflag.NamedFlagSets) {
 	fs := nfs.FlagSet("misc")
@@ -171,15 +160,12 @@ func (o *Options) ApplyTo(c *schedulerappconfig.Config) error {
 			return err
 		}
 	} else {
-		cfg, err := loadConfigFromFile(o.ConfigFile)
-		if err != nil {
-			return err
-		}
-
 		// use the loaded config file only, with the exception of --address and --port. This means that
 		// none of the deprecated flags in o.Deprecated are taken into consideration. This is the old
 		// behaviour of the flags we have to keep.
-		c.ComponentConfig = *cfg
+		if err := kubeschedulerscheme.Serializer.DecodeFileInto(o.ConfigFile, &c.ComponentConfig); err != nil {
+			return err
+		}
 
 		if err := o.CombinedInsecureServing.ApplyToFromLoadedConfig(c, &c.ComponentConfig); err != nil {
 			return err

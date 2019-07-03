@@ -40,9 +40,9 @@ import (
 func MarshalKubeadmConfigObject(obj runtime.Object) ([]byte, error) {
 	switch internalcfg := obj.(type) {
 	case *kubeadmapi.InitConfiguration:
-		return MarshalInitConfigurationToBytes(internalcfg, kubeadmapiv1beta2.SchemeGroupVersion)
+		return MarshalInitConfigurationToBytes(internalcfg, nil)
 	case *kubeadmapi.ClusterConfiguration:
-		return MarshalClusterConfigurationToBytes(internalcfg, kubeadmapiv1beta2.SchemeGroupVersion)
+		return MarshalClusterConfigurationToBytes(internalcfg, nil)
 	default:
 		return kubeadmutil.MarshalToYamlForCodecs(obj, kubeadmapiv1beta2.SchemeGroupVersion, kubeadmscheme.Codecs)
 	}

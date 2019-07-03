@@ -27,7 +27,6 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/version"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
@@ -65,15 +64,13 @@ func getInitConfigurationFromCluster(kubeconfigDir string, client clientset.Inte
 		return nil, errors.Wrap(err, "failed to get config map")
 	}
 
-	// InitConfiguration is composed with data from different places
-	initcfg := &kubeadmapi.InitConfiguration{}
-
 	// gets ClusterConfiguration from kubeadm-config
 	clusterConfigurationData, ok := configMap.Data[constants.ClusterConfigurationConfigMapKey]
 	if !ok {
 		return nil, errors.Errorf("unexpected error when reading kubeadm-config ConfigMap: %s key value pair missing", constants.ClusterConfigurationConfigMapKey)
 	}
-	if err := runtime.DecodeInto(kubeadmscheme.Codecs.UniversalDecoder(), []byte(clusterConfigurationData), &initcfg.ClusterConfiguration); err != nil {
+	initcfg := &kubeadmapi.InitConfiguration{}
+	if err := kubeadmscheme.Serializer.DecodeInto([]byte(clusterConfigurationData), &initcfg.ClusterConfiguration); err != nil {
 		return nil, errors.Wrap(err, "failed to decode cluster configuration data")
 	}
 
@@ -234,9 +231,8 @@ func UnmarshalClusterStatus(data map[string]string) (*kubeadmapi.ClusterStatus, 
 		return nil, errors.Errorf("unexpected error when reading kubeadm-config ConfigMap: %s key value pair missing", constants.ClusterStatusConfigMapKey)
 	}
 	clusterStatus := &kubeadmapi.ClusterStatus{}
-	if err := runtime.DecodeInto(kubeadmscheme.Codecs.UniversalDecoder(), []byte(clusterStatusData), clusterStatus); err != nil {
+	if err := kubeadmscheme.Serializer.DecodeInto([]byte(clusterStatusData), clusterStatus); err != nil {
 		return nil, err
 	}
-
 	return clusterStatus, nil
 }

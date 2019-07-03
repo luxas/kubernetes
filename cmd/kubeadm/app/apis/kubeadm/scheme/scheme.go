@@ -17,24 +17,28 @@ limitations under the License.
 package scheme
 
 import (
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	//metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
+	//"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm"
 	"k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm/v1beta1"
 	"k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm/v1beta2"
+	configserializer "k8s.io/component-base/config/serializer"
 )
 
-// Scheme is the runtime.Scheme to which all kubeadm api types are registered.
-var Scheme = runtime.NewScheme()
-
-// Codecs provides access to encoding and decoding for the scheme.
-var Codecs = serializer.NewCodecFactory(Scheme)
+var (
+	// Scheme is the runtime.Scheme to which all kubeadm api types are registered.
+	Scheme = runtime.NewScheme()
+	// Codecs provides access to encoding and decoding for the scheme.
+	Codecs = serializer.NewCodecFactory(Scheme)
+	// Serializer provides a high-level package to encode/decode
+	Serializer = configserializer.NewConfigSerializer(Scheme)
+)
 
 func init() {
-	metav1.AddToGroupVersion(Scheme, schema.GroupVersion{Version: "v1"})
+	//metav1.AddToGroupVersion(Scheme, schema.GroupVersion{Version: "v1"})
 	AddToScheme(Scheme)
 }
 

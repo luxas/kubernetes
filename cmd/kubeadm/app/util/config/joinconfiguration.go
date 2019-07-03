@@ -20,7 +20,6 @@ import (
 	"io/ioutil"
 
 	"github.com/pkg/errors"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/klog"
 	kubeadmapi "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm"
@@ -112,21 +111,21 @@ func documentMapToJoinConfiguration(gvkmap map[schema.GroupVersionKind][]byte, a
 		return nil, errors.Errorf("no %s found in the supplied config", constants.JoinConfigurationKind)
 	}
 
-	internalcfg := &kubeadmapi.JoinConfiguration{}
-	if err := runtime.DecodeInto(kubeadmscheme.Codecs.UniversalDecoder(), joinBytes, internalcfg); err != nil {
+	cfg := &kubeadmapi.JoinConfiguration{}
+	if err := kubeadmscheme.Serializer.DecodeInto(joinBytes, cfg); err != nil {
 		return nil, err
 	}
 
 	// Applies dynamic defaults to settings not provided with flags
-	if err := SetJoinDynamicDefaults(internalcfg); err != nil {
+	if err := SetJoinDynamicDefaults(cfg); err != nil {
 		return nil, err
 	}
 	// Validates cfg (flags/configs + defaults)
-	if err := validation.ValidateJoinConfiguration(internalcfg).ToAggregate(); err != nil {
+	if err := validation.ValidateJoinConfiguration(cfg).ToAggregate(); err != nil {
 		return nil, err
 	}
 
-	return internalcfg, nil
+	return cfg, nil
 }
 
 // DefaultedJoinConfiguration takes a versioned JoinConfiguration (usually filled in by command line parameters), defaults it, converts it to internal and validates it

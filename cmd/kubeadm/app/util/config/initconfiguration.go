@@ -39,9 +39,10 @@ import (
 	"k8s.io/kubernetes/cmd/kubeadm/app/componentconfigs"
 	kubeadmconstants "k8s.io/kubernetes/cmd/kubeadm/app/constants"
 	kubeadmutil "k8s.io/kubernetes/cmd/kubeadm/app/util"
-	"k8s.io/kubernetes/cmd/kubeadm/app/util/config/strict"
+	//"k8s.io/kubernetes/cmd/kubeadm/app/util/config/strict"
 	kubeadmruntime "k8s.io/kubernetes/cmd/kubeadm/app/util/runtime"
 	nodeutil "k8s.io/kubernetes/pkg/util/node"
+	configserializer "k8s.io/component-base/config/serializer"
 )
 
 // SetInitDynamicDefaults checks and sets configuration values for the InitConfiguration object
@@ -234,7 +235,7 @@ func documentMapToInitConfiguration(gvkmap map[schema.GroupVersionKind][]byte, a
 		}
 
 		// verify the validity of the YAML
-		strict.VerifyUnmarshalStrict(fileContent, gvk)
+		// strict.VerifyUnmarshalStrict(fileContent, gvk)
 
 		// Try to get the registration for the ComponentConfig based on the kind
 		regKind := componentconfigs.RegistrationKind(gvk.Kind)
@@ -248,12 +249,12 @@ func documentMapToInitConfiguration(gvkmap map[schema.GroupVersionKind][]byte, a
 			continue
 		}
 
+		// Decode the bytes into the internal struct. Under the hood, the bytes will be unmarshalled into the
+		// right external version, defaulted, and converted into the internal version.
 		if kubeadmutil.GroupVersionKindsHasInitConfiguration(gvk) {
 			// Set initcfg to an empty struct value the deserializer will populate
 			initcfg = &kubeadmapi.InitConfiguration{}
-			// Decode the bytes into the internal struct. Under the hood, the bytes will be unmarshalled into the
-			// right external version, defaulted, and converted into the internal version.
-			if err := runtime.DecodeInto(kubeadmscheme.Codecs.UniversalDecoder(), fileContent, initcfg); err != nil {
+			if err := kubeadmscheme.Serializer.DecodeInto(fileContent, initcfg); err != nil {
 				return nil, err
 			}
 			continue
@@ -261,9 +262,7 @@ func documentMapToInitConfiguration(gvkmap map[schema.GroupVersionKind][]byte, a
 		if kubeadmutil.GroupVersionKindsHasClusterConfiguration(gvk) {
 			// Set clustercfg to an empty struct value the deserializer will populate
 			clustercfg = &kubeadmapi.ClusterConfiguration{}
-			// Decode the bytes into the internal struct. Under the hood, the bytes will be unmarshalled into the
-			// right external version, defaulted, and converted into the internal version.
-			if err := runtime.DecodeInto(kubeadmscheme.Codecs.UniversalDecoder(), fileContent, clustercfg); err != nil {
+			if err := kubeadmscheme.Serializer.DecodeInto(fileContent, clustercfg); err != nil {
 				return nil, err
 			}
 			continue
@@ -279,11 +278,10 @@ func documentMapToInitConfiguration(gvkmap map[schema.GroupVersionKind][]byte, a
 
 	// If InitConfiguration wasn't given, default it by creating an external struct instance, default it and convert into the internal type
 	if initcfg == nil {
-		extinitcfg := &kubeadmapiv1beta2.InitConfiguration{}
-		kubeadmscheme.Scheme.Default(extinitcfg)
-		// Set initcfg to an empty struct value the deserializer will populate
 		initcfg = &kubeadmapi.InitConfiguration{}
-		kubeadmscheme.Scheme.Convert(extinitcfg, initcfg, nil)
+		if err := kubeadmscheme.Serializer.DefaultInternal(initcfg); err != nil {
+			return nil, err
+		}
 	}
 	// If ClusterConfiguration was given, populate it in the InitConfiguration struct
 	if clustercfg != nil {
@@ -315,33 +313,31 @@ func documentMapToInitConfiguration(gvkmap map[schema.GroupVersionKind][]byte, a
 	return initcfg, nil
 }
 
-func defaultedInternalConfig() *kubeadmapi.ClusterConfiguration {
-	externalcfg := &kubeadmapiv1beta2.ClusterConfiguration{}
-	internalcfg := &kubeadmapi.ClusterConfiguration{}
-
-	kubeadmscheme.Scheme.Default(externalcfg)
-	kubeadmscheme.Scheme.Convert(externalcfg, internalcfg, nil)
-
-	// Default the embedded ComponentConfig structs
-	componentconfigs.Known.Default(internalcfg)
-	return internalcfg
+func defaultedInternalConfig() (*kubeadmapi.ClusterConfiguration, error) {
+	cfg := &kubeadmapi.ClusterConfiguration{}
+	if err := kubeadmscheme.Serializer.DefaultInternal(cfg); err != nil {
+		return nil, err
+	}
+	// Default the embedded ComponentConfig structs too
+	componentconfigs.Known.Default(cfg)
+	return cfg, nil
 }
 
 // MarshalInitConfigurationToBytes marshals the internal InitConfiguration object to bytes. It writes the embedded
 // ClusterConfiguration object with ComponentConfigs out as separate YAML documents
-func MarshalInitConfigurationToBytes(cfg *kubeadmapi.InitConfiguration, gv schema.GroupVersion) ([]byte, error) {
-	initbytes, err := kubeadmutil.MarshalToYamlForCodecs(cfg, gv, kubeadmscheme.Codecs)
+func MarshalInitConfigurationToBytes(cfg *kubeadmapi.InitConfiguration, gv *schema.GroupVersion) ([]byte, error) {
+	initbytes, err := kubeadmscheme.Serializer.Encode(cfg, configserializer.WithGroupVersion(gv))
 	if err != nil {
-		return []byte{}, err
+		return nil, err
 	}
 	allFiles := [][]byte{initbytes}
 
 	// Exception: If the specified groupversion is targeting the internal type, don't print embedded ClusterConfiguration contents
 	// This is mostly used for unit testing. In a real scenario the internal version of the API is never marshalled as-is.
-	if gv.Version != runtime.APIVersionInternal {
+	if gv == nil || gv.Version != runtime.APIVersionInternal {
 		clusterbytes, err := MarshalClusterConfigurationToBytes(&cfg.ClusterConfiguration, gv)
 		if err != nil {
-			return []byte{}, err
+			return nil, err
 		}
 		allFiles = append(allFiles, clusterbytes)
 	}
@@ -350,14 +346,17 @@ func MarshalInitConfigurationToBytes(cfg *kubeadmapi.InitConfiguration, gv schem
 
 // MarshalClusterConfigurationToBytes marshals the internal ClusterConfiguration object to bytes. It writes the embedded
 // ComponentConfiguration objects out as separate YAML documents
-func MarshalClusterConfigurationToBytes(clustercfg *kubeadmapi.ClusterConfiguration, gv schema.GroupVersion) ([]byte, error) {
-	clusterbytes, err := kubeadmutil.MarshalToYamlForCodecs(clustercfg, gv, kubeadmscheme.Codecs)
+func MarshalClusterConfigurationToBytes(clustercfg *kubeadmapi.ClusterConfiguration, gv *schema.GroupVersion) ([]byte, error) {
+	clusterbytes, err := kubeadmscheme.Serializer.Encode(clustercfg, configserializer.WithGroupVersion(gv))
 	if err != nil {
-		return []byte{}, err
+		return nil, err
 	}
 	allFiles := [][]byte{clusterbytes}
 	componentConfigContent := map[string][]byte{}
-	defaultedcfg := defaultedInternalConfig()
+	defaultedcfg, err := defaultedInternalConfig()
+	if err != nil {
+		return nil, err
+	}
 
 	for kind, registration := range componentconfigs.Known {
 		// If the ComponentConfig struct for the current registration is nil, skip it when marshalling
@@ -369,14 +368,14 @@ func MarshalClusterConfigurationToBytes(clustercfg *kubeadmapi.ClusterConfigurat
 		defaultedobj, ok := registration.GetFromInternalConfig(defaultedcfg)
 		// Invalid: The caller asked to not print the componentconfigs if defaulted, but defaultComponentConfigs() wasn't able to create default objects to use for reference
 		if !ok {
-			return []byte{}, errors.New("couldn't create a default componentconfig object")
+			return nil, errors.New("couldn't create a default componentconfig object")
 		}
 
 		// If the real ComponentConfig object differs from the default, print it out. If not, there's no need to print it out, so skip it
 		if !reflect.DeepEqual(realobj, defaultedobj) {
 			contentBytes, err := registration.Marshal(realobj)
 			if err != nil {
-				return []byte{}, err
+				return nil, err
 			}
 			componentConfigContent[string(kind)] = contentBytes
 		}

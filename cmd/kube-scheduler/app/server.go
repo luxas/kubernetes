@@ -52,6 +52,7 @@ import (
 	utilflag "k8s.io/kubernetes/pkg/util/flag"
 	"k8s.io/kubernetes/pkg/version"
 	"k8s.io/kubernetes/pkg/version/verflag"
+	kubeschedulerscheme "k8s.io/kubernetes/pkg/scheduler/apis/config/scheme"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/cobra"
@@ -119,14 +120,6 @@ func runCommand(cmd *cobra.Command, args []string, opts *options.Options) error 
 		os.Exit(1)
 	}
 
-	if len(opts.WriteConfigTo) > 0 {
-		if err := options.WriteConfigFile(opts.WriteConfigTo, &opts.ComponentConfig); err != nil {
-			fmt.Fprintf(os.Stderr, "%v\n", err)
-			os.Exit(1)
-		}
-		klog.Infof("Wrote configuration to: %s\n", opts.WriteConfigTo)
-	}
-
 	c, err := opts.Config()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -138,6 +131,13 @@ func runCommand(cmd *cobra.Command, args []string, opts *options.Options) error 
 	// Get the completed config
 	cc := c.Complete()
 
+	if len(opts.WriteConfigTo) > 0 {
+		if err := kubeschedulerscheme.Serializer.EncodeToFile(opts.WriteConfigTo, &cc.ComponentConfig); err != nil {
+			return err
+		}
+		klog.Infof("Wrote configuration to: %s\n", opts.WriteConfigTo)
+	}
+	
 	// To help debugging, immediately log version
 	klog.Infof("Version: %+v", version.Get())
 

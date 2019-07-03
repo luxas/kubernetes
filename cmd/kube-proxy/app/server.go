@@ -21,17 +21,13 @@ package app
 import (
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"net/http"
-	"os"
 	goruntime "runtime"
 	"strings"
 	"time"
 
 	"k8s.io/api/core/v1"
 	v1meta "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/serializer"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apiserver/pkg/server/healthz"
@@ -46,8 +42,8 @@ import (
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	"k8s.io/client-go/tools/record"
 	cliflag "k8s.io/component-base/cli/flag"
+	"k8s.io/component-base/config/reload"
 	componentbaseconfig "k8s.io/component-base/config"
-	"k8s.io/kube-proxy/config/v1alpha1"
 	api "k8s.io/kubernetes/pkg/apis/core"
 	"k8s.io/kubernetes/pkg/kubelet/qos"
 	"k8s.io/kubernetes/pkg/master/ports"
@@ -63,7 +59,6 @@ import (
 	"k8s.io/kubernetes/pkg/proxy/userspace"
 	proxyutil "k8s.io/kubernetes/pkg/proxy/util"
 	"k8s.io/kubernetes/pkg/util/configz"
-	"k8s.io/kubernetes/pkg/util/filesystem"
 	utilflag "k8s.io/kubernetes/pkg/util/flag"
 	utilipset "k8s.io/kubernetes/pkg/util/ipset"
 	utiliptables "k8s.io/kubernetes/pkg/util/iptables"
@@ -75,7 +70,6 @@ import (
 	"k8s.io/utils/exec"
 	utilpointer "k8s.io/utils/pointer"
 
-	"github.com/fsnotify/fsnotify"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -110,8 +104,8 @@ type Options struct {
 	WindowsService bool
 	// config is the proxy server's configuration object.
 	config *kubeproxyconfig.KubeProxyConfiguration
-	// watcher is used to watch on the update change of ConfigFile
-	watcher filesystem.FSWatcher
+	// watcher sends an error to errCh if the config file changes
+	watcher reload.ConfigWatcher
 	// proxyServer is the interface to run the proxy server
 	proxyServer proxyRun
 	// errCh is the channel that errors will be sent
@@ -128,9 +122,6 @@ type Options struct {
 	healthzPort int32
 	// metricsPort is the port to be used by the metrics server.
 	metricsPort int32
-
-	scheme *runtime.Scheme
-	codecs serializer.CodecFactory
 
 	// hostnameOverride, if set from the command line flag, takes precedence over the `HostnameOverride` value from the config file
 	hostnameOverride string
@@ -204,8 +195,6 @@ func NewOptions() *Options {
 		config:      new(kubeproxyconfig.KubeProxyConfiguration),
 		healthzPort: ports.ProxyHealthzPort,
 		metricsPort: ports.ProxyStatusPort,
-		scheme:      scheme.Scheme,
-		codecs:      scheme.Codecs,
 		CleanupIPVS: true,
 		errCh:       make(chan error),
 	}
@@ -221,13 +210,15 @@ func (o *Options) Complete() error {
 
 	// Load the config file here in Complete, so that Validate validates the fully-resolved config.
 	if len(o.ConfigFile) > 0 {
-		c, err := o.loadConfigFromFile(o.ConfigFile)
-		if err != nil {
+		cfg := &kubeproxyconfig.KubeProxyConfiguration{}
+		if err := scheme.Serializer.DecodeFileInto(o.ConfigFile, cfg); err != nil {
 			return err
 		}
-		o.config = c
+		o.config = cfg
 
-		if err := o.initWatcher(); err != nil {
+		var err error
+		o.watcher, err = reload.NewConfigWatcher(o.ConfigFile, o.errCh)
+		if err != nil {
 			return err
 		}
 	}
@@ -237,36 +228,6 @@ func (o *Options) Complete() error {
 	}
 
 	return utilfeature.DefaultMutableFeatureGate.SetFromMap(o.config.FeatureGates)
-}
-
-// Creates a new filesystem watcher and adds watches for the config file.
-func (o *Options) initWatcher() error {
-	fswatcher := filesystem.NewFsnotifyWatcher()
-	err := fswatcher.Init(o.eventHandler, o.errorHandler)
-	if err != nil {
-		return err
-	}
-	err = fswatcher.AddWatch(o.ConfigFile)
-	if err != nil {
-		return err
-	}
-	o.watcher = fswatcher
-	return nil
-}
-
-func (o *Options) eventHandler(ent fsnotify.Event) {
-	eventOpIs := func(Op fsnotify.Op) bool {
-		return ent.Op&Op == Op
-	}
-	if eventOpIs(fsnotify.Write) || eventOpIs(fsnotify.Rename) {
-		// error out when ConfigFile is updated
-		o.errCh <- fmt.Errorf("content of the proxy server's configuration file was updated")
-	}
-	o.errCh <- nil
-}
-
-func (o *Options) errorHandler(err error) {
-	o.errCh <- err
 }
 
 // processHostnameOverrideFlag processes hostname-override flag
@@ -299,7 +260,8 @@ func (o *Options) Validate(args []string) error {
 func (o *Options) Run() error {
 	defer close(o.errCh)
 	if len(o.WriteConfigTo) > 0 {
-		return o.writeConfigFile()
+		klog.Infof("Writing configuration to: %s\n", o.WriteConfigTo)
+		return scheme.Serializer.EncodeToFile(o.WriteConfigTo, o.config)
 	}
 
 	proxyServer, err := NewProxyServer(o)
@@ -336,36 +298,6 @@ func (o *Options) runLoop() error {
 	}
 }
 
-func (o *Options) writeConfigFile() (err error) {
-	const mediaType = runtime.ContentTypeYAML
-	info, ok := runtime.SerializerInfoForMediaType(o.codecs.SupportedMediaTypes(), mediaType)
-	if !ok {
-		return fmt.Errorf("unable to locate encoder -- %q is not a supported media type", mediaType)
-	}
-
-	encoder := o.codecs.EncoderForVersion(info.Serializer, v1alpha1.SchemeGroupVersion)
-
-	configFile, err := os.Create(o.WriteConfigTo)
-	if err != nil {
-		return err
-	}
-
-	defer func() {
-		ferr := configFile.Close()
-		if ferr != nil && err == nil {
-			err = ferr
-		}
-	}()
-
-	if err = encoder.Encode(o.config, configFile); err != nil {
-		return err
-	}
-
-	klog.Infof("Wrote configuration to: %s\n", o.WriteConfigTo)
-
-	return nil
-}
-
 // addressFromDeprecatedFlags returns server address from flags
 // passed on the command line based on the following rules:
 // 1. If port is 0, disable the server (e.g. set address to empty).
@@ -375,49 +307,6 @@ func addressFromDeprecatedFlags(addr string, port int32) string {
 		return ""
 	}
 	return proxyutil.AppendPortIfNeeded(addr, port)
-}
-
-// loadConfigFromFile loads the contents of file and decodes it as a
-// KubeProxyConfiguration object.
-func (o *Options) loadConfigFromFile(file string) (*kubeproxyconfig.KubeProxyConfiguration, error) {
-	data, err := ioutil.ReadFile(file)
-	if err != nil {
-		return nil, err
-	}
-
-	return o.loadConfig(data)
-}
-
-// loadConfig decodes data as a KubeProxyConfiguration object.
-func (o *Options) loadConfig(data []byte) (*kubeproxyconfig.KubeProxyConfiguration, error) {
-	configObj, gvk, err := o.codecs.UniversalDecoder().Decode(data, nil, nil)
-	if err != nil {
-		return nil, err
-	}
-	proxyConfig, ok := configObj.(*kubeproxyconfig.KubeProxyConfiguration)
-	if !ok {
-		return nil, fmt.Errorf("got unexpected config type: %v", gvk)
-	}
-	return proxyConfig, nil
-}
-
-// ApplyDefaults applies the default values to Options.
-func (o *Options) ApplyDefaults(in *kubeproxyconfig.KubeProxyConfiguration) (*kubeproxyconfig.KubeProxyConfiguration, error) {
-	external, err := o.scheme.ConvertToVersion(in, v1alpha1.SchemeGroupVersion)
-	if err != nil {
-		return nil, err
-	}
-
-	o.scheme.Default(external)
-
-	internal, err := o.scheme.ConvertToVersion(external, kubeproxyconfig.SchemeGroupVersion)
-	if err != nil {
-		return nil, err
-	}
-
-	out := internal.(*kubeproxyconfig.KubeProxyConfiguration)
-
-	return out, nil
 }
 
 // NewProxyCommand creates a *cobra.Command object with default parameters
@@ -451,9 +340,7 @@ with the apiserver API to configure the proxy.`,
 		},
 	}
 
-	var err error
-	opts.config, err = opts.ApplyDefaults(opts.config)
-	if err != nil {
+	if err := scheme.Serializer.DefaultInternal(opts.config); err != nil {
 		klog.Fatalf("unable to create flag defaults: %v", err)
 	}
 
@@ -461,7 +348,6 @@ with the apiserver API to configure the proxy.`,
 
 	// TODO handle error
 	cmd.MarkFlagFilename("config", "yaml", "yml", "json")
-
 	return cmd
 }
 
