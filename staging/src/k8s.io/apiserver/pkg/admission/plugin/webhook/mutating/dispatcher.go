@@ -279,7 +279,11 @@ func (a *mutatingDispatcher) callAttrMutatingHook(ctx context.Context, h *admiss
 		defer cancel()
 	}
 
-	r := client.Post().Body(request)
+	// populate on a best-effort basis
+	authzUID, ok := endpointsrequest.AuthorizationUIDFrom(ctx)
+	fmt.Println("Mutating Admission AuthorizationUID", authzUID, ok)
+
+	r := client.Post().SetHeader(endpointsrequest.AuthorizationUIDHeader, string(authzUID)).Body(request)
 
 	// if the context has a deadline, set it as a parameter to inform the backend
 	if deadline, hasDeadline := ctx.Deadline(); hasDeadline {

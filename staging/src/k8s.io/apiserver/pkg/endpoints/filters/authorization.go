@@ -19,11 +19,13 @@ package filters
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/uuid"
 	genericfeatures "k8s.io/apiserver/pkg/features"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 
@@ -60,6 +62,15 @@ func withAuthorization(handler http.Handler, a authorizer.Authorizer, s runtime.
 		return handler
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		// initiate random authorization request key, which is passed down to the admission layer, so requests can be
+		// correlated between authorization and admission.
+		// The UID is communicated in an annotation on the SAR, and in the dedicated UID field on AdmissionReview, which
+		// 		doesn't have ObjectMeta.
+		// We could also put it in the user.Info uniformly, although that is pretty hacky, or in an HTTP Header
+		authzUID := request.AuthorizationUID(uuid.NewUUID())
+		fmt.Println("WithAuthorization AuthorizationUID", authzUID)
+
+		req = req.WithContext(request.WithAuthorizationUID(req.Context(), authzUID))
 		ctx := req.Context()
 		authorizationStart := time.Now()
 

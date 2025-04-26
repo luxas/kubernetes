@@ -32,6 +32,9 @@ const (
 
 	// userKey is the context key for the request user.
 	userKey
+
+	// used for propagating a uid between authorization and admission
+	authorizationUIDKey
 )
 
 // NewContext instantiates a base context object for request flows.
@@ -75,4 +78,19 @@ func WithUser(parent context.Context, user user.Info) context.Context {
 func UserFrom(ctx context.Context) (user.Info, bool) {
 	user, ok := ctx.Value(userKey).(user.Info)
 	return user, ok
+}
+
+const AuthorizationUIDHeader = "X-Kubernetes-Authorization-UID"
+
+type AuthorizationUID string
+
+// WithAuthorizationUID returns a copy of parent in which the authorization UID for the request is set
+func WithAuthorizationUID(parent context.Context, uid AuthorizationUID) context.Context {
+	return WithValue(parent, authorizationUIDKey, uid)
+}
+
+// AuthorizationUIDFrom returns the authorization UID associated with the ctx
+func AuthorizationUIDFrom(ctx context.Context) (AuthorizationUID, bool) {
+	uid, ok := ctx.Value(authorizationUIDKey).(AuthorizationUID)
+	return uid, ok
 }

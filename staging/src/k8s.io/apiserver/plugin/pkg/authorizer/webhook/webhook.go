@@ -41,6 +41,7 @@ import (
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	authorizationcel "k8s.io/apiserver/pkg/authorization/cel"
+	"k8s.io/apiserver/pkg/endpoints/request"
 	genericfeatures "k8s.io/apiserver/pkg/features"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/apiserver/pkg/util/webhook"
@@ -196,6 +197,11 @@ func (w *WebhookAuthorizer) Authorize(ctx context.Context, attr authorizer.Attri
 		}
 	}
 
+	// populate on a best-effort basis
+	//authzUID, ok := request.AuthorizationUIDFrom(ctx)
+	//fmt.Println("AuthorizationUID", authzUID, ok)
+	//r.Annotations[request.AuthorizationUIDAnnotation] = string(authzUID)
+
 	if attr.IsResourceRequest() {
 		r.Spec.ResourceAttributes = resourceAttributesFrom(attr)
 	} else {
@@ -277,6 +283,10 @@ func (w *WebhookAuthorizer) Authorize(ctx context.Context, attr authorizer.Attri
 		}
 
 		r.Status = result.Status
+		// TODO: Remember that authorization responses can be cached. Thus, might the Cedar webhook also want to cache
+		// for approximately as long, but there's no introspection endpoint for that configuration. One idea is just to
+		// cache the response for some time, and then "recompute from scratch" if it is not in cache anymore, it's not that
+		// expensive after all.
 		if shouldCache(attr) {
 			if r.Status.Allowed {
 				w.responseCache.Add(string(key), r.Status, w.authorizedTTL)
@@ -504,7 +514,11 @@ func (t *subjectAccessReviewV1ClientGW) Create(ctx context.Context, subjectAcces
 	var statusCode int
 	result := &authorizationv1.SubjectAccessReview{}
 
-	restResult := t.client.Post().Body(subjectAccessReview).Do(ctx)
+	// populate on a best-effort basis
+	authzUID, ok := request.AuthorizationUIDFrom(ctx)
+	fmt.Println("Authorization AuthorizationUID", authzUID, ok)
+
+	restResult := t.client.Post().SetHeader(request.AuthorizationUIDHeader, string(authzUID)).Body(subjectAccessReview).Do(ctx)
 
 	restResult.StatusCode(&statusCode)
 	err := restResult.Into(result)
@@ -522,7 +536,11 @@ func (t *subjectAccessReviewV1beta1ClientGW) Create(ctx context.Context, subject
 	v1beta1Review := &authorizationv1beta1.SubjectAccessReview{Spec: v1SpecToV1beta1Spec(&subjectAccessReview.Spec)}
 	v1beta1Result := &authorizationv1beta1.SubjectAccessReview{}
 
-	restResult := t.client.Post().Body(v1beta1Review).Do(ctx)
+	// populate on a best-effort basis
+	authzUID, ok := request.AuthorizationUIDFrom(ctx)
+	fmt.Println("Authorization AuthorizationUID", authzUID, ok)
+
+	restResult := t.client.Post().SetHeader(request.AuthorizationUIDHeader, string(authzUID)).Body(v1beta1Review).Do(ctx)
 
 	restResult.StatusCode(&statusCode)
 	err := restResult.Into(v1beta1Result)
