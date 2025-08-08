@@ -159,6 +159,15 @@ func (SubjectAccessReview) SwaggerDoc() map[string]string {
 	return map_SubjectAccessReview
 }
 
+var map_SubjectAccessReviewCondition = map[string]string{
+	"condition":   "Condition is a CEL expression that evaluates a ValidatingAdmissionPolicy-like environment into a boolean value. If the condition evaluates to true, the request is authorized.",
+	"description": "Description is an optional description of the condition.",
+}
+
+func (SubjectAccessReviewCondition) SwaggerDoc() map[string]string {
+	return map_SubjectAccessReviewCondition
+}
+
 var map_SubjectAccessReviewSpec = map[string]string{
 	"":                      "SubjectAccessReviewSpec is a description of the access request.  Exactly one of ResourceAuthorizationAttributes and NonResourceAuthorizationAttributes must be set",
 	"resourceAttributes":    "ResourceAuthorizationAttributes describes information for a resource access request",
@@ -177,6 +186,7 @@ var map_SubjectAccessReviewStatus = map[string]string{
 	"":                "SubjectAccessReviewStatus",
 	"allowed":         "Allowed is required. True if the action would be allowed, false otherwise.",
 	"denied":          "Denied is optional. True if the action would be denied, otherwise false. If both allowed is false and denied is false, then the authorizer has no opinion on whether to authorize the action. Denied may not be true if Allowed is true.",
+	"conditions":      "Conditions is an array of authorization conditions. All conditions must evaluate to true for the request to be authorized. The conditions are evaluated in order, and in case of a false response or error, the process is short-circuited, and the request is denied. This field is alpha-level, and ignored if the SubjectAccessReview handler has not enabled the SubjectAccessReviewConditions feature gate, in which the response is treated as NoOpinion.",
 	"reason":          "Reason is optional.  It indicates why a request was allowed or denied.",
 	"evaluationError": "EvaluationError is an indication that some error occurred during the authorization check. It is entirely possible to get an error and be able to continue determine authorization status in spite of it. For instance, RBAC can be missing a role, but enough roles are still present and bound to reason about the request.",
 }

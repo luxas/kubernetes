@@ -253,6 +253,13 @@ type SubjectAccessReviewStatus struct {
 	// may not be true if Allowed is true.
 	// +optional
 	Denied bool `json:"denied,omitempty" protobuf:"varint,4,opt,name=denied"`
+	// Conditions is an array of authorization conditions. All conditions must evaluate to true for the request to be authorized.
+	// The conditions are evaluated in order, and in case of a false response or error, the process is short-circuited, and the request is denied.
+	// This field is alpha-level, and ignored if the SubjectAccessReview handler has not enabled the SubjectAccessReviewConditions feature gate,
+	// in which the response is treated as NoOpinion.
+	// +optional
+	// +listType=atomic
+	Conditions []SubjectAccessReviewCondition `json:"conditions,omitempty" protobuf:"bytes,5,rep,name=conditions"`
 	// Reason is optional.  It indicates why a request was allowed or denied.
 	// +optional
 	Reason string `json:"reason,omitempty" protobuf:"bytes,2,opt,name=reason"`
@@ -261,6 +268,14 @@ type SubjectAccessReviewStatus struct {
 	// For instance, RBAC can be missing a role, but enough roles are still present and bound to reason about the request.
 	// +optional
 	EvaluationError string `json:"evaluationError,omitempty" protobuf:"bytes,3,opt,name=evaluationError"`
+}
+
+type SubjectAccessReviewCondition struct {
+	// Condition is a CEL expression that evaluates a ValidatingAdmissionPolicy-like environment into a boolean value.
+	// If the condition evaluates to true, the request is authorized.
+	Condition string `json:"condition" protobuf:"bytes,1,opt,name=condition"`
+	// Description is an optional description of the condition.
+	Description string `json:"description,omitempty" protobuf:"bytes,2,opt,name=description"`
 }
 
 // +genclient

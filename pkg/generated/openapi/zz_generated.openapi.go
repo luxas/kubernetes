@@ -244,6 +244,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"k8s.io/api/authorization/v1.SelfSubjectRulesReview":                                                    schema_k8sio_api_authorization_v1_SelfSubjectRulesReview(ref),
 		"k8s.io/api/authorization/v1.SelfSubjectRulesReviewSpec":                                                schema_k8sio_api_authorization_v1_SelfSubjectRulesReviewSpec(ref),
 		"k8s.io/api/authorization/v1.SubjectAccessReview":                                                       schema_k8sio_api_authorization_v1_SubjectAccessReview(ref),
+		"k8s.io/api/authorization/v1.SubjectAccessReviewCondition":                                              schema_k8sio_api_authorization_v1_SubjectAccessReviewCondition(ref),
 		"k8s.io/api/authorization/v1.SubjectAccessReviewSpec":                                                   schema_k8sio_api_authorization_v1_SubjectAccessReviewSpec(ref),
 		"k8s.io/api/authorization/v1.SubjectAccessReviewStatus":                                                 schema_k8sio_api_authorization_v1_SubjectAccessReviewStatus(ref),
 		"k8s.io/api/authorization/v1.SubjectRulesReviewStatus":                                                  schema_k8sio_api_authorization_v1_SubjectRulesReviewStatus(ref),
@@ -12703,6 +12704,34 @@ func schema_k8sio_api_authorization_v1_SubjectAccessReview(ref common.ReferenceC
 	}
 }
 
+func schema_k8sio_api_authorization_v1_SubjectAccessReviewCondition(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"condition": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Condition is a CEL expression that evaluates a ValidatingAdmissionPolicy-like environment into a boolean value. If the condition evaluates to true, the request is authorized.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"description": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Description is an optional description of the condition.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+				Required: []string{"condition"},
+			},
+		},
+	}
+}
+
 func schema_k8sio_api_authorization_v1_SubjectAccessReviewSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
@@ -12809,6 +12838,25 @@ func schema_k8sio_api_authorization_v1_SubjectAccessReviewStatus(ref common.Refe
 							Format:      "",
 						},
 					},
+					"conditions": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "Conditions is an array of authorization conditions. All conditions must evaluate to true for the request to be authorized. The conditions are evaluated in order, and in case of a false response or error, the process is short-circuited, and the request is denied. This field is alpha-level, and ignored if the SubjectAccessReview handler has not enabled the SubjectAccessReviewConditions feature gate, in which the response is treated as NoOpinion.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("k8s.io/api/authorization/v1.SubjectAccessReviewCondition"),
+									},
+								},
+							},
+						},
+					},
 					"reason": {
 						SchemaProps: spec.SchemaProps{
 							Description: "Reason is optional.  It indicates why a request was allowed or denied.",
@@ -12827,6 +12875,8 @@ func schema_k8sio_api_authorization_v1_SubjectAccessReviewStatus(ref common.Refe
 				Required: []string{"allowed"},
 			},
 		},
+		Dependencies: []string{
+			"k8s.io/api/authorization/v1.SubjectAccessReviewCondition"},
 	}
 }
 

@@ -57,6 +57,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apiserver/pkg/admission"
+	conditionalauthz "k8s.io/apiserver/pkg/admission/plugin/authorizer/conditional"
 	"k8s.io/apiserver/pkg/admission/plugin/namespace/lifecycle"
 	"k8s.io/apiserver/pkg/admission/plugin/resourcequota"
 	mutatingwebhook "k8s.io/apiserver/pkg/admission/plugin/webhook/mutating"
@@ -95,6 +96,7 @@ var AllOrderedPlugins = []string{
 	defaultingressclass.PluginName,          // DefaultIngressClass
 	denyserviceexternalips.PluginName,       // DenyServiceExternalIPs
 	podtopologylabels.PluginName,            // PodTopologyLabels
+	conditionalauthz.PluginName,             // ConditionalAuthorization
 
 	// new admission plugins should generally be inserted above here
 	// webhook, resourcequota, and deny plugins must go at the end
@@ -141,6 +143,7 @@ func RegisterAllAdmissionPlugins(plugins *admission.Plugins) {
 	ctbattest.Register(plugins)
 	certsubjectrestriction.Register(plugins)
 	podtopologylabels.Register(plugins)
+	conditionalauthz.Register(plugins)
 }
 
 // DefaultOffAdmissionPlugins get admission plugins off by default for kube-apiserver.
@@ -168,6 +171,7 @@ func DefaultOffAdmissionPlugins() sets.Set[string] {
 		podtopologylabels.PluginName,            // PodTopologyLabels, only active when feature gate PodTopologyLabelsAdmission is enabled.
 		mutatingadmissionpolicy.PluginName,      // Mutatingadmissionpolicy, only active when feature gate MutatingAdmissionpolicy is enabled
 		validatingadmissionpolicy.PluginName,    // ValidatingAdmissionPolicy, only active when feature gate ValidatingAdmissionPolicy is enabled
+		conditionalauthz.PluginName,             // ConditionalAuthorization
 	)
 
 	return sets.New(AllOrderedPlugins...).Difference(defaultOnPlugins)

@@ -201,16 +201,31 @@ type SubjectAccessReviewStatus struct {
 	// Allowed is required. True if the action would be allowed, false otherwise.
 	Allowed bool
 	// Denied is optional. True if the action would be denied, otherwise
-	// false. If both allowed is false and denied is false, then the
+	// false. If both allowed is false, denied is false and conditions is null, then the
 	// authorizer has no opinion on whether to authorize the action. Denied
 	// may not be true if Allowed is true.
 	Denied bool
+	// Conditions is an array of authorization conditions. All conditions must evaluate to true for the request to be authorized.
+	// The conditions are evaluated in order, and in case of a false response or error, the process is short-circuited, and the request is denied.
+	// This field is alpha-level, and ignored if the SubjectAccessReview handler has not enabled the SubjectAccessReviewConditions feature gate,
+	// in which the response is treated as NoOpinion.
+	// +optional
+	// +listType=atomic
+	Conditions []SubjectAccessReviewCondition
 	// Reason is optional.  It indicates why a request was allowed or denied.
 	Reason string
 	// EvaluationError is an indication that some error occurred during the authorization check.
 	// It is entirely possible to get an error and be able to continue determine authorization status in spite of it.
 	// For instance, RBAC can be missing a role, but enough roles are still present and bound to reason about the request.
 	EvaluationError string
+}
+
+type SubjectAccessReviewCondition struct {
+	// Condition is a CEL expression that evaluates a ValidatingAdmissionPolicy-like environment into a boolean value.
+	// If the condition evaluates to true, the request is authorized.
+	Condition string
+	// Description is an optional description of the condition.
+	Description string
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

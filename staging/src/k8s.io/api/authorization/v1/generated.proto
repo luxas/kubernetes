@@ -276,6 +276,15 @@ message SubjectAccessReview {
   optional SubjectAccessReviewStatus status = 3;
 }
 
+message SubjectAccessReviewCondition {
+  // Condition is a CEL expression that evaluates a ValidatingAdmissionPolicy-like environment into a boolean value.
+  // If the condition evaluates to true, the request is authorized.
+  optional string condition = 1;
+
+  // Description is an optional description of the condition.
+  optional string description = 2;
+}
+
 // SubjectAccessReviewSpec is a description of the access request.  Exactly one of ResourceAuthorizationAttributes
 // and NonResourceAuthorizationAttributes must be set
 message SubjectAccessReviewSpec {
@@ -318,6 +327,14 @@ message SubjectAccessReviewStatus {
   // may not be true if Allowed is true.
   // +optional
   optional bool denied = 4;
+
+  // Conditions is an array of authorization conditions. All conditions must evaluate to true for the request to be authorized.
+  // The conditions are evaluated in order, and in case of a false response or error, the process is short-circuited, and the request is denied.
+  // This field is alpha-level, and ignored if the SubjectAccessReview handler has not enabled the SubjectAccessReviewConditions feature gate,
+  // in which the response is treated as NoOpinion.
+  // +optional
+  // +listType=atomic
+  repeated SubjectAccessReviewCondition conditions = 5;
 
   // Reason is optional.  It indicates why a request was allowed or denied.
   // +optional

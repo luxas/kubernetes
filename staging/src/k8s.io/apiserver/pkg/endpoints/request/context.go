@@ -35,6 +35,9 @@ const (
 
 	// used for propagating a uid between authorization and admission
 	authorizationUIDKey
+
+	// used for propagating a conditional authorization context between authorization and admission
+	conditionalAuthorizationContextKey
 )
 
 // NewContext instantiates a base context object for request flows.

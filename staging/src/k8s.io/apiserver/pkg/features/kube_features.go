@@ -223,6 +223,12 @@ const (
 	// Enables Structured Authorization Configuration
 	StructuredAuthorizationConfiguration featuregate.Feature = "StructuredAuthorizationConfiguration"
 
+	// owner: @luxas
+	// kep: https://kep.k8s.io/TODO
+	//
+	// Enables ability for SubjectAccessReview implementations to return conditions on the request or stored object, in order for the request to be authorized.
+	SubjectAccessReviewConditions featuregate.Feature = "SubjectAccessReviewConditions"
+
 	// owner: @wojtek-t
 	//
 	// Enables post-start-hook for storage readiness

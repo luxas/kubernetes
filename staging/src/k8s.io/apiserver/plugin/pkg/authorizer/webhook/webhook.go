@@ -80,6 +80,8 @@ type WebhookAuthorizer struct {
 	metrics             metrics.AuthorizerMetrics
 	celMatcher          *authorizationcel.CELMatcher
 	name                string
+
+	typeChecker *TypeChecker
 }
 
 // NewFromInterface creates a WebhookAuthorizer using the given subjectAccessReview client
@@ -112,6 +114,15 @@ func New(config *rest.Config, version string, authorizedTTL, unauthorizedTTL tim
 		return nil, err
 	}
 	return newWithBackoff(subjectAccessReview, authorizedTTL, unauthorizedTTL, retryBackoff, decisionOnError, matchConditions, metrics, compiler, name)
+}
+
+func NewConditional(config *rest.Config, version string, authorizedTTL, unauthorizedTTL time.Duration, retryBackoff wait.Backoff, decisionOnError authorizer.Decision, matchConditions []apiserver.WebhookMatchCondition, name string, metrics metrics.AuthorizerMetrics, compiler authorizationcel.Compiler, typeChecker *TypeChecker) (*WebhookAuthorizer, error) {
+	a, err := New(config, version, authorizedTTL, unauthorizedTTL, retryBackoff, decisionOnError, matchConditions, name, metrics, compiler)
+	if err != nil {
+		return nil, err
+	}
+	a.typeChecker = typeChecker
+	return a, nil
 }
 
 // newWithBackoff allows tests to skip the sleep.
@@ -226,6 +237,18 @@ func (w *WebhookAuthorizer) Authorize(ctx context.Context, attr authorizer.Attri
 			return authorizer.DecisionNoOpinion, "", nil
 		}
 	}
+
+	if w.conditionalAuthorizationEnabled() {
+		// If the SubjectAccessReviewConditions feature gate is enabled, then the webhook can return conditions.
+		// The conditions are evaluated in order, and in case of a false response or error, the process is short-circuited, and the request is denied.
+		// This field is alpha-level, and ignored if the SubjectAccessReview handler has not enabled the SubjectAccessReviewConditions feature gate,
+		// in which the response is treated as NoOpinion.
+		if r.Annotations == nil {
+			r.Annotations = make(map[string]string)
+		}
+		// TODO: Decide on naming :D
+		r.Annotations["kubernetes.io/ConditionalAuthorizationFeature"] = string("true")
+	}
 	// If all evaluated successfully and ALL matchConditions evaluate to TRUE,
 	// then the webhook is called.
 	key, err := json.Marshal(r.Spec)
@@ -303,9 +326,43 @@ func (w *WebhookAuthorizer) Authorize(ctx context.Context, attr authorizer.Attri
 	case r.Status.Allowed:
 		return authorizer.DecisionAllow, r.Status.Reason, nil
 	default:
+		if w.conditionalAuthorizationEnabled() {
+			if r.Status.Conditions != nil {
+				results, err := w.typeChecker.Check(r)
+				if err != nil {
+					return authorizer.DecisionNoOpinion, "", fmt.Errorf("unexpected type checking error: %w", err)
+				}
+				conditionPrograms := []request.CompilationResult{}
+				for conditionPath, gvks := range results {
+					if len(gvks) > 1 { // TODO: Possibly handle multiple gvks?
+						return authorizer.DecisionNoOpinion, "", fmt.Errorf("multiple gvks found for condition %s: %v", conditionPath.String(), gvks)
+					}
+					for _, gvk := range gvks {
+						if gvk.CompilationResult.Error != nil {
+							// TODO: Just return a warning instead, and disregard the authorizer altogether
+							// by not returning an error here?
+							return authorizer.DecisionNoOpinion, "", fmt.Errorf("%s: type checking error for gvk %s: %v", conditionPath.String(), gvk.GVK.String(), gvk.CompilationResult.Error)
+						}
+						conditionPrograms = append(conditionPrograms, request.CompilationResult{
+							Program:            gvk.CompilationResult.Program,
+							ExpressionAccessor: gvk.CompilationResult.ExpressionAccessor,
+							OutputType:         gvk.CompilationResult.OutputType,
+						})
+					}
+				}
+
+				return authorizer.DecisionAllow, r.Status.Reason, &request.ConditionalAuthorizationContext{
+					Conditions: conditionPrograms,
+				}
+			}
+		}
 		return authorizer.DecisionNoOpinion, r.Status.Reason, nil
 	}
+}
 
+func (w *WebhookAuthorizer) conditionalAuthorizationEnabled() bool {
+	// TODO: Also only enable it if the admission plugin is also enabled
+	return utilfeature.DefaultFeatureGate.Enabled(genericfeatures.SubjectAccessReviewConditions) && w.typeChecker != nil
 }
 
 func resourceAttributesFrom(attr authorizer.Attributes) *authorizationv1.ResourceAttributes {

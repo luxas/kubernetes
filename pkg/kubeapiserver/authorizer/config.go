@@ -33,6 +33,7 @@ import (
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	authorizationcel "k8s.io/apiserver/pkg/authorization/cel"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	"k8s.io/client-go/discovery"
 	versionedinformers "k8s.io/client-go/informers"
 	resourceinformers "k8s.io/client-go/informers/resource/v1beta1"
 	"k8s.io/kubernetes/pkg/auth/authorizer/abac"
@@ -68,6 +69,8 @@ type Config struct {
 	// AuthorizationConfiguration stores the configuration for the Authorizer chain
 	// It will deprecate most of the above flags when GA
 	AuthorizationConfiguration *authzconfig.AuthorizationConfiguration
+
+	DiscoveryClient discovery.DiscoveryInterface
 }
 
 // New returns the right sort of union of multiple authorizer.Authorizer objects
