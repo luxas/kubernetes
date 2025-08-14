@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/google/cel-go/cel"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	authorizationv1beta1 "k8s.io/api/authorization/v1beta1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -41,6 +42,7 @@ import (
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	authorizationcel "k8s.io/apiserver/pkg/authorization/cel"
+	"k8s.io/apiserver/pkg/endpoints/request"
 	genericfeatures "k8s.io/apiserver/pkg/features"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/apiserver/pkg/util/webhook"
@@ -79,6 +81,8 @@ type WebhookAuthorizer struct {
 	metrics             metrics.AuthorizerMetrics
 	celMatcher          *authorizationcel.CELMatcher
 	name                string
+
+	conditionCompiler *ConditionCompiler
 }
 
 // NewFromInterface creates a WebhookAuthorizer using the given subjectAccessReview client
@@ -111,6 +115,15 @@ func New(config *rest.Config, version string, authorizedTTL, unauthorizedTTL tim
 		return nil, err
 	}
 	return newWithBackoff(subjectAccessReview, authorizedTTL, unauthorizedTTL, retryBackoff, decisionOnError, matchConditions, metrics, compiler, name)
+}
+
+func NewConditional(config *rest.Config, version string, authorizedTTL, unauthorizedTTL time.Duration, retryBackoff wait.Backoff, decisionOnError authorizer.Decision, matchConditions []apiserver.WebhookMatchCondition, name string, metrics metrics.AuthorizerMetrics, compiler authorizationcel.Compiler, typeChecker *ConditionCompiler) (*WebhookAuthorizer, error) {
+	a, err := New(config, version, authorizedTTL, unauthorizedTTL, retryBackoff, decisionOnError, matchConditions, name, metrics, compiler)
+	if err != nil {
+		return nil, err
+	}
+	a.conditionCompiler = typeChecker
+	return a, nil
 }
 
 // newWithBackoff allows tests to skip the sleep.
@@ -220,14 +233,27 @@ func (w *WebhookAuthorizer) Authorize(ctx context.Context, attr authorizer.Attri
 			return authorizer.DecisionNoOpinion, "", nil
 		}
 	}
+
+	if w.conditionalAuthorizationEnabled() {
+		// If the SubjectAccessReviewConditions feature gate is enabled, then the webhook can return conditions.
+		// The conditions are evaluated in order, and in case of a false response or error, the process is short-circuited, and the request is denied.
+		// This field is alpha-level, and ignored if the SubjectAccessReview handler has not enabled the SubjectAccessReviewConditions feature gate,
+		// in which the response is treated as NoOpinion.
+		if r.Annotations == nil {
+			r.Annotations = make(map[string]string)
+		}
+		// TODO: Decide on naming :D
+		r.Annotations["kubernetes.io/ConditionalAuthorizationFeature"] = string("true")
+	}
 	// If all evaluated successfully and ALL matchConditions evaluate to TRUE,
 	// then the webhook is called.
 	key, err := json.Marshal(r.Spec)
 	if err != nil {
 		return w.decisionOnError, "", err
 	}
+	var resp sarResponse
 	if entry, ok := w.responseCache.Get(string(key)); ok {
-		r.Status = entry.(authorizationv1.SubjectAccessReviewStatus)
+		resp = entry.(sarResponse)
 	} else {
 		var result *authorizationv1.SubjectAccessReview
 		var metricsResult string
@@ -276,26 +302,83 @@ func (w *WebhookAuthorizer) Authorize(ctx context.Context, attr authorizer.Attri
 			return w.decisionOnError, "", err
 		}
 
-		r.Status = result.Status
+		if w.conditionalAuthorizationEnabled() {
+			// If the condition annotation exists, but does not contain any conditions, then NoOpinion is returned.
+			// Conditions fold to an conditional Allow only if there are at least one condition.
+			if encodedConditions, ok := result.Annotations[request.ConditionalAuthorizationConditionsAnnotation]; ok && len(encodedConditions) > 0 {
+				if err := json.Unmarshal([]byte(encodedConditions), &resp.Conditions); err != nil {
+					return authorizer.DecisionNoOpinion, "", fmt.Errorf("unexpected error unmarshalling conditions: %w", err)
+				}
+			}
+		}
+
+		resp.Status = result.Status
 		if shouldCache(attr) {
-			if r.Status.Allowed {
-				w.responseCache.Add(string(key), r.Status, w.authorizedTTL)
+			if resp.Status.Allowed {
+				w.responseCache.Add(string(key), resp, w.authorizedTTL)
 			} else {
-				w.responseCache.Add(string(key), r.Status, w.unauthorizedTTL)
+				w.responseCache.Add(string(key), resp, w.unauthorizedTTL)
 			}
 		}
 	}
 	switch {
-	case r.Status.Denied && r.Status.Allowed:
-		return authorizer.DecisionDeny, r.Status.Reason, fmt.Errorf("webhook subject access review returned both allow and deny response")
-	case r.Status.Denied:
-		return authorizer.DecisionDeny, r.Status.Reason, nil
-	case r.Status.Allowed:
-		return authorizer.DecisionAllow, r.Status.Reason, nil
+	case resp.Status.Denied && resp.Status.Allowed:
+		return authorizer.DecisionDeny, resp.Status.Reason, fmt.Errorf("webhook subject access review returned both allow and deny response")
+	case resp.Status.Denied:
+		return authorizer.DecisionDeny, resp.Status.Reason, nil
+	case resp.Status.Allowed:
+		return authorizer.DecisionAllow, resp.Status.Reason, nil
 	default:
-		return authorizer.DecisionNoOpinion, r.Status.Reason, nil
-	}
+		if w.conditionalAuthorizationEnabled() {
+			results, err := w.conditionCompiler.Check(&sarWithConditions{
+				SubjectAccessReviewSpec: *r.Spec.DeepCopy(),
+				Conditions:              resp.Conditions,
+			})
+			if err != nil {
+				return authorizer.DecisionNoOpinion, "", fmt.Errorf("unexpected type checking error: %w", err)
+			}
 
+			// Conditions only fold to an conditional Allow only if there are at least one condition.
+			if len(results) >= 1 {
+				conditionPrograms := []request.CompiledCondition{}
+				for _, result := range results {
+					if result.CompilationResult.Error != nil {
+						// TODO: Just return a warning instead, and disregard the authorizer altogether
+						// by not returning an error here?
+						return authorizer.DecisionNoOpinion, "", fmt.Errorf("condition %q: type checking error for group=%q, version=%q, resource=%q: %v",
+							result.SubjectAccessReviewCondition.ID,
+							r.Spec.ResourceAttributes.Group,
+							r.Spec.ResourceAttributes.Version,
+							r.Spec.ResourceAttributes.Resource,
+							result.CompilationResult.Error,
+						)
+					}
+					if result.CompilationResult.OutputType != cel.BoolType {
+						return authorizer.DecisionNoOpinion, "", fmt.Errorf("condition %q: expression must return a boolean value", result.SubjectAccessReviewCondition.ID)
+					}
+					conditionPrograms = append(conditionPrograms, request.CompiledCondition{
+						Program:                      result.CompilationResult.Program,
+						SubjectAccessReviewCondition: result.SubjectAccessReviewCondition,
+						ExpressionAccessor:           result.CompilationResult.ExpressionAccessor,
+					})
+				}
+				return authorizer.DecisionAllow, resp.Status.Reason, &request.ConditionalAuthorizationContext{
+					Conditions: conditionPrograms,
+				}
+			}
+		}
+		return authorizer.DecisionNoOpinion, resp.Status.Reason, nil
+	}
+}
+
+type sarResponse struct {
+	Status     authorizationv1.SubjectAccessReviewStatus
+	Conditions request.Conditions
+}
+
+func (w *WebhookAuthorizer) conditionalAuthorizationEnabled() bool {
+	// TODO: Also only enable it if the admission plugin is also enabled
+	return utilfeature.DefaultFeatureGate.Enabled(genericfeatures.SubjectAccessReviewConditions) && w.conditionCompiler != nil
 }
 
 func resourceAttributesFrom(attr authorizer.Attributes) *authorizationv1.ResourceAttributes {

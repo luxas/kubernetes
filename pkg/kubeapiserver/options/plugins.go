@@ -26,6 +26,7 @@ import (
 	validatingadmissionpolicy "k8s.io/apiserver/pkg/admission/plugin/policy/validating"
 
 	// Admission policies
+	conditionalauthz "k8s.io/apiserver/pkg/admission/plugin/authorizer/conditional"
 	"k8s.io/kubernetes/plugin/pkg/admission/admit"
 	"k8s.io/kubernetes/plugin/pkg/admission/alwayspullimages"
 	"k8s.io/kubernetes/plugin/pkg/admission/antiaffinity"
@@ -107,6 +108,7 @@ var AllOrderedPlugins = []string{
 	validatingwebhook.PluginName,         // ValidatingAdmissionWebhook
 	resourcequota.PluginName,             // ResourceQuota
 	deny.PluginName,                      // AlwaysDeny
+	conditionalauthz.PluginName,          // ConditionalAuthorization
 }
 
 // registerAllAdmissionPluginFlags registers legacy CLI flag options for admission plugins.
@@ -149,6 +151,7 @@ func RegisterAllAdmissionPlugins(plugins *admission.Plugins) {
 	ctbattest.Register(plugins)
 	certsubjectrestriction.Register(plugins)
 	podtopologylabels.Register(plugins)
+	conditionalauthz.Register(plugins)
 }
 
 // DefaultOffAdmissionPlugins get admission plugins off by default for kube-apiserver.
@@ -176,6 +179,7 @@ func DefaultOffAdmissionPlugins() sets.Set[string] {
 		podtopologylabels.PluginName,            // PodTopologyLabels, only active when feature gate PodTopologyLabelsAdmission is enabled.
 		mutatingadmissionpolicy.PluginName,      // Mutatingadmissionpolicy, only active when feature gate MutatingAdmissionpolicy is enabled
 		validatingadmissionpolicy.PluginName,    // ValidatingAdmissionPolicy, only active when feature gate ValidatingAdmissionPolicy is enabled
+		conditionalauthz.PluginName,             // ConditionalAuthorization
 	)
 
 	return sets.New(AllOrderedPlugins...).Difference(defaultOnPlugins)

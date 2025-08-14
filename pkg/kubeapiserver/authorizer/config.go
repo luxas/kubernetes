@@ -33,6 +33,7 @@ import (
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	authorizationcel "k8s.io/apiserver/pkg/authorization/cel"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	"k8s.io/client-go/discovery"
 	versionedinformers "k8s.io/client-go/informers"
 	certinformersv1alpha1 "k8s.io/client-go/informers/certificates/v1alpha1"
 	resourceinformers "k8s.io/client-go/informers/resource/v1"
@@ -72,6 +73,8 @@ type Config struct {
 	// InitialAuthorizationConfigurationData holds the initial authorization configuration data
 	// that was read from the authorization configuration file.
 	InitialAuthorizationConfigurationData string
+
+	DiscoveryClient discovery.DiscoveryInterface
 }
 
 // New returns the right sort of union of multiple authorizer.Authorizer objects

@@ -35,12 +35,16 @@ import (
 	authorizationcel "k8s.io/apiserver/pkg/authorization/cel"
 	authorizationmetrics "k8s.io/apiserver/pkg/authorization/metrics"
 	"k8s.io/apiserver/pkg/authorization/union"
+	"k8s.io/apiserver/pkg/cel/openapi/resolver"
 	"k8s.io/apiserver/pkg/server/options/authorizationconfig/metrics"
 	webhookutil "k8s.io/apiserver/pkg/util/webhook"
 	"k8s.io/apiserver/plugin/pkg/authorizer/webhook"
 	webhookmetrics "k8s.io/apiserver/plugin/pkg/authorizer/webhook/metrics"
+	discoverymemorycache "k8s.io/client-go/discovery/cached/memory"
+	"k8s.io/client-go/restmapper"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/auth/authorizer/abac"
+	"k8s.io/kubernetes/pkg/generated/openapi"
 	"k8s.io/kubernetes/pkg/kubeapiserver/authorizer/modes"
 	"k8s.io/kubernetes/pkg/util/filesystem"
 	"k8s.io/kubernetes/plugin/pkg/auth/authorizer/node"
@@ -149,7 +153,7 @@ func (r *reloadableAuthorizerResolver) newForConfig(authzConfig *authzconfig.Aut
 			if !configuredAuthorizer.Webhook.CacheUnauthorizedRequests {
 				unauthorizedTTL = 0
 			}
-			webhookAuthorizer, err := webhook.New(clientConfig,
+			webhookAuthorizer, err := webhook.NewConditional(clientConfig,
 				configuredAuthorizer.Webhook.SubjectAccessReviewVersion,
 				authorizedTTL,
 				unauthorizedTTL,
@@ -159,6 +163,11 @@ func (r *reloadableAuthorizerResolver) newForConfig(authzConfig *authzconfig.Aut
 				configuredAuthorizer.Name,
 				kubeapiserverWebhookMetrics{WebhookMetrics: webhookmetrics.NewWebhookMetrics(), MatcherMetrics: authorizationcel.NewMatcherMetrics()},
 				r.compiler,
+				&webhook.ConditionCompiler{
+					SchemaResolver: resolver.NewDefinitionsSchemaResolver(openapi.GetOpenAPIDefinitions).
+						Combine(&resolver.ClientDiscoveryResolver{Discovery: r.initialConfig.DiscoveryClient}),
+					RestMapper: restmapper.NewDeferredDiscoveryRESTMapper(discoverymemorycache.NewMemCacheClient(r.initialConfig.DiscoveryClient)),
+				},
 			)
 			if err != nil {
 				return nil, nil, err

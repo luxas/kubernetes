@@ -229,6 +229,13 @@ const (
 	// Enables Structured Authorization Configuration
 	StructuredAuthorizationConfiguration featuregate.Feature = "StructuredAuthorizationConfiguration"
 
+	// owner: @luxas
+	// kep: https://kep.k8s.io/TODO
+	//
+	// Enables ability for SubjectAccessReview implementations to return conditions on the request or stored object,
+	// in order for the request to be authorized. The conditions are enforced by a k8s.io/apiserver admission controller.
+	SubjectAccessReviewConditions featuregate.Feature = "SubjectAccessReviewConditions"
+
 	// owner: @aramase
 	//
 	// Enables validation of service account UID in TokenRequest API.
@@ -446,6 +453,10 @@ var defaultVersionedKubernetesFeatureGates = map[featuregate.Feature]featuregate
 		{Version: version.MustParse("1.29"), Default: false, PreRelease: featuregate.Alpha},
 		{Version: version.MustParse("1.30"), Default: true, PreRelease: featuregate.Beta},
 		{Version: version.MustParse("1.32"), Default: true, PreRelease: featuregate.GA, LockToDefault: true},
+	},
+
+	SubjectAccessReviewConditions: {
+		{Version: version.MustParse("1.33"), Default: false, PreRelease: featuregate.Alpha},
 	},
 
 	TokenRequestServiceAccountUIDValidation: {

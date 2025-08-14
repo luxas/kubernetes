@@ -80,7 +80,17 @@ func withAuthorization(handler http.Handler, a authorizer.Authorizer, s runtime.
 		if authorized == authorizer.DecisionAllow {
 			audit.AddAuditAnnotations(ctx,
 				decisionAnnotationKey, decisionAllow,
-				reasonAnnotationKey, reason)
+				reasonAnnotationKey, reason) // TODO: add the conditional mode to audit as well.
+
+			if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.SubjectAccessReviewConditions) {
+				authorizationConditions := &request.ConditionalAuthorizationContext{}
+				if errors.As(err, &authorizationConditions) {
+					// Propagate the authorization requests conditions to the admission layer
+					req = req.WithContext(request.WithConditionalAuthorizationContext(req.Context(), authorizationConditions))
+					err = nil // This was never an "actual" error, so reset it.
+				}
+			}
+
 			handler.ServeHTTP(w, req)
 			return
 		}

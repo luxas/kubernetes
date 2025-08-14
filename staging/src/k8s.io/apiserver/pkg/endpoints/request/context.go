@@ -32,6 +32,9 @@ const (
 
 	// userKey is the context key for the request user.
 	userKey
+
+	// used for propagating a conditional authorization context between authorization and admission
+	conditionalAuthorizationContextKey
 )
 
 // NewContext instantiates a base context object for request flows.

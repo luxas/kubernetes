@@ -279,6 +279,13 @@ func EtcdMain(tests func() int) {
 		//
 		// Ignore this reported leak.
 		goleak.IgnoreTopFunction("github.com/moby/spdystream.(*Connection).shutdown"),
+
+		// The Webhook Authorizer is leaking a goroutine by executing a HTTP/2 request that invokes
+		// -> net/http.(*Transport).startDialConnForLocked,
+		// -> golang.org/x/net/http2.(*clientConnPool).addConnIfNeeded,
+		// -> http2.(*Transport).newClientConn,
+		// -> internal/poll.runtime_pollWait
+		goleak.IgnoreTopFunction("internal/poll.runtime_pollWait"),
 	)
 
 	stop, err := startEtcd(klog.Background(), false)
