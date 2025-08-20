@@ -85,6 +85,11 @@ func withAuthorization(handler http.Handler, a authorizer.Authorizer, s runtime.
 			if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.SubjectAccessReviewConditions) {
 				authorizationConditions := &request.ConditionalAuthorizationContext{}
 				if errors.As(err, &authorizationConditions) {
+					// Carry over any existing conditions from the request
+					existingConditions, exists := request.ConditionalAuthorizationContextFrom(ctx)
+					if exists {
+						authorizationConditions.Conditions = append(authorizationConditions.Conditions, existingConditions.Conditions...)
+					}
 					// Propagate the authorization requests conditions to the admission layer
 					req = req.WithContext(request.WithConditionalAuthorizationContext(req.Context(), authorizationConditions))
 					err = nil // This was never an "actual" error, so reset it.

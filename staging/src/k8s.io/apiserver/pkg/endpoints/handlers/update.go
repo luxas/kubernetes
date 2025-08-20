@@ -18,6 +18,7 @@ package handlers
 
 import (
 	"context"
+	goerrors "errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -41,8 +42,10 @@ import (
 	"k8s.io/apiserver/pkg/endpoints/handlers/negotiation"
 	"k8s.io/apiserver/pkg/endpoints/handlers/responsewriters"
 	"k8s.io/apiserver/pkg/endpoints/request"
+	genericfeatures "k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/registry/rest"
 	"k8s.io/apiserver/pkg/util/dryrun"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/component-base/tracing"
 	"k8s.io/klog/v2"
 )
@@ -260,15 +263,35 @@ func withAuthorization(validate rest.ValidateObjectFunc, a authorizer.Authorizer
 	var authorizerDecision authorizer.Decision
 	var authorizerReason string
 	var authorizerErr error
+	var authorizationConditions *request.ConditionalAuthorizationContext
 	return func(ctx context.Context, obj runtime.Object) error {
 		if a == nil {
 			return errors.NewInternalError(fmt.Errorf("no authorizer provided, unable to authorize a create on update"))
 		}
 		once.Do(func() {
 			authorizerDecision, authorizerReason, authorizerErr = a.Authorize(ctx, attributes)
+			if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.SubjectAccessReviewConditions) {
+				possibleReturnedConditions := &request.ConditionalAuthorizationContext{}
+				if goerrors.As(authorizerErr, &authorizationConditions) {
+					// Save the conditions, and then attach them to every new request
+					// TODO: Add an e2e test for this
+					authorizationConditions = possibleReturnedConditions
+					authorizerErr = nil // This was never an "actual" error, so reset it.
+				}
+			}
 		})
 		// an authorizer like RBAC could encounter evaluation errors and still allow the request, so authorizer decision is checked before error here.
 		if authorizerDecision == authorizer.DecisionAllow {
+
+			if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.SubjectAccessReviewConditions) && authorizationConditions != nil {
+				existingConditions, exists := request.ConditionalAuthorizationContextFrom(ctx)
+				if exists {
+					authorizationConditions.Conditions = append(authorizationConditions.Conditions, existingConditions.Conditions...)
+				}
+				// attach the union of the conditions for enforcement later in the chain
+				ctx = request.WithConditionalAuthorizationContext(ctx, authorizationConditions)
+			}
+
 			// Continue to validating admission
 			return validate(ctx, obj)
 		}
