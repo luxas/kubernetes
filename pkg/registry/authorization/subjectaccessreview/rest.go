@@ -24,6 +24,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
+	"k8s.io/apiserver/pkg/features"
 	genericfeatures "k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/registry/rest"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
@@ -83,7 +84,25 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	}
 
 	authorizationAttributes := authorizationutil.AuthorizationAttributesFrom(subjectAccessReview.Spec)
-	decision, reason, evaluationErr := r.authorizer.Authorize(ctx, authorizationAttributes)
+
+	var decision authorizer.Decision
+	var reason string
+	var conditionsEnforcer authorizer.ConditionsEnforcer
+	var evaluationErr error
+	// TODO: This needs some more thinking here. Basically, one would need to merge all the conditions
+	// in the following way:
+	// Conditional(A, DN, DD), Allow => Conditional(Allow, -, DD)
+	// Conditional(A, DN, DD), Deny => Conditional(A, -, DN+DD)
+	// However, sth like nested conditionals become really messy:
+	// Conditional(A, DN, DD), Conditional(A2, DN2, DD2) => ???
+	// This might mean that we need to populate the SAR with multiple levels of conditions...
+	// If we do that, do we need to accept multiple levels of conditions too? Or can we flatten the list in
+	// e.g. the webhook authorizer's ResolveConditions function?
+	if utilfeature.DefaultFeatureGate.Enabled(features.ConditionalAuthorization) {
+		decision, reason, conditionsEnforcer, evaluationErr = authorizer.AuthorizeWithConditionalSupport(ctx, authorizationAttributes, r.authorizer)
+	} else {
+		decision, reason, evaluationErr = r.authorizer.Authorize(ctx, authorizationAttributes)
+	}
 
 	subjectAccessReview.Status = authorizationapi.SubjectAccessReviewStatus{
 		Allowed: (decision == authorizer.DecisionAllow),

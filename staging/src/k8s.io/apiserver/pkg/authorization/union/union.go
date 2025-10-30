@@ -48,7 +48,7 @@ func (authzHandler unionAuthzHandler) Authorize(ctx context.Context, a authorize
 		reasonlist []string
 	)
 
-	for _, currAuthzHandler := range authzHandler {
+	for i, currAuthzHandler := range authzHandler {
 		decision, reason, err := currAuthzHandler.Authorize(ctx, a)
 
 		if err != nil {
@@ -59,6 +59,13 @@ func (authzHandler unionAuthzHandler) Authorize(ctx context.Context, a authorize
 		}
 		switch decision {
 		case authorizer.DecisionAllow, authorizer.DecisionDeny:
+			return decision, reason, err
+		case authorizer.DecisionConditional:
+			// If this is not the last authorizer in the chain, register the remaining authorizers
+			// to be called after the conditional response, if the conditions evaluate to NoOpinion.
+			if i < len(authzHandler)-1 {
+				authorizer.RegisterAuthorizerChainAfterConditionalResponse(ctx, authzHandler[i+1:])
+			}
 			return decision, reason, err
 		case authorizer.DecisionNoOpinion:
 			// continue to the next authorizer

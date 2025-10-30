@@ -22,6 +22,7 @@ package options
 import (
 	"github.com/spf13/pflag"
 
+	"k8s.io/apiserver/pkg/admission/plugin/authorizer/conditionsenforcer"
 	mutatingadmissionpolicy "k8s.io/apiserver/pkg/admission/plugin/policy/mutating"
 	validatingadmissionpolicy "k8s.io/apiserver/pkg/admission/plugin/policy/validating"
 
@@ -105,6 +106,7 @@ var AllOrderedPlugins = []string{
 	mutatingwebhook.PluginName,           // MutatingAdmissionWebhook
 	validatingadmissionpolicy.PluginName, // ValidatingAdmissionPolicy
 	validatingwebhook.PluginName,         // ValidatingAdmissionWebhook
+	conditionsenforcer.PluginName,        // AuthorizationConditionsEnforcer
 	resourcequota.PluginName,             // ResourceQuota
 	deny.PluginName,                      // AlwaysDeny
 }
@@ -149,6 +151,7 @@ func RegisterAllAdmissionPlugins(plugins *admission.Plugins) {
 	ctbattest.Register(plugins)
 	certsubjectrestriction.Register(plugins)
 	podtopologylabels.Register(plugins)
+	conditionsenforcer.Register(plugins)
 }
 
 // DefaultOffAdmissionPlugins get admission plugins off by default for kube-apiserver.
