@@ -18,14 +18,12 @@ package subjectaccessreview
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
-	"k8s.io/apiserver/pkg/endpoints/request"
 	genericfeatures "k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/registry/rest"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
@@ -87,7 +85,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	authorizationAttributes := authorizationutil.AuthorizationAttributesFrom(subjectAccessReview.Spec)
 	decision, reason, evaluationErr := r.authorizer.Authorize(ctx, authorizationAttributes)
 
-	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.SubjectAccessReviewConditions) {
+	/*if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.SubjectAccessReviewConditions) {
 		authorizationConditions := &request.ConditionalAuthorizationContext{}
 		if errors.As(evaluationErr, &authorizationConditions) {
 			evaluationErr = nil // This was never an "actual" error, so reset it.
@@ -95,7 +93,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 				return nil, err
 			}
 		}
-	}
+	}*/
 
 	subjectAccessReview.Status = authorizationapi.SubjectAccessReviewStatus{
 		Allowed: (decision == authorizer.DecisionAllow),

@@ -284,12 +284,12 @@ func withAuthorization(validate rest.ValidateObjectFunc, a authorizer.Authorizer
 		if authorizerDecision == authorizer.DecisionAllow {
 
 			if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.SubjectAccessReviewConditions) && authorizationConditions != nil {
-				existingConditions, exists := request.ConditionalAuthorizationContextFrom(ctx)
+				existingConditions, exists := request.ConditionalAuthorizationRequestFrom(ctx)
 				if exists {
 					authorizationConditions.Conditions = append(authorizationConditions.Conditions, existingConditions.Conditions...)
 				}
 				// attach the union of the conditions for enforcement later in the chain
-				ctx = request.WithConditionalAuthorizationContext(ctx, authorizationConditions)
+				ctx = request.WithConditionalAuthorizationRequest(ctx, authorizationConditions)
 			}
 
 			// Continue to validating admission

@@ -18,7 +18,6 @@ package selfsubjectaccessreview
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -97,7 +96,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 
 	decision, reason, evaluationErr := r.authorizer.Authorize(ctx, authorizationAttributes)
 
-	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.SubjectAccessReviewConditions) {
+	/*if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.SubjectAccessReviewConditions) {
 		authorizationConditions := &genericapirequest.ConditionalAuthorizationContext{}
 		if errors.As(evaluationErr, &authorizationConditions) {
 			evaluationErr = nil // This was never an "actual" error, so reset it.
@@ -105,7 +104,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 				return nil, err
 			}
 		}
-	}
+	}*/
 
 	selfSAR.Status = authorizationapi.SubjectAccessReviewStatus{
 		Allowed: (decision == authorizer.DecisionAllow),

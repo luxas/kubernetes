@@ -34,7 +34,12 @@ const (
 	userKey
 
 	// used for propagating a conditional authorization context between authorization and admission
-	conditionalAuthorizationContextKey
+	conditionalAuthorizationRequestKey
+
+	// used for an authorizer registering conditions. It is not the same as conditionalAuthorizationRequestKey,
+	// in order to activate conditional authorization for only such authorizer.Authorize calls which supports
+	// enforcing it too.
+	conditionalAuthorizationRegistrationKey
 )
 
 // NewContext instantiates a base context object for request flows.

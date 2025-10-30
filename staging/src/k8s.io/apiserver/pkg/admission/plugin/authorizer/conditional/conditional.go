@@ -6,6 +6,7 @@ import (
 	"io"
 	"math"
 	"reflect"
+	"slices"
 	"time"
 
 	celtypes "github.com/google/cel-go/common/types"
@@ -18,6 +19,7 @@ import (
 	"k8s.io/apiserver/pkg/admission"
 	plugincel "k8s.io/apiserver/pkg/admission/plugin/cel"
 	apiscel "k8s.io/apiserver/pkg/apis/cel"
+	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/cel"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	genericfeatures "k8s.io/apiserver/pkg/features"
@@ -56,11 +58,32 @@ func (c *ConditionalAuthorizationEnforcer) Handles(operation admission.Operation
 }
 
 func (c *ConditionalAuthorizationEnforcer) Validate(ctx context.Context, a admission.Attributes, o admission.ObjectInterfaces) error {
-	authorizationConditions, ok := request.ConditionalAuthorizationContextFrom(ctx)
+	authorizationConditions, ok := request.ConditionalAuthorizationRequestFrom(ctx)
 	if !ok {
 		return nil
 	}
 
+	// If there are no conditions, there is nothing to enforce, just skip.
+	if len(authorizationConditions.Conditions) == 0 {
+		return nil
+	}
+
+	// Always allow system:masters group. There shouldn't be any conditions attached to this context,
+	// as the PrivilegedGroups authorizer should have been constructed as the first authorizer in the chain.
+	// TODO: DelegatingAuthorizationOptions technically allows disabling the superuser rights of the system:masters group.
+	// Should we make this configurable; such that someone running a custom API server without system:masters can configure this?
+	// Should we read config from the io.Reader?
+	if slices.Contains(a.GetUserInfo().GetGroups(), user.SystemPrivilegedGroup) {
+		return nil
+	}
+
+	start := time.Now()
+	defer func() {
+		latency := time.Since(start)
+		fmt.Printf("Conditional authorization admission enforcer total latency: %v\n", latency)
+	}()
+
+	// TODO: Do we need to do any versioning here, or can we rely on the webhook authorizer do to it?
 	versionedAttributes, err := admission.NewVersionedAttributes(a, a.GetKind(), o)
 	if err != nil {
 		return fmt.Errorf("failed to convert object version: %w", err)
@@ -86,7 +109,7 @@ func (c *ConditionalAuthorizationEnforcer) Validate(ctx context.Context, a admis
 			})
 			return err
 		}
-		if condition.Effect == request.ConditionEffectDeny && result.EvalResult == celtypes.True {
+		if condition.Effect == request.ConditionEffectDenyRequest && result.EvalResult == celtypes.True {
 			resultErr := fmt.Errorf("conditional authorization policy %q denied the request", condition.ID)
 			return admission.NewForbidden(a, resultErr)
 		}
@@ -194,6 +217,7 @@ func (a *evaluationActivation) Evaluate(ctx context.Context, compilationResult r
 	evalResult, evalDetails, err := compilationResult.Program.ContextEval(ctx, a)
 	elapsed := time.Since(t1)
 	evaluation.Elapsed = elapsed
+	fmt.Printf("Evaluation latency: %v\n", elapsed)
 	if evalDetails == nil {
 		return evaluation, -1, &cel.Error{
 			Type:   cel.ErrorTypeInternal,

@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"net/textproto"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -909,6 +910,7 @@ func (t *Transport) newClientConn(c net.Conn, singleUse bool) (*ClientConn, erro
 		cc.idleTimer = t.afterFunc(d, cc.onIdleTimeout)
 	}
 
+	fmt.Printf("newClientConnStack Trace:\n%s\n", debug.Stack())
 	go cc.readLoop()
 	return cc, nil
 }

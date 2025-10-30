@@ -199,6 +199,12 @@ func newWithBackoff(subjectAccessReview subjectAccessReviewer, authorizedTTL, un
 // encounter an error. We are failing open now to preserve backwards compatible
 // behavior.
 func (w *WebhookAuthorizer) Authorize(ctx context.Context, attr authorizer.Attributes) (decision authorizer.Decision, reason string, err error) {
+	start := time.Now()
+	defer func() {
+		latency := time.Since(start)
+		fmt.Printf("Webhook authorizer total latency: %s\n", latency)
+	}()
+
 	r := &authorizationv1.SubjectAccessReview{}
 	if user := attr.GetUser(); user != nil {
 		r.Spec = authorizationv1.SubjectAccessReviewSpec{
@@ -302,9 +308,11 @@ func (w *WebhookAuthorizer) Authorize(ctx context.Context, attr authorizer.Attri
 			return w.decisionOnError, "", err
 		}
 
-		if w.conditionalAuthorizationEnabled() {
+		// Only process conditions if the answer was not unconditional already.
+		if w.conditionalAuthorizationEnabled() && !result.Status.Allowed && !result.Status.Denied {
 			// If the condition annotation exists, but does not contain any conditions, then NoOpinion is returned.
 			// Conditions fold to an conditional Allow only if there are at least one condition.
+			// TODO: Cache the compiled program instead of the raw data to speed things up.
 			if encodedConditions, ok := result.Annotations[request.ConditionalAuthorizationConditionsAnnotation]; ok && len(encodedConditions) > 0 {
 				if err := json.Unmarshal([]byte(encodedConditions), &resp.Conditions); err != nil {
 					return authorizer.DecisionNoOpinion, "", fmt.Errorf("unexpected error unmarshalling conditions: %w", err)
@@ -329,8 +337,13 @@ func (w *WebhookAuthorizer) Authorize(ctx context.Context, attr authorizer.Attri
 	case resp.Status.Allowed:
 		return authorizer.DecisionAllow, resp.Status.Reason, nil
 	default:
-		if w.conditionalAuthorizationEnabled() {
+		if w.conditionalAuthorizationEnabled() && len(resp.Conditions) > 0 {
+			// TODO: Add tracing here.
+			// TODO: It would be more performant to receive the CEL expressions in AST and/or protobuf encoding,
+			// instead of normal string encoding.
+			// TODO: Can we cache some of the typechecking environments, and/or base environments and add just a small layer on top?
 			results, err := w.conditionCompiler.Check(&sarWithConditions{
+				// TODO: Avoid the deepcopy here.
 				SubjectAccessReviewSpec: *r.Spec.DeepCopy(),
 				Conditions:              resp.Conditions,
 			})
@@ -362,6 +375,9 @@ func (w *WebhookAuthorizer) Authorize(ctx context.Context, attr authorizer.Attri
 						ExpressionAccessor:           result.CompilationResult.ExpressionAccessor,
 					})
 				}
+				// TODO: Don't pass the conditions through as an error, but instead write to the context pointer.
+				// TODO: Add information about what webhook returned the condition.
+				// TODO: Respect the failurePolicy of the webhook.
 				return authorizer.DecisionAllow, resp.Status.Reason, &request.ConditionalAuthorizationContext{
 					Conditions: conditionPrograms,
 				}

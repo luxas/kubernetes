@@ -86,12 +86,12 @@ func withAuthorization(handler http.Handler, a authorizer.Authorizer, s runtime.
 				authorizationConditions := &request.ConditionalAuthorizationContext{}
 				if errors.As(err, &authorizationConditions) {
 					// Carry over any existing conditions from the request
-					existingConditions, exists := request.ConditionalAuthorizationContextFrom(ctx)
+					existingConditions, exists := request.ConditionalAuthorizationRequestFrom(ctx)
 					if exists {
 						authorizationConditions.Conditions = append(authorizationConditions.Conditions, existingConditions.Conditions...)
 					}
 					// Propagate the authorization requests conditions to the admission layer
-					req = req.WithContext(request.WithConditionalAuthorizationContext(req.Context(), authorizationConditions))
+					req = req.WithContext(request.WithConditionalAuthorizationRequest(req.Context(), authorizationConditions))
 					err = nil // This was never an "actual" error, so reset it.
 				}
 			}

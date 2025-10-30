@@ -1,0 +1,165 @@
+I0814 15:18:13.508631   51271 queueset.go:417] QS(workload-low): Dispatching request &request.RequestInfo{IsResourceRequest:true, Path:"/api/v1/namespaces/default/secrets", Verb:"create", APIPrefix:"api", APIGroup:"", APIVersion:"v1", Namespace:"default", Resource:"secrets", Subresource:"", Name:"", Parts:[]string{"secrets"}, FieldSelector:"", LabelSelector:""} &user.DefaultInfo{Name:"system:serviceaccount:default:default", UID:"", Groups:[]string{"system:serviceaccounts", "system:authenticated"}, Extra:map[string][]string{}} from its queue
+Stack Trace:
+goroutine 4339 [running]:
+runtime/debug.Stack()
+	/usr/local/go/src/runtime/debug/stack.go:26 +0x64
+net/http.(*Transport).startDialConnForLocked(0x140011a4b60, 0x1400aed9b80)
+	/usr/local/go/src/net/http/transport.go:1595 +0x24
+net/http.(*Transport).queueForDial(0x140011a4b60, 0x1400aed9b80)
+	/usr/local/go/src/net/http/transport.go:1570 +0x2ec
+net/http.(*Transport).getConn(0x140011a4b60, 0x1400603cb90, {{}, 0x0, {0x1400279f400, 0x5}, {0x14003d85980, 0xe}, 0x0})
+	/usr/local/go/src/net/http/transport.go:1517 +0x2f4
+net/http.(*Transport).roundTrip(0x140011a4b60, 0x14006073540)
+	/usr/local/go/src/net/http/transport.go:686 +0x8c0
+net/http.(*Transport).RoundTrip(0x140051da008?, 0x1400532d190?)
+	/usr/local/go/src/net/http/roundtrip.go:30 +0x1c
+k8s.io/apiserver/pkg/util/x509metrics.(*x509DeprecatedCertificateMetricsRTWrapper).RoundTrip(0x140016f0e40, 0x14006073540)
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/pkg/util/x509metrics/server_cert_deprecations.go:102 +0x30
+k8s.io/client-go/transport.(*bearerAuthRoundTripper).RoundTrip(0x140016f0e70, 0x14006073400)
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/client-go/transport/round_trippers.go:323 +0x338
+net/http.send(0x140060732c0, {0x1043409c0, 0x140016f0e70}, {0x100d28ab8?, 0x8?, 0x1065d6a60?})
+	/usr/local/go/src/net/http/client.go:259 +0x498
+net/http.(*Client).send(0x140016f0ea0, 0x140060732c0, {0x1400648f2b8?, 0x100d677b4?, 0x1065d6a60?})
+	/usr/local/go/src/net/http/client.go:180 +0x94
+net/http.(*Client).do(0x140016f0ea0, 0x140060732c0)
+	/usr/local/go/src/net/http/client.go:728 +0x764
+net/http.(*Client).Do(...)
+	/usr/local/go/src/net/http/client.go:587
+k8s.io/client-go/rest.(*Request).request(0x140058e0f00, {0x1043809e8, 0x140034e2af0}, 0x1400648f6d8)
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/client-go/rest/request.go:1088 +0x2b0
+k8s.io/client-go/rest.(*Request).Do(0x140058e0f00, {0x104380940, 0x14006069aa0})
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/client-go/rest/request.go:1136 +0xd8
+k8s.io/apiserver/plugin/pkg/authorizer/webhook.(*subjectAccessReviewV1ClientGW).Create(0x14001607970, {0x104380940, 0x14006069aa0}, 0x140058e0c00, {{{0x0, 0x0}, {0x0, 0x0}}, {0x0, 0x0, ...}, ...})
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/plugin/pkg/authorizer/webhook/webhook.go:591 +0xa0
+k8s.io/apiserver/plugin/pkg/authorizer/webhook.(*WebhookAuthorizer).Authorize.func1()
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/plugin/pkg/authorizer/webhook/webhook.go:265 +0xb0
+k8s.io/apiserver/pkg/util/webhook.WithExponentialBackoff.func1({0x140051da008?, 0x1400648fef0?})
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/pkg/util/webhook/webhook.go:125 +0x38
+k8s.io/apimachinery/pkg/util/wait.runConditionWithCrashProtectionWithContext({0x104380940?, 0x14006069aa0?}, 0x1400648fb58?)
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apimachinery/pkg/util/wait/wait.go:159 +0x60
+k8s.io/apimachinery/pkg/util/wait.ExponentialBackoffWithContext({0x104380940, 0x14006069aa0}, {0x1dcd6500, 0x3ff8000000000000, 0x3fc999999999999a, 0x5, 0x0}, 0x1400648fbb8)
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apimachinery/pkg/util/wait/backoff.go:501 +0x80
+k8s.io/apiserver/pkg/util/webhook.WithExponentialBackoff({0x104380940?, 0x14006069aa0?}, {0x1dcd6500, 0x3ff8000000000000, 0x3fc999999999999a, 0x5, 0x0}, 0x100982974?, 0x0?)
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/pkg/util/webhook/webhook.go:124 +0x74
+k8s.io/apiserver/plugin/pkg/authorizer/webhook.(*WebhookAuthorizer).Authorize(0x1400164aa20, {0x104380940, 0x14006069aa0}, {0x1043a60e0, 0x1400607a000})
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/plugin/pkg/authorizer/webhook/webhook.go:260 +0x46c
+k8s.io/apiserver/pkg/authorization/metrics.(*instrumentedAuthorizer).Authorize(0x140016f0ff0, {0x104380940?, 0x14006069aa0?}, {0x1043a60e0?, 0x1400607a000?})
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/pkg/authorization/metrics/metrics.go:78 +0x3c
+k8s.io/apiserver/pkg/authorization/union.unionAuthzHandler.Authorize({0x1400119ace0?, 0x140007039b0?, 0x103dd2640?}, {0x104380940, 0x14006069aa0}, {0x1043a60e0, 0x1400607a000})
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/pkg/authorization/union/union.go:52 +0xc8
+k8s.io/kubernetes/pkg/kubeapiserver/authorizer.(*reloadableAuthorizerResolver).Authorize(0x104380940?, {0x104380940?, 0x14006069aa0?}, {0x1043a60e0?, 0x1400607a000?})
+	/Users/luxas/upbound/kubernetes/pkg/kubeapiserver/authorizer/reload.go:83 +0x44
+k8s.io/apiserver/pkg/endpoints/filters.withAuthorization.func1({0x104380050, 0x14006057140}, 0x14006072640)
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/pkg/endpoints/filters/authorization.go:71 +0xe0
+net/http.HandlerFunc.ServeHTTP(0x0?, {0x104380050?, 0x14006057140?}, 0x103280614?)
+	/usr/local/go/src/net/http/server.go:2294 +0x38
+k8s.io/apiserver/pkg/endpoints/filterlatency.trackStarted.func1({0x104380050, 0x14006057140}, 0x14006072500)
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/pkg/endpoints/filterlatency/filterlatency.go:93 +0x34c
+net/http.HandlerFunc.ServeHTTP(0x1400462e508?, {0x104380050?, 0x14006057140?}, 0x10260ac78?)
+	/usr/local/go/src/net/http/server.go:2294 +0x38
+k8s.io/apiserver/pkg/server.DefaultBuildHandlerChain.TrackCompleted.trackCompleted.func23({0x104380050, 0x14006057140}, 0x14006072500)
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/pkg/endpoints/filterlatency/filterlatency.go:108 +0xf4
+net/http.HandlerFunc.ServeHTTP(0x14006057280?, {0x104380050?, 0x14006057140?}, 0x30000007d?)
+	/usr/local/go/src/net/http/server.go:2294 +0x38
+k8s.io/apiserver/pkg/server/filters.(*priorityAndFairnessHandler).Handle.func10()
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/pkg/server/filters/priority-and-fairness.go:298 +0xd4
+k8s.io/apiserver/pkg/util/flowcontrol.(*configController).Handle.func2()
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/pkg/util/flowcontrol/apf_filter.go:192 +0x1a0
+k8s.io/apiserver/pkg/util/flowcontrol/fairqueuing/queueset.(*request).Finish.func1(0x14005fabd10?, 0x10416e9c0?, 0x1400462e801?)
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/pkg/util/flowcontrol/fairqueuing/queueset/queueset.go:391 +0x50
+k8s.io/apiserver/pkg/util/flowcontrol/fairqueuing/queueset.(*request).Finish(0x14005fabd10, 0x140034e2a10)
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/pkg/util/flowcontrol/fairqueuing/queueset/queueset.go:392 +0x3c
+k8s.io/apiserver/pkg/util/flowcontrol.(*configController).Handle(0x14000c20280, {0x1043809e8, 0x140034e25b0}, {0x1400588fe10, {0x104381428, 0x14006057200}}, 0x40?, 0x1040e8020?, 0x140024529d8?, 0x14006057240)
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/pkg/util/flowcontrol/apf_filter.go:179 +0x5dc
+k8s.io/apiserver/pkg/server/filters.(*priorityAndFairnessHandler).Handle.func11(0x14002eb7c20, {0x104380940?, 0x14006069680?}, {0x1400588fe10?, {0x104381428?, 0x14006057200?}}, 0x1400606c480, 0x140060696b0, 0x1400532c860, 0x14006057240)
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/pkg/server/filters/priority-and-fairness.go:304 +0xc0
+k8s.io/apiserver/pkg/server/filters.(*priorityAndFairnessHandler).Handle(0x14002eb7c20, {0x104380050, 0x14006057140}, 0x14006072500)
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/pkg/server/filters/priority-and-fairness.go:305 +0x7d4
+net/http.HandlerFunc.ServeHTTP(0x0?, {0x104380050?, 0x14006057140?}, 0x1032909ef?)
+	/usr/local/go/src/net/http/server.go:2294 +0x38
+k8s.io/apiserver/pkg/endpoints/filterlatency.trackStarted.func1({0x104380050, 0x14006057140}, 0x140060723c0)
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/pkg/endpoints/filterlatency/filterlatency.go:93 +0x34c
+net/http.HandlerFunc.ServeHTTP(0x14002452cf8?, {0x104380050?, 0x14006057140?}, 0x10260aad8?)
+	/usr/local/go/src/net/http/server.go:2294 +0x38
+k8s.io/apiserver/pkg/server.DefaultBuildHandlerChain.TrackCompleted.trackCompleted.func24({0x104380050, 0x14006057140}, 0x140060723c0)
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/pkg/endpoints/filterlatency/filterlatency.go:108 +0xf4
+net/http.HandlerFunc.ServeHTTP(0x1032829dc?, {0x104380050?, 0x14006057140?}, 0x14006057200?)
+	/usr/local/go/src/net/http/server.go:2294 +0x38
+k8s.io/apiserver/pkg/server.DefaultBuildHandlerChain.WithImpersonation.func4({0x104380050, 0x14006057140}, 0x14006072280)
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/pkg/endpoints/filters/impersonation.go:181 +0x12f0
+net/http.HandlerFunc.ServeHTTP(0x0?, {0x104380050?, 0x14006057140?}, 0x1032808ec?)
+	/usr/local/go/src/net/http/server.go:2294 +0x38
+k8s.io/apiserver/pkg/endpoints/filterlatency.trackStarted.func1({0x104380050, 0x14006057140}, 0x14006072140)
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/pkg/endpoints/filterlatency/filterlatency.go:93 +0x34c
+net/http.HandlerFunc.ServeHTTP(0x140024532a8?, {0x104380050?, 0x14006057140?}, 0x1026094a8?)
+	/usr/local/go/src/net/http/server.go:2294 +0x38
+k8s.io/apiserver/pkg/server.DefaultBuildHandlerChain.TrackCompleted.trackCompleted.func25({0x104380050, 0x14006057140}, 0x14006072140)
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/pkg/endpoints/filterlatency/filterlatency.go:108 +0xf4
+net/http.HandlerFunc.ServeHTTP(0x140024533f8?, {0x104380050?, 0x14006057140?}, 0x103270d86?)
+	/usr/local/go/src/net/http/server.go:2294 +0x38
+k8s.io/apiserver/pkg/endpoints/filterlatency.trackStarted.func1({0x104380050, 0x14006057140}, 0x14006072000)
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/pkg/endpoints/filterlatency/filterlatency.go:93 +0x34c
+net/http.HandlerFunc.ServeHTTP(0x104380940?, {0x104380050?, 0x14006057140?}, 0x1038cee50?)
+	/usr/local/go/src/net/http/server.go:2294 +0x38
+k8s.io/apiserver/pkg/endpoints/filters.WithTracing.func2({0x104380050, 0x14006057140}, 0x14006055e00)
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/pkg/endpoints/filters/traces.go:62 +0x418
+net/http.HandlerFunc.ServeHTTP(0x104380940?, {0x104380050?, 0x14006057140?}, 0x1038cee50?)
+	/usr/local/go/src/net/http/server.go:2294 +0x38
+go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp.(*middleware).serveHTTP(0x14002f45520, {0x10437dde0, 0x1400606c3c0}, 0x14006055b80, {0x10433d900, 0x140001c5008})
+	/Users/luxas/upbound/kubernetes/vendor/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp/handler.go:176 +0xf84
+go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp.NewMiddleware.func1.1({0x10437dde0?, 0x1400606c3c0?}, 0xe53?)
+	/Users/luxas/upbound/kubernetes/vendor/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp/handler.go:65 +0x40
+net/http.HandlerFunc.ServeHTTP(0x14005119a28?, {0x10437dde0?, 0x1400606c3c0?}, 0x102608938?)
+	/usr/local/go/src/net/http/server.go:2294 +0x38
+k8s.io/apiserver/pkg/server.DefaultBuildHandlerChain.TrackCompleted.trackCompleted.func27({0x10437dde0, 0x1400606c3c0}, 0x14006055b80)
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/pkg/endpoints/filterlatency/filterlatency.go:108 +0xf4
+net/http.HandlerFunc.ServeHTTP(0x104380940?, {0x10437dde0?, 0x1400606c3c0?}, 0x1038c8ba0?)
+	/usr/local/go/src/net/http/server.go:2294 +0x38
+k8s.io/apiserver/pkg/endpoints/filters.withAuthentication.func1({0x10437dde0, 0x1400606c3c0}, 0x14006055b80)
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/pkg/endpoints/filters/authentication.go:123 +0x658
+net/http.HandlerFunc.ServeHTTP(0x104380940?, {0x10437dde0?, 0x1400606c3c0?}, 0x1038cee50?)
+	/usr/local/go/src/net/http/server.go:2294 +0x38
+k8s.io/apiserver/pkg/endpoints/filterlatency.trackStarted.func1({0x10437dde0, 0x1400606c3c0}, 0x140060557c0)
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/pkg/endpoints/filterlatency/filterlatency.go:93 +0x34c
+net/http.HandlerFunc.ServeHTTP(0x14006055680?, {0x10437dde0?, 0x1400606c3c0?}, 0x1400603c9b0?)
+	/usr/local/go/src/net/http/server.go:2294 +0x38
+k8s.io/apiserver/pkg/server.DefaultBuildHandlerChain.WithWarningRecorder.func11({0x10437dde0, 0x1400606c3c0}, 0x14006055680)
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/pkg/endpoints/filters/warning.go:35 +0xb8
+net/http.HandlerFunc.ServeHTTP(0x140017ed200?, {0x10437dde0?, 0x1400606c3c0?}, 0x10091c408?)
+	/usr/local/go/src/net/http/server.go:2294 +0x38
+k8s.io/apiserver/pkg/server/filters.(*timeoutHandler).ServeHTTP.func1()
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/pkg/server/filters/timeout.go:115 +0x64
+created by k8s.io/apiserver/pkg/server/filters.(*timeoutHandler).ServeHTTP in goroutine 4338
+	/Users/luxas/upbound/kubernetes/staging/src/k8s.io/apiserver/pkg/server/filters/timeout.go:101 +0x160
+
+addConnIfNeeded Stack Trace:
+goroutine 4342 [running]:
+runtime/debug.Stack()
+	/usr/local/go/src/runtime/debug/stack.go:26 +0x64
+golang.org/x/net/http2.(*clientConnPool).addConnIfNeeded(0x140016f0d50, {0x14001307110, 0xe}, 0x1400071bcc0, {0x1043922b0, 0x14005698708})
+	/Users/luxas/upbound/kubernetes/vendor/golang.org/x/net/http2/client_conn_pool.go:181 +0x280
+golang.org/x/net/http2.configureTransports.func1({0x103270b6a, 0x5}, {0x14003d85980?, 0x0?}, {0x1043922b0, 0x14005698708})
+	/Users/luxas/upbound/kubernetes/vendor/golang.org/x/net/http2/transport.go:301 +0x5c
+golang.org/x/net/http2.configureTransports.func2({0x14003d85980?, 0x104380978?}, 0x1400130692e?)
+	/Users/luxas/upbound/kubernetes/vendor/golang.org/x/net/http2/transport.go:320 +0x48
+net/http.(*Transport).dialConn(0x140011a4b60, {0x104380978, 0x1400603cbe0}, {{}, 0x0, {0x1400279f400, 0x5}, {0x14003d85980, 0xe}, 0x0})
+	/usr/local/go/src/net/http/transport.go:1934 +0xf80
+net/http.(*Transport).dialConnFor(0x140011a4b60, 0x1400aed9b80)
+	/usr/local/go/src/net/http/transport.go:1617 +0x8c
+net/http.(*Transport).startDialConnForLocked.func1()
+	/usr/local/go/src/net/http/transport.go:1599 +0x34
+created by net/http.(*Transport).startDialConnForLocked in goroutine 4339
+	/usr/local/go/src/net/http/transport.go:1598 +0x160
+
+newClientConnStack Trace:
+goroutine 4354 [running]:
+runtime/debug.Stack()
+	/usr/local/go/src/runtime/debug/stack.go:26 +0x64
+golang.org/x/net/http2.(*Transport).newClientConn(0x1400071bcc0, {0x1043922b0, 0x14005698708}, 0x0)
+	/Users/luxas/upbound/kubernetes/vendor/golang.org/x/net/http2/transport.go:913 +0xb1c
+golang.org/x/net/http2.(*Transport).NewClientConn(0x14005698888?, {0x1043922b0?, 0x14005698708?})
+	/Users/luxas/upbound/kubernetes/vendor/golang.org/x/net/http2/transport.go:819 +0x3c
+golang.org/x/net/http2.(*addConnCall).run(0x140056fe3c0, 0x140034901c0?, {0x14001307110, 0xe}, {0x1043922b0?, 0x14005698708?})
+	/Users/luxas/upbound/kubernetes/vendor/golang.org/x/net/http2/client_conn_pool.go:201 +0x40
+created by golang.org/x/net/http2.(*clientConnPool).addConnIfNeeded in goroutine 4342
+	/Users/luxas/upbound/kubernetes/vendor/golang.org/x/net/http2/client_conn_pool.go:182 +0x344

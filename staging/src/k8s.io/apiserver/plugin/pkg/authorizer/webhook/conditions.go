@@ -67,6 +67,12 @@ type sarWithConditions struct {
 
 // Check should be
 func (c *ConditionCompiler) Check(sar *sarWithConditions) ([]*TypeCheckingResult, error) {
+	start := time.Now()
+	defer func() {
+		latency := time.Since(start)
+		fmt.Printf("Type checking and compilation latency: %v\n", latency)
+	}()
+
 	// If there are no conditions, there is nothing to type check.
 	if len(sar.Conditions) == 0 {
 		return nil, nil

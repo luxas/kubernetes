@@ -9,8 +9,10 @@ package http2
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
+	"runtime/debug"
 	"sync"
 )
 
@@ -176,6 +178,7 @@ func (p *clientConnPool) addConnIfNeeded(key string, t *Transport, c net.Conn) (
 			done: make(chan struct{}),
 		}
 		p.addConnCalls[key] = call
+		fmt.Printf("addConnIfNeeded Stack Trace:\n%s\n", debug.Stack())
 		go call.run(t, key, c)
 	}
 	p.mu.Unlock()

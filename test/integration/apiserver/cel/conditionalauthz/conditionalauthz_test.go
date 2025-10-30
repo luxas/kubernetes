@@ -152,8 +152,12 @@ func TestConditionalAuthz(t *testing.T) {
 		t.Fatalf("authz selector library was initialized before feature gates were finalized (possibly from an init() or package variable)")
 	}*/
 
+	// TODO: Rewrite such that the caller of authorizer.Authorize() opts into the feature every time.
+	// See if one can pass a pointer that is written to through the context to the authorizer, so that
+	// the error doesn't have to be used for propagating this information.
+
 	featureEnabled := true
-	webhookConfigFile := "/tmp/webhook-config.yaml"
+	webhookConfigFile := "/tmp/webhook-config-rust.yaml"
 
 	// Start the server with the desired feature enablement
 	server, err := apiservertesting.StartTestServer(t, nil, []string{
@@ -193,13 +197,14 @@ func TestConditionalAuthz(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "foo",
 			Namespace: "default",
-			Labels: map[string]string{
-				"foo": "bar",
+			Labels:    map[string]string{
+				//"foo": "bar",
 			},
 		},
 		StringData: map[string]string{
 			"hello": "hello",
 		},
+		Type: "crossplane.io/connection-secret",
 	}
 	sec, err = c.CoreV1().Secrets("default").Create(ctx, sec, metav1.CreateOptions{})
 	if err != nil {
@@ -220,5 +225,5 @@ func TestConditionalAuthz(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Errorf("selfSAR: %+v", selfSAR)
+	t.Logf("selfSAR: %+v", selfSAR)
 }
