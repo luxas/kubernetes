@@ -219,8 +219,20 @@ type SubjectAccessReviewStatus struct {
 }
 
 type SubjectAccessReviewConditionSet struct {
+	// Allowed specifies whether this condition set is unconditionally allowed.
+	// Mutually exclusive with Denied and Conditions.
+	Allowed bool
+	// Denied specifies whether this condition set is unconditionally denied.
+	// Mutually exclusive with Allowed and Conditions.
+	Denied bool
+
+	// FailureMode specifies the failure mode for this condition set.
+	// Only relevant if the conditions are non-null.
+	FailureMode string
+
 	// Conditions is an unordered set of conditions that should be evaluated against admission attributes, to determine
 	// whether this authorizer allows the request.
+	// Mutually exclusive with Allowed and Denied.
 	//
 	// +listType=map
 	// +listMapKey=id

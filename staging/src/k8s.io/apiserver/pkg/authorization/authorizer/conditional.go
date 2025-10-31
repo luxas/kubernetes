@@ -13,6 +13,7 @@ import (
 	"k8s.io/apiserver/pkg/authentication/user"
 	genericfeatures "k8s.io/apiserver/pkg/features"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	"k8s.io/utils/ptr"
 )
 
 /*
@@ -136,11 +137,14 @@ const (
 type ConditionsEnforcer interface {
 	EnforceConditions(ctx context.Context, admissionAttrs ConditionAttributes) (Decision, string, error)
 
+	OrderedConditionSets(ctx context.Context, authzAttrs Attributes) []*ConditionSet
+
 	WithBuiltinConditionsResolvers(builtinConditionsResolvers ...BuiltinConditionsResolver) ConditionsEnforcer
 }
 
 type ConditionSet struct {
-	conditions []Condition
+	conditions            []Condition
+	unconditionalDecision *Decision
 }
 
 func NewConditionSet(conditions ...Condition) (*ConditionSet, error) {
@@ -148,7 +152,28 @@ func NewConditionSet(conditions ...Condition) (*ConditionSet, error) {
 	return &ConditionSet{conditions: conditions}, nil
 }
 
+func NewAlwaysAllowConditionSet() *ConditionSet {
+	return &ConditionSet{unconditionalDecision: ptr.To(DecisionAllow)}
+}
+
+func NewAlwaysDenyConditionSet() *ConditionSet {
+	return &ConditionSet{unconditionalDecision: ptr.To(DecisionDeny)}
+}
+
+func (c *ConditionSet) UnconditionallyAllowed() bool {
+	return c.unconditionalDecision != nil && *c.unconditionalDecision == DecisionAllow
+}
+func (c *ConditionSet) UnconditionallyDenied() bool {
+	return c.unconditionalDecision != nil && *c.unconditionalDecision == DecisionDeny
+}
+
 func (c *ConditionSet) CanBecomeAuthorized() bool {
+	if c.UnconditionallyAllowed() {
+		return true
+	}
+	if c.UnconditionallyDenied() {
+		return false
+	}
 	for _, condition := range c.conditions {
 		if condition.Effect == ConditionEffectAllow {
 			return true
@@ -207,6 +232,7 @@ func AuthorizeWithConditionalSupport(ctx context.Context, attrs Attributes, auth
 		return decision, reason, nil, err
 	}
 	// Only allow conditional authorization if the feature is enabled.
+	// TODO: Should this automatically result in a Deny decision?
 	if !utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
 		return DecisionNoOpinion, "", nil, ErrConditionalAuthorizationFeatureNotEnabled
 	}
@@ -291,9 +317,8 @@ func NewConditionalDecision(ctx context.Context, self ConditionalAuthorizer, con
 	// TODO: Remember to encode the conditions in the SAR response of the API server self-check endpoints.
 
 	enforcer.precomputedConditionSets = append(enforcer.precomputedConditionSets, precomputedConditionSet{
-		unconditionalAllow: false,
-		conditions:         conditions,
-		self:               self,
+		conditions: conditions,
+		self:       self,
 	})
 
 	if conditions.CanBecomeAuthorized() {
@@ -309,18 +334,16 @@ func UnconditionalAllowAfterConditionalDeny(ctx context.Context) (Decision, stri
 	}
 
 	enforcer.precomputedConditionSets = append(enforcer.precomputedConditionSets, precomputedConditionSet{
-		unconditionalAllow: true,
-		conditions:         nil,
-		self:               nil,
+		conditions: NewAlwaysAllowConditionSet(),
+		self:       nil,
 	})
 
 	return DecisionConditionalAllow, "conditionally authorized", nil
 }
 
 type precomputedConditionSet struct {
-	unconditionalAllow bool
-	conditions         *ConditionSet
-	self               ConditionalAuthorizer
+	conditions *ConditionSet
+	self       ConditionalAuthorizer
 }
 
 type conditionsEnforcer struct {
@@ -331,10 +354,7 @@ type conditionsEnforcer struct {
 
 func (e *conditionsEnforcer) canBecomeAuthorized() bool {
 	for _, precomputedConditionSet := range e.precomputedConditionSets {
-		if precomputedConditionSet.unconditionalAllow {
-			return true
-		}
-		if precomputedConditionSet.conditions != nil && precomputedConditionSet.conditions.CanBecomeAuthorized() {
+		if precomputedConditionSet.conditions.CanBecomeAuthorized() {
 			return true
 		}
 	}
@@ -353,10 +373,10 @@ func (e *conditionsEnforcer) EnforceConditions(ctx context.Context, admissionAtt
 
 	for _, precomputedConditionSet := range e.precomputedConditionSets {
 		// This only happens if the authorization chain got responses like ConditionalDeny,ConditionalDeny,Allow.
-		// unconditionalAllow is true for the last item in precomputedConditionSets in that example. If he code
+		// UnconditionallyAllowed is true for the last item in precomputedConditionSets in that example. If he code
 		// reaches this point, it means that the previous ConditionalDeny responses were evaluated to NoOpinion,
 		// and thus is it safe to return Allow here.
-		if precomputedConditionSet.unconditionalAllow {
+		if precomputedConditionSet.conditions.UnconditionallyAllowed() {
 			return DecisionAllow, "", nil
 		}
 
@@ -459,4 +479,29 @@ func (e *conditionsEnforcer) enforceConditions(ctx context.Context, authorizer C
 func (e *conditionsEnforcer) WithBuiltinConditionsResolvers(builtinConditionsResolvers ...BuiltinConditionsResolver) ConditionsEnforcer {
 	e.builtinConditionsResolvers = append(e.builtinConditionsResolvers, builtinConditionsResolvers...)
 	return e
+}
+
+func (e *conditionsEnforcer) OrderedConditionSets(ctx context.Context, authzAttrs Attributes) []*ConditionSet {
+	conditionSets := make([]*ConditionSet, 0, len(e.precomputedConditionSets))
+	for _, precomputedConditionSet := range e.precomputedConditionSets {
+		conditionSets = append(conditionSets, precomputedConditionSet.conditions)
+	}
+
+	for _, authorizer := range e.authorizerChain {
+		// TODO: Figure out error handling here.
+		decision, _, conditionsEnforcer, _ := AuthorizeWithConditionalSupport(ctx, authzAttrs, authorizer)
+		if decision == DecisionAllow {
+			conditionSets = append(conditionSets, NewAlwaysAllowConditionSet())
+			break
+		}
+		if decision == DecisionDeny {
+			conditionSets = append(conditionSets, NewAlwaysDenyConditionSet())
+			break
+		}
+
+		if decision.IsConditional() {
+			conditionSets = append(conditionSets, conditionsEnforcer.OrderedConditionSets(ctx, authzAttrs)...)
+		}
+	}
+	return conditionSets
 }

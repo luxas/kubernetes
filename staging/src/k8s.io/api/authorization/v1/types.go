@@ -269,9 +269,16 @@ type SubjectAccessReviewStatus struct {
 }
 
 type SubjectAccessReviewConditionSet struct {
-	// TODO: Add FailureMode here?
+	// Allowed specifies whether this condition set is unconditionally allowed.
+	// Mutually exclusive with Denied and Conditions.
+	Allowed bool `json:"allowed,omitempty" protobuf:"varint,1,opt,name=allowed"`
+	// Denied specifies whether this condition set is unconditionally denied.
+	// Mutually exclusive with Allowed and Conditions.
+	Denied bool `json:"denied,omitempty" protobuf:"varint,2,opt,name=denied"`
 
-	// TODO: Add UnconditionalDecision here?
+	// FailureMode specifies the failure mode for this condition set.
+	// Only relevant if the conditions are non-null.
+	FailureMode string `json:"failureMode,omitempty" protobuf:"bytes,3,opt,name=failureMode"`
 
 	// Conditions is an unordered set of conditions that should be evaluated against admission attributes, to determine
 	// whether this authorizer allows the request.
@@ -279,7 +286,7 @@ type SubjectAccessReviewConditionSet struct {
 	// +listType=map
 	// +listMapKey=id
 	// +optional
-	Conditions []SubjectAccessReviewCondition `json:"conditions" protobuf:"bytes,1,rep,name=conditions"`
+	Conditions []SubjectAccessReviewCondition `json:"conditions,omitempty" protobuf:"bytes,4,rep,name=conditions"`
 }
 
 type SubjectAccessReviewCondition struct {
