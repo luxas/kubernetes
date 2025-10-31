@@ -341,6 +341,8 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		authorizationv1.SelfSubjectRulesReview{}.OpenAPIModelName():                                                     schema_k8sio_api_authorization_v1_SelfSubjectRulesReview(ref),
 		authorizationv1.SelfSubjectRulesReviewSpec{}.OpenAPIModelName():                                                 schema_k8sio_api_authorization_v1_SelfSubjectRulesReviewSpec(ref),
 		authorizationv1.SubjectAccessReview{}.OpenAPIModelName():                                                        schema_k8sio_api_authorization_v1_SubjectAccessReview(ref),
+		authorizationv1.SubjectAccessReviewCondition{}.OpenAPIModelName():                                               schema_k8sio_api_authorization_v1_SubjectAccessReviewCondition(ref),
+		authorizationv1.SubjectAccessReviewConditionSet{}.OpenAPIModelName():                                            schema_k8sio_api_authorization_v1_SubjectAccessReviewConditionSet(ref),
 		authorizationv1.SubjectAccessReviewSpec{}.OpenAPIModelName():                                                    schema_k8sio_api_authorization_v1_SubjectAccessReviewSpec(ref),
 		authorizationv1.SubjectAccessReviewStatus{}.OpenAPIModelName():                                                  schema_k8sio_api_authorization_v1_SubjectAccessReviewStatus(ref),
 		authorizationv1.SubjectRulesReviewStatus{}.OpenAPIModelName():                                                   schema_k8sio_api_authorization_v1_SubjectRulesReviewStatus(ref),
@@ -13243,6 +13245,89 @@ func schema_k8sio_api_authorization_v1_SubjectAccessReview(ref common.ReferenceC
 	}
 }
 
+func schema_k8sio_api_authorization_v1_SubjectAccessReviewCondition(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"id": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+					"effect": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+					"type": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+					"condition": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+					"description": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+				},
+				Required: []string{"id", "effect", "type", "condition"},
+			},
+		},
+	}
+}
+
+func schema_k8sio_api_authorization_v1_SubjectAccessReviewConditionSet(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"conditions": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-map-keys": []interface{}{
+									"id",
+								},
+								"x-kubernetes-list-type": "map",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "Conditions is an unordered set of conditions that should be evaluated against admission attributes, to determine whether this authorizer allows the request.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(authorizationv1.SubjectAccessReviewCondition{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			authorizationv1.SubjectAccessReviewCondition{}.OpenAPIModelName()},
+	}
+}
+
 func schema_k8sio_api_authorization_v1_SubjectAccessReviewSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
@@ -13349,6 +13434,25 @@ func schema_k8sio_api_authorization_v1_SubjectAccessReviewStatus(ref common.Refe
 							Format:      "",
 						},
 					},
+					"conditionsChain": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "ConditionsChain is an ordered list of condition sets, where every item of the list represents one authorizer's ConditionSet response. When evaluating the conditions, the first condition set must be evaluated as a whole first, and only if that condition set evaluates to NoOpinion, can the subsequent condition sets be evaluated.\n\nWhen ConditionsChain is non-null, Allowed and Denied must be false.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(authorizationv1.SubjectAccessReviewConditionSet{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
 					"reason": {
 						SchemaProps: spec.SchemaProps{
 							Description: "Reason is optional.  It indicates why a request was allowed or denied.",
@@ -13367,6 +13471,8 @@ func schema_k8sio_api_authorization_v1_SubjectAccessReviewStatus(ref common.Refe
 				Required: []string{"allowed"},
 			},
 		},
+		Dependencies: []string{
+			authorizationv1.SubjectAccessReviewConditionSet{}.OpenAPIModelName()},
 	}
 }
 
