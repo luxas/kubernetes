@@ -47,7 +47,11 @@ func (mock *mockConditionalAuthorizer) ResolveConditions(ctx context.Context, at
 func (mock *mockConditionalAuthorizer) Authorize(ctx context.Context, attrs authorizer.Attributes) (authorizer.Decision, string, error) {
 	decision, reason, conditions, err := mock.authorize(ctx, attrs)
 	if decision == authorizer.DecisionConditionalAllow {
-		return authorizer.NewConditionalDecision(ctx, mock, authorizer.NewConditionSet(conditions...))
+		conditionSet, err := authorizer.NewConditionSet(conditions...)
+		if err != nil {
+			panic(err) // invalid test data
+		}
+		return authorizer.NewConditionalDecision(ctx, mock, conditionSet)
 	}
 	return decision, reason, err
 }

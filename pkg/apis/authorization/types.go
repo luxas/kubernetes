@@ -199,6 +199,17 @@ type SubjectAccessReviewStatus struct {
 	// authorizer has no opinion on whether to authorize the action. Denied
 	// may not be true if Allowed is true.
 	Denied bool
+
+	// ConditionsChain is an ordered list of condition sets, where every item of the list represents one authorizer's ConditionSet response.
+	// When evaluating the conditions, the first condition set must be evaluated as a whole first, and only if that condition set
+	// evaluates to NoOpinion, can the subsequent condition sets be evaluated.
+	//
+	// When ConditionsChain is non-null, Allowed and Denied must be false.
+	//
+	// +optional
+	// +listType=atomic
+	ConditionsChain []SubjectAccessReviewConditionSet
+
 	// Reason is optional.  It indicates why a request was allowed or denied.
 	Reason string
 	// EvaluationError is an indication that some error occurred during the authorization check.
@@ -206,6 +217,34 @@ type SubjectAccessReviewStatus struct {
 	// For instance, RBAC can be missing a role, but enough roles are still present and bound to reason about the request.
 	EvaluationError string
 }
+
+type SubjectAccessReviewConditionSet struct {
+	// Conditions is an unordered set of conditions that should be evaluated against admission attributes, to determine
+	// whether this authorizer allows the request.
+	//
+	// +listType=map
+	// +listMapKey=id
+	// +optional
+	Conditions []SubjectAccessReviewCondition
+}
+
+type SubjectAccessReviewCondition struct {
+	// TODO: Should all protobuf fields be marked opt?
+	ID string
+	// TODO: Mark this as a closed enum or open? Nick Young says open.
+	Effect      SubjectAccessReviewConditionEffect
+	Type        string
+	Condition   string
+	Description string
+}
+
+type SubjectAccessReviewConditionEffect string
+
+const (
+	SubjectAccessReviewConditionEffectAllow         SubjectAccessReviewConditionEffect = "Allow"
+	SubjectAccessReviewConditionEffectDenyRequest   SubjectAccessReviewConditionEffect = "DenyRequest"
+	SubjectAccessReviewConditionEffectDenyNoOpinion SubjectAccessReviewConditionEffect = "DenyNoOpinion"
+)
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 

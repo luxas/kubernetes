@@ -292,10 +292,48 @@ func (w *WebhookAuthorizer) Authorize(ctx context.Context, attr authorizer.Attri
 		return authorizer.DecisionDeny, r.Status.Reason, nil
 	case r.Status.Allowed:
 		return authorizer.DecisionAllow, r.Status.Reason, nil
+	case len(r.Status.ConditionsChain) != 0 && utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization):
+		if len(r.Status.ConditionsChain) > 1 {
+			return authorizer.DecisionNoOpinion, "", fmt.Errorf("webhook authorizer does not support multiple conditions chains")
+		}
+		conditionSet, err := toAuthorizerConditions(r.Status.ConditionsChain[0])
+		if err != nil {
+			return authorizer.DecisionNoOpinion, "", err
+		}
+		return authorizer.NewConditionalDecision(ctx, w, conditionSet)
 	default:
 		return authorizer.DecisionNoOpinion, r.Status.Reason, nil
 	}
 
+}
+
+func (w *WebhookAuthorizer) FailureMode() authorizer.FailureMode {
+	switch w.decisionOnError {
+	case authorizer.DecisionDeny:
+		return authorizer.FailureModeDeny
+	case authorizer.DecisionNoOpinion:
+		return authorizer.FailureModeNoOpinion
+	default:
+		return authorizer.FailureModeNoOpinion
+	}
+}
+
+func (w *WebhookAuthorizer) ResolveConditions(ctx context.Context, attr authorizer.ConditionAttributes, conditionSet *authorizer.ConditionSet) (authorizer.Decision, string, error) {
+	return authorizer.DecisionNoOpinion, "", fmt.Errorf("webhook authorizer does not support conditions resolution")
+}
+
+func toAuthorizerConditions(v1ConditionSet authorizationv1.SubjectAccessReviewConditionSet) (*authorizer.ConditionSet, error) {
+	conds := []authorizer.Condition{}
+	for _, condition := range v1ConditionSet.Conditions {
+		conds = append(conds, authorizer.Condition{
+			ID:          condition.ID,
+			Type:        authorizer.ConditionType(condition.Type),
+			Effect:      authorizer.ConditionEffect(condition.Effect),
+			Condition:   condition.Condition,
+			Description: condition.Description,
+		})
+	}
+	return authorizer.NewConditionSet(conds...)
 }
 
 func resourceAttributesFrom(attr authorizer.Attributes) *authorizationv1.ResourceAttributes {
@@ -534,6 +572,7 @@ func (t *subjectAccessReviewV1beta1ClientGW) Create(ctx context.Context, subject
 
 // shouldCache determines whether it is safe to cache the given request attributes. If the
 // requester-controlled attributes are too large, this may be a DoS attempt, so we skip the cache.
+// With this in mind: do we ever want to cache conditions? They will naturally be larger than 10000 bytes.
 func shouldCache(attr authorizer.Attributes) bool {
 	controlledAttrSize := int64(len(attr.GetNamespace())) +
 		int64(len(attr.GetVerb())) +

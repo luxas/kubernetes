@@ -247,6 +247,17 @@ type SubjectAccessReviewStatus struct {
 	// may not be true if Allowed is true.
 	// +optional
 	Denied bool `json:"denied,omitempty" protobuf:"varint,4,opt,name=denied"`
+
+	// ConditionsChain is an ordered list of condition sets, where every item of the list represents one authorizer's ConditionSet response.
+	// When evaluating the conditions, the first condition set must be evaluated as a whole first, and only if that condition set
+	// evaluates to NoOpinion, can the subsequent condition sets be evaluated.
+	//
+	// When ConditionsChain is non-null, Allowed and Denied must be false.
+	//
+	// +optional
+	// +listType=atomic
+	ConditionsChain []SubjectAccessReviewConditionSet `json:"conditionsChain,omitempty" protobuf:"bytes,5,rep,name=conditionsChain"`
+
 	// Reason is optional.  It indicates why a request was allowed or denied.
 	// +optional
 	Reason string `json:"reason,omitempty" protobuf:"bytes,2,opt,name=reason"`
@@ -256,6 +267,38 @@ type SubjectAccessReviewStatus struct {
 	// +optional
 	EvaluationError string `json:"evaluationError,omitempty" protobuf:"bytes,3,opt,name=evaluationError"`
 }
+
+type SubjectAccessReviewConditionSet struct {
+	// TODO: Add FailureMode here?
+
+	// TODO: Add UnconditionalDecision here?
+
+	// Conditions is an unordered set of conditions that should be evaluated against admission attributes, to determine
+	// whether this authorizer allows the request.
+	//
+	// +listType=map
+	// +listMapKey=id
+	// +optional
+	Conditions []SubjectAccessReviewCondition `json:"conditions" protobuf:"bytes,1,rep,name=conditions"`
+}
+
+type SubjectAccessReviewCondition struct {
+	// TODO: Should all protobuf fields be marked opt?
+	ID string `json:"id" protobuf:"bytes,1,opt,name=id"`
+	// TODO: Mark this as a closed enum or open? Nick Young says open.
+	Effect      SubjectAccessReviewConditionEffect `json:"effect" protobuf:"bytes,2,opt,name=effect"`
+	Type        string                             `json:"type" protobuf:"bytes,3,opt,name=type"`
+	Condition   string                             `json:"condition" protobuf:"bytes,4,opt,name=condition"`
+	Description string                             `json:"description,omitempty" protobuf:"bytes,5,opt,name=description"`
+}
+
+type SubjectAccessReviewConditionEffect string
+
+const (
+	SubjectAccessReviewConditionEffectAllow         SubjectAccessReviewConditionEffect = "Allow"
+	SubjectAccessReviewConditionEffectDenyRequest   SubjectAccessReviewConditionEffect = "DenyRequest"
+	SubjectAccessReviewConditionEffectDenyNoOpinion SubjectAccessReviewConditionEffect = "DenyNoOpinion"
+)
 
 // +genclient
 // +genclient:nonNamespaced

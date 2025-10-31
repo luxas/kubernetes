@@ -70,18 +70,19 @@ func withAuthorization(handler http.Handler, a authorizer.Authorizer, s runtime.
 		}
 		var decision authorizer.Decision
 		var reason string
-		allowed := false
+		conditionallyAllowed := false
 
 		if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
 			var conditionsEnforcer authorizer.ConditionsEnforcer
 			decision, reason, conditionsEnforcer, err = authorizer.AuthorizeWithConditionalSupport(ctx, attributes, a)
-			ctx = request.WithConditionalAuthorizationContext(ctx, conditionsEnforcer)
-			req = req.WithContext(ctx)
-			// ok to proceed with the request; the conditions will be enforced in admission
-			allowed = true
+
+			if decision == authorizer.DecisionConditionalAllow {
+				ctx = request.WithConditionalAuthorizationContext(ctx, conditionsEnforcer)
+				req = req.WithContext(ctx)
+				conditionallyAllowed = true
+			}
 		} else {
 			decision, reason, err = a.Authorize(ctx, attributes)
-			allowed = decision == authorizer.DecisionAllow
 		}
 
 		authorizationFinish := time.Now()
@@ -91,7 +92,7 @@ func withAuthorization(handler http.Handler, a authorizer.Authorizer, s runtime.
 		}()
 
 		// an authorizer like RBAC could encounter evaluation errors and still allow the request, so authorizer decision is checked before error here.
-		if allowed {
+		if decision == authorizer.DecisionAllow || conditionallyAllowed {
 			// TODO: do we want to separate the allow and conditional audit values?
 			audit.AddAuditAnnotations(ctx,
 				decisionAnnotationKey, decisionAllow,

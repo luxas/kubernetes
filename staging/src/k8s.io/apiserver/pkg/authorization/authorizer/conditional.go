@@ -122,6 +122,7 @@ type ConditionalAuthorizer interface {
 }
 
 // FailureMode determines how to treat an error from ResolveConditions.
+// TODO: Don't have this externally, just use DecisionOnError() authorizer.Decision instead?
 type FailureMode string
 
 const (
@@ -142,8 +143,9 @@ type ConditionSet struct {
 	conditions []Condition
 }
 
-func NewConditionSet(conditions ...Condition) *ConditionSet {
-	return &ConditionSet{conditions: conditions}
+func NewConditionSet(conditions ...Condition) (*ConditionSet, error) {
+	// TODO: Validate the conditions here.
+	return &ConditionSet{conditions: conditions}, nil
 }
 
 func (c *ConditionSet) CanBecomeAuthorized() bool {
