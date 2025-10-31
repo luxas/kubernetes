@@ -18,6 +18,8 @@ import (
 	"time"
 
 	authorizationv1 "k8s.io/api/authorization/v1"
+	authorizationv1alpha1 "k8s.io/api/authorization/v1alpha1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func main() {
@@ -111,36 +113,73 @@ contexts:
 
 	// Create a simple handler
 	http.HandleFunc("/authorize", func(w http.ResponseWriter, r *http.Request) {
-		sar := &authorizationv1.SubjectAccessReview{}
-		if err := json.NewDecoder(r.Body).Decode(sar); err != nil {
+		requestBody, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer r.Body.Close()
+		fmt.Println("request body: ", string(requestBody))
+
+		tm := metav1.TypeMeta{}
+		if err := json.Unmarshal(requestBody, &tm); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		sar.Status.Allowed = false
-		sar.Status.Denied = false
 
-		if sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "selfsubjectaccessreviews" {
-			sar.Status.Allowed = true
-		}
+		if tm.Kind == "SubjectAccessReview" {
 
-		// Respond by NoOpinion to everything but the default service account's secret requests
-		if sar.Spec.User == "system:serviceaccount:default:default" && sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "secrets" {
-			sar.Status.ConditionsChain = []authorizationv1.SubjectAccessReviewConditionSet{
-				{
-					Conditions: []authorizationv1.SubjectAccessReviewCondition{
-						{
-							ID:        "labels-foo-bar",
-							Type:      "k8s.io/authorization-cel",
-							Effect:    authorizationv1.SubjectAccessReviewConditionEffectAllow,
-							Condition: "has(object.metadata.labels) && has(object.metadata.labels.foo) && object.metadata.labels.foo == 'bar'",
+			sar := &authorizationv1.SubjectAccessReview{}
+			if err := json.Unmarshal(requestBody, sar); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			sar.Status.Allowed = false
+			sar.Status.Denied = false
+
+			if sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "selfsubjectaccessreviews" {
+				sar.Status.Allowed = true
+			}
+
+			// Respond by NoOpinion to everything but the default service account's secret requests
+			if sar.Spec.User == "system:serviceaccount:default:default" && sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "secrets" {
+				sar.Status.ConditionsChain = []authorizationv1.SubjectAccessReviewConditionSet{
+					{
+						Conditions: []authorizationv1.SubjectAccessReviewCondition{
+							{
+								ID:        "labels-foo-bar",
+								Type:      "opaque",
+								Effect:    authorizationv1.SubjectAccessReviewConditionEffectAllow,
+								Condition: "policy16",
+								//Condition: "has(object.metadata.labels) && has(object.metadata.labels.foo) && object.metadata.labels.foo == 'bar'",
+							},
 						},
 					},
-				},
+				}
 			}
+			mw := io.MultiWriter(os.Stdout, w)
+			json.NewEncoder(mw).Encode(sar)
+			return
 		}
-
-		mw := io.MultiWriter(os.Stdout, w)
-		json.NewEncoder(mw).Encode(sar)
+		if tm.Kind == "AuthorizationConditionsReview" {
+			ac := &authorizationv1alpha1.AuthorizationConditionsReview{}
+			if err := json.Unmarshal(requestBody, ac); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			ac.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
+				Allowed: false,
+				Denied:  false,
+			}
+			if ac.Request.UserInfo.Username == "system:serviceaccount:default:default" &&
+				ac.Request.Resource.Resource == "secrets" &&
+				ac.Request.ConditionSet.Conditions[0].Condition == "policy16" {
+				ac.Response.Allowed = true
+			}
+			mw := io.MultiWriter(os.Stdout, w)
+			json.NewEncoder(mw).Encode(ac)
+			return
+		}
 	})
 
 	// Start the server

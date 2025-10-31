@@ -18,11 +18,15 @@ import (
 
 /*
   TODO:
-  - Move the typechecker and the CEL compiler to the ConditionsEnforcer package
-  - Add the conditions field to the SAR interface, potentially as a two-level list of conditions
-  - Implement caching and conditions extraction in the webhook authorizer; and a noop conditionsresolver to begin with.
-  - Do end to end testing
-  - Add the AuthorizationConditionsReview API as the ResolveConditions implementation for the webhook authorizer.
+  - Implement conditional authz for the patch -> create/update authorization flow.
+  - Add the field to the AuthorizationConfiguration to determine which context to use for the conditions review webhook.
+  - Better error handling
+  - More efficient CEL implementation
+  - Should the webhook SAR cache its responses?
+  - Would it make sense to use a bidirectional gRPC stream to authorizers instead, in order to reduce the cost of these checks?
+  - Should we try to make it possible for a webhook authorizer to return multiple condition sets?
+    - If so, should the resolution still be chunked per physical or logical authorizer?'
+  - Built webhook authorizer from a normal client-go client instead of a kubeconfig.
 */
 
 // Attributes is an interface used by AdmissionController to get information about a request
