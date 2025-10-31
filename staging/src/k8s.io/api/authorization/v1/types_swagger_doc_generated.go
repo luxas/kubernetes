@@ -160,7 +160,10 @@ func (SubjectAccessReview) SwaggerDoc() map[string]string {
 }
 
 var map_SubjectAccessReviewConditionSet = map[string]string{
-	"conditions": "Conditions is an unordered set of conditions that should be evaluated against admission attributes, to determine whether this authorizer allows the request.",
+	"allowed":     "Allowed specifies whether this condition set is unconditionally allowed. Mutually exclusive with Denied and Conditions.",
+	"denied":      "Denied specifies whether this condition set is unconditionally denied. Mutually exclusive with Allowed and Conditions.",
+	"failureMode": "FailureMode specifies the failure mode for this condition set. Only relevant if the conditions are non-null.",
+	"conditions":  "Conditions is an unordered set of conditions that should be evaluated against admission attributes, to determine whether this authorizer allows the request.",
 }
 
 func (SubjectAccessReviewConditionSet) SwaggerDoc() map[string]string {

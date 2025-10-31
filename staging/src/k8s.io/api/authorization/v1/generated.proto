@@ -285,13 +285,25 @@ message SubjectAccessReviewCondition {
 }
 
 message SubjectAccessReviewConditionSet {
+  // Allowed specifies whether this condition set is unconditionally allowed.
+  // Mutually exclusive with Denied and Conditions.
+  optional bool allowed = 1;
+
+  // Denied specifies whether this condition set is unconditionally denied.
+  // Mutually exclusive with Allowed and Conditions.
+  optional bool denied = 2;
+
+  // FailureMode specifies the failure mode for this condition set.
+  // Only relevant if the conditions are non-null.
+  optional string failureMode = 3;
+
   // Conditions is an unordered set of conditions that should be evaluated against admission attributes, to determine
   // whether this authorizer allows the request.
   //
   // +listType=map
   // +listMapKey=id
   // +optional
-  repeated SubjectAccessReviewCondition conditions = 1;
+  repeated SubjectAccessReviewCondition conditions = 4;
 }
 
 // SubjectAccessReviewSpec is a description of the access request.  Exactly one of ResourceAuthorizationAttributes

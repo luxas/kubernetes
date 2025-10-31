@@ -13298,6 +13298,27 @@ func schema_k8sio_api_authorization_v1_SubjectAccessReviewConditionSet(ref commo
 			SchemaProps: spec.SchemaProps{
 				Type: []string{"object"},
 				Properties: map[string]spec.Schema{
+					"allowed": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Allowed specifies whether this condition set is unconditionally allowed. Mutually exclusive with Denied and Conditions.",
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
+					"denied": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Denied specifies whether this condition set is unconditionally denied. Mutually exclusive with Allowed and Conditions.",
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
+					"failureMode": {
+						SchemaProps: spec.SchemaProps{
+							Description: "FailureMode specifies the failure mode for this condition set. Only relevant if the conditions are non-null.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
 					"conditions": {
 						VendorExtensible: spec.VendorExtensible{
 							Extensions: spec.Extensions{

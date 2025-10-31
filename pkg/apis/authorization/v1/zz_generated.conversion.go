@@ -560,6 +560,9 @@ func Convert_authorization_SubjectAccessReviewCondition_To_v1_SubjectAccessRevie
 }
 
 func autoConvert_v1_SubjectAccessReviewConditionSet_To_authorization_SubjectAccessReviewConditionSet(in *authorizationv1.SubjectAccessReviewConditionSet, out *authorization.SubjectAccessReviewConditionSet, s conversion.Scope) error {
+	out.Allowed = in.Allowed
+	out.Denied = in.Denied
+	out.FailureMode = in.FailureMode
 	out.Conditions = *(*[]authorization.SubjectAccessReviewCondition)(unsafe.Pointer(&in.Conditions))
 	return nil
 }
@@ -570,6 +573,9 @@ func Convert_v1_SubjectAccessReviewConditionSet_To_authorization_SubjectAccessRe
 }
 
 func autoConvert_authorization_SubjectAccessReviewConditionSet_To_v1_SubjectAccessReviewConditionSet(in *authorization.SubjectAccessReviewConditionSet, out *authorizationv1.SubjectAccessReviewConditionSet, s conversion.Scope) error {
+	out.Allowed = in.Allowed
+	out.Denied = in.Denied
+	out.FailureMode = in.FailureMode
 	out.Conditions = *(*[]authorizationv1.SubjectAccessReviewCondition)(unsafe.Pointer(&in.Conditions))
 	return nil
 }
