@@ -15,6 +15,15 @@ import (
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 )
 
+/*
+  TODO:
+  - Move the typechecker and the CEL compiler to the ConditionsEnforcer package
+  - Add the conditions field to the SAR interface, potentially as a two-level list of conditions
+  - Implement caching and conditions extraction in the webhook authorizer; and a noop conditionsresolver to begin with.
+  - Do end to end testing
+  - Add the AuthorizationConditionsReview API as the ResolveConditions implementation for the webhook authorizer.
+*/
+
 // Attributes is an interface used by AdmissionController to get information about a request
 // that is used to make an admission decision.
 type ConditionAttributes interface {
@@ -97,7 +106,7 @@ const (
 type ConditionsResolver interface {
 	// ResolveConditions resolve a set of conditions into a concrete decision (Allow, Deny, NoOpinion),
 	// given full information about the request (ConditionAttributes, which includes e.g. the old and new objects).
-	ResolveConditions(ctx context.Context, admissionAttrs ConditionAttributes, conditions []Condition) (Decision, string, error)
+	ResolveConditions(ctx context.Context, admissionAttrs ConditionAttributes, conditionSet *ConditionSet) (Decision, string, error)
 }
 
 type BuiltinConditionsResolver interface {
@@ -146,6 +155,10 @@ func (c *ConditionSet) CanBecomeAuthorized() bool {
 	return false
 }
 
+func (c *ConditionSet) IsEmpty() bool {
+	return len(c.conditions) == 0
+}
+
 func (c *ConditionSet) GetConditions() []Condition {
 	return c.conditions
 }
@@ -188,7 +201,7 @@ func AuthorizeWithConditionalSupport(ctx context.Context, attrs Attributes, auth
 
 	decision, reason, err := authorizer.Authorize(ctx, attrs)
 	// Pass through all non-conditional responses as-is.
-	if decision != DecisionConditional {
+	if !decision.IsConditional() {
 		return decision, reason, nil, err
 	}
 	// Only allow conditional authorization if the feature is enabled.
@@ -202,7 +215,8 @@ func AuthorizeWithConditionalSupport(ctx context.Context, attrs Attributes, auth
 	if !conditionalAuthorizationVerbs.Has(attrs.GetVerb()) {
 		return DecisionNoOpinion, "", nil, fmt.Errorf("%w: verb=%s, supported verbs=%v", ErrConditionalAuthorizationNotSupported, attrs.GetVerb(), conditionalAuthorizationVerbs.UnsortedList())
 	}
-	if len(attrs.GetAPIVersion()) == 0 || len(attrs.GetResource()) == 0 {
+	if attrs.GetAPIGroup() == "*" || attrs.GetAPIVersion() == "" || attrs.GetAPIVersion() == "*" ||
+		attrs.GetResource() == "" || attrs.GetResource() == "*" || attrs.GetSubresource() == "*" {
 		return DecisionNoOpinion, "", nil, fmt.Errorf("%w: GVR is not fully-qualified", ErrConditionalAuthorizationNotSupported)
 	}
 
@@ -213,11 +227,17 @@ func AuthorizeWithConditionalSupport(ctx context.Context, attrs Attributes, auth
 	// TODO:
 
 	// Conditional decision path. Check if any conditions actually were set through NewConditionalDecision.
+	// If not, that is a programmer error (returning decision=Conditional* without calling NewConditionalDecision)
 	if !enforcer.hasConditions() {
 		return DecisionNoOpinion, "", nil, ErrConditionalResponseWithoutConditions
 	}
 
-	return DecisionConditional, reason, enforcer, nil
+	// There are two conditional types: ConditionalAllow and ConditionalDeny.
+	if enforcer.canBecomeAuthorized() {
+		return DecisionConditionalAllow, "conditionally authorized", enforcer, nil
+	}
+
+	return DecisionConditionalDeny, "", enforcer, nil
 }
 
 // withConditionsEnforcer returns a copy of parent in which the conditional authorization enabled value is set
@@ -251,7 +271,7 @@ var (
 	ErrConditionalAuthorizationNotSupported             = errors.New("conditional authorization is not supported for this request")
 )
 
-func NewConditionalDecision(ctx context.Context, self ConditionalAuthorizer, conditions []Condition) (Decision, string, error) {
+func NewConditionalDecision(ctx context.Context, self ConditionalAuthorizer, conditions *ConditionSet) (Decision, string, error) {
 	enforcer, ok := conditionsEnforcerFrom(ctx)
 	if !ok {
 		// A conditional response is treated as NoOpinion when the feature is not enabled.
@@ -262,35 +282,61 @@ func NewConditionalDecision(ctx context.Context, self ConditionalAuthorizer, con
 	}
 
 	// Conditional with no conditions is the same as NoOpinion (as no conditions are true).
-	if len(conditions) == 0 {
+	if conditions.IsEmpty() {
 		return DecisionNoOpinion, "", nil
 	}
 
 	// TODO: Remember to encode the conditions in the SAR response of the API server self-check endpoints.
 
-	var err error
-	if enforcer.hasConditions() {
-		// In this case, respect only the first call to NewConditionalDecision, do not overwrite.
-		err = ErrConditionalResponseAlreadyBuilt
-	} else {
-		enforcer.precomputedConditionSets = append(enforcer.precomputedConditionSets, precomputedConditionSet{
-			conditions: conditions,
-			self:       self,
-		})
+	enforcer.precomputedConditionSets = append(enforcer.precomputedConditionSets, precomputedConditionSet{
+		unconditionalAllow: false,
+		conditions:         conditions,
+		self:               self,
+	})
+
+	if conditions.CanBecomeAuthorized() {
+		return DecisionConditionalAllow, "conditionally authorized", nil
+	}
+	return DecisionConditionalDeny, "", nil
+}
+
+func UnconditionalAllowAfterConditionalDeny(ctx context.Context) (Decision, string, error) {
+	enforcer, ok := conditionsEnforcerFrom(ctx)
+	if !ok {
+		return DecisionNoOpinion, "", ErrConditionalAuthorizationFeatureNotEnabled
 	}
 
-	return DecisionConditional, "conditionally authorized", err
+	enforcer.precomputedConditionSets = append(enforcer.precomputedConditionSets, precomputedConditionSet{
+		unconditionalAllow: true,
+		conditions:         nil,
+		self:               nil,
+	})
+
+	return DecisionConditionalAllow, "conditionally authorized", nil
 }
 
 type precomputedConditionSet struct {
-	conditions []Condition
-	self       ConditionalAuthorizer
+	unconditionalAllow bool
+	conditions         *ConditionSet
+	self               ConditionalAuthorizer
 }
 
 type conditionsEnforcer struct {
 	precomputedConditionSets   []precomputedConditionSet
 	builtinConditionsResolvers []BuiltinConditionsResolver
 	authorizerChain            []Authorizer
+}
+
+func (e *conditionsEnforcer) canBecomeAuthorized() bool {
+	for _, precomputedConditionSet := range e.precomputedConditionSets {
+		if precomputedConditionSet.unconditionalAllow {
+			return true
+		}
+		if precomputedConditionSet.conditions != nil && precomputedConditionSet.conditions.CanBecomeAuthorized() {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *conditionsEnforcer) hasConditions() bool {
@@ -304,6 +350,14 @@ func (e *conditionsEnforcer) EnforceConditions(ctx context.Context, admissionAtt
 	)
 
 	for _, precomputedConditionSet := range e.precomputedConditionSets {
+		// This only happens if the authorization chain got responses like ConditionalDeny,ConditionalDeny,Allow.
+		// unconditionalAllow is true for the last item in precomputedConditionSets in that example. If he code
+		// reaches this point, it means that the previous ConditionalDeny responses were evaluated to NoOpinion,
+		// and thus is it safe to return Allow here.
+		if precomputedConditionSet.unconditionalAllow {
+			return DecisionAllow, "", nil
+		}
+
 		// First, try to enforce the conditions of the self authorizer.
 		decision, reason, err := e.enforceConditions(ctx, precomputedConditionSet.self, admissionAttrs, precomputedConditionSet.conditions)
 		// If we got a concrete decision, use it.
@@ -337,7 +391,7 @@ func (e *conditionsEnforcer) EnforceConditions(ctx context.Context, admissionAtt
 			reasonlist = append(reasonlist, reason)
 		}
 
-		if decision == DecisionConditional { // TODO: Force err == nil here?
+		if decision.IsConditional() { // TODO: Force err == nil here?
 			decision, reason, err = conditionsEnforcer.
 				WithBuiltinConditionsResolvers(e.builtinConditionsResolvers...).
 				EnforceConditions(ctx, admissionAttrs)
@@ -345,6 +399,8 @@ func (e *conditionsEnforcer) EnforceConditions(ctx context.Context, admissionAtt
 				return decision, reason, err
 			}
 			// Otherwise, treat like NoOpinion.
+			// TODO: Should we error here if decision.IsConditional() == true
+			// TODO: And/or respect the FailureMode of the authorizer?
 			if err != nil {
 				errlist = append(errlist, err)
 			}
@@ -359,12 +415,12 @@ func (e *conditionsEnforcer) EnforceConditions(ctx context.Context, admissionAtt
 
 // enforceConditions enforces the conditions of the given authorizer, using the builtin conditions resolvers if available.
 // The function guarantees that the decision is a concrete one (Allow, Deny, NoOpinion).
-func (e *conditionsEnforcer) enforceConditions(ctx context.Context, authorizer ConditionalAuthorizer, admissionAttrs ConditionAttributes, conditions []Condition) (Decision, string, error) {
+func (e *conditionsEnforcer) enforceConditions(ctx context.Context, authorizer ConditionalAuthorizer, admissionAttrs ConditionAttributes, conditionSet *ConditionSet) (Decision, string, error) {
 	resolveConditions := authorizer.ResolveConditions
 
 	for _, builtinConditionsResolver := range e.builtinConditionsResolvers {
 		resolvableWithBuiltin := true
-		for _, condition := range conditions {
+		for _, condition := range conditionSet.GetConditions() {
 			if !builtinConditionsResolver.SupportedConditionTypes().Has(condition.Type) {
 				resolvableWithBuiltin = false
 				break
@@ -379,7 +435,7 @@ func (e *conditionsEnforcer) enforceConditions(ctx context.Context, authorizer C
 		}
 	}
 
-	decision, reason, err := resolveConditions(ctx, admissionAttrs, conditions)
+	decision, reason, err := resolveConditions(ctx, admissionAttrs, conditionSet)
 	if decision == DecisionAllow || decision == DecisionDeny {
 		return decision, reason, err
 	}

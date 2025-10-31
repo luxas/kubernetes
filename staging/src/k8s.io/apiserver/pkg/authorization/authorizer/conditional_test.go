@@ -26,11 +26,13 @@ import (
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	"k8s.io/apiserver/pkg/authorization/union"
+	genericfeatures "k8s.io/apiserver/pkg/features"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 )
 
 type mockConditionalAuthorizer struct {
 	failureMode       authorizer.FailureMode
-	resolveConditions func(ctx context.Context, attrs authorizer.ConditionAttributes, conditions []authorizer.Condition) (authorizer.Decision, string, error)
+	resolveConditions func(ctx context.Context, attrs authorizer.ConditionAttributes, conditionSet *authorizer.ConditionSet) (authorizer.Decision, string, error)
 	authorize         func(ctx context.Context, attrs authorizer.Attributes) (authorizer.Decision, string, []authorizer.Condition, error)
 }
 
@@ -38,14 +40,14 @@ func (mock *mockConditionalAuthorizer) FailureMode() authorizer.FailureMode {
 	return mock.failureMode
 }
 
-func (mock *mockConditionalAuthorizer) ResolveConditions(ctx context.Context, attrs authorizer.ConditionAttributes, conditions []authorizer.Condition) (authorizer.Decision, string, error) {
-	return mock.resolveConditions(ctx, attrs, conditions)
+func (mock *mockConditionalAuthorizer) ResolveConditions(ctx context.Context, attrs authorizer.ConditionAttributes, conditionSet *authorizer.ConditionSet) (authorizer.Decision, string, error) {
+	return mock.resolveConditions(ctx, attrs, conditionSet)
 }
 
 func (mock *mockConditionalAuthorizer) Authorize(ctx context.Context, attrs authorizer.Attributes) (authorizer.Decision, string, error) {
 	decision, reason, conditions, err := mock.authorize(ctx, attrs)
-	if decision == authorizer.DecisionConditional {
-		return authorizer.NewConditionalDecision(ctx, mock, conditions)
+	if decision == authorizer.DecisionConditionalAllow {
+		return authorizer.NewConditionalDecision(ctx, mock, authorizer.NewConditionSet(conditions...))
 	}
 	return decision, reason, err
 }
@@ -64,10 +66,12 @@ func (mock *mockConditionAttributes) GetOperation() string {
 }
 
 func ExampleAuthorizeWithConditionalSupport_customquerylanguage_allowed() {
+	utilfeature.DefaultMutableFeatureGate.SetFromMap(map[string]bool{string(genericfeatures.ConditionalAuthorization): true})
+
 	conditionalAuthorizer := &mockConditionalAuthorizer{
 		authorize: func(ctx context.Context, attrs authorizer.Attributes) (authorizer.Decision, string, []authorizer.Condition, error) {
 			if attrs.GetVerb() == "create" && attrs.GetResource() == "pods" && attrs.GetAPIGroup() == "" {
-				return authorizer.DecisionConditional, "", []authorizer.Condition{
+				return authorizer.DecisionConditionalAllow, "", []authorizer.Condition{
 					{
 						Type:      authorizer.ConditionType("my-query-language"),
 						Effect:    authorizer.ConditionEffectAllow,
@@ -77,13 +81,13 @@ func ExampleAuthorizeWithConditionalSupport_customquerylanguage_allowed() {
 			}
 			return authorizer.DecisionNoOpinion, "", nil, nil
 		},
-		resolveConditions: func(ctx context.Context, attrs authorizer.ConditionAttributes, conditions []authorizer.Condition) (authorizer.Decision, string, error) {
+		resolveConditions: func(ctx context.Context, attrs authorizer.ConditionAttributes, conditionSet *authorizer.ConditionSet) (authorizer.Decision, string, error) {
 			obj := attrs.GetObject().(*unstructured.Unstructured)
 			objSpec := obj.Object["spec"].(map[string]interface{})
-			if len(conditions) == 1 {
-				if conditions[0].Type == authorizer.ConditionType("my-query-language") &&
-					conditions[0].Condition == "spec.nodeName == 'test-node'" &&
-					conditions[0].Effect == authorizer.ConditionEffectAllow &&
+			if len(conditionSet.GetConditions()) == 1 {
+				if conditionSet.GetConditions()[0].Type == authorizer.ConditionType("my-query-language") &&
+					conditionSet.GetConditions()[0].Condition == "spec.nodeName == 'test-node'" &&
+					conditionSet.GetConditions()[0].Effect == authorizer.ConditionEffectAllow &&
 					objSpec["nodeName"] == "test-node" {
 					return authorizer.DecisionAllow, "pod node name is test-node, which is allowed", nil
 				}
@@ -170,10 +174,12 @@ func ExampleAuthorizeWithConditionalSupport_customquerylanguage_allowed() {
 }
 
 func ExampleAuthorizeWithConditionalSupport_customquerylanguage_notallowed() {
+	utilfeature.DefaultMutableFeatureGate.SetFromMap(map[string]bool{string(genericfeatures.ConditionalAuthorization): true})
+
 	conditionalAuthorizer := &mockConditionalAuthorizer{
 		authorize: func(ctx context.Context, attrs authorizer.Attributes) (authorizer.Decision, string, []authorizer.Condition, error) {
 			if attrs.GetVerb() == "create" && attrs.GetResource() == "pods" && attrs.GetAPIGroup() == "" {
-				return authorizer.DecisionConditional, "", []authorizer.Condition{
+				return authorizer.DecisionConditionalAllow, "", []authorizer.Condition{
 					{
 						Type:      authorizer.ConditionType("my-query-language"),
 						Effect:    authorizer.ConditionEffectAllow,
@@ -183,13 +189,13 @@ func ExampleAuthorizeWithConditionalSupport_customquerylanguage_notallowed() {
 			}
 			return authorizer.DecisionNoOpinion, "", nil, nil
 		},
-		resolveConditions: func(ctx context.Context, attrs authorizer.ConditionAttributes, conditions []authorizer.Condition) (authorizer.Decision, string, error) {
+		resolveConditions: func(ctx context.Context, attrs authorizer.ConditionAttributes, conditionSet *authorizer.ConditionSet) (authorizer.Decision, string, error) {
 			obj := attrs.GetObject().(*unstructured.Unstructured)
 			objSpec := obj.Object["spec"].(map[string]interface{})
-			if len(conditions) == 1 {
-				if conditions[0].Type == authorizer.ConditionType("my-query-language") &&
-					conditions[0].Condition == "spec.nodeName == 'test-node'" &&
-					conditions[0].Effect == authorizer.ConditionEffectAllow &&
+			if len(conditionSet.GetConditions()) == 1 {
+				if conditionSet.GetConditions()[0].Type == authorizer.ConditionType("my-query-language") &&
+					conditionSet.GetConditions()[0].Condition == "spec.nodeName == 'test-node'" &&
+					conditionSet.GetConditions()[0].Effect == authorizer.ConditionEffectAllow &&
 					objSpec["nodeName"] == "test-node" {
 					return authorizer.DecisionAllow, "pod node name is test-node, which is allowed", nil
 				}
@@ -276,10 +282,12 @@ func ExampleAuthorizeWithConditionalSupport_customquerylanguage_notallowed() {
 }
 
 func ExampleAuthorizeWithConditionalSupport_customquerylanguage_authorizerchain() {
+	utilfeature.DefaultMutableFeatureGate.SetFromMap(map[string]bool{string(genericfeatures.ConditionalAuthorization): true})
+
 	conditionalAuthorizer := &mockConditionalAuthorizer{
 		authorize: func(ctx context.Context, attrs authorizer.Attributes) (authorizer.Decision, string, []authorizer.Condition, error) {
 			if attrs.GetVerb() == "create" && attrs.GetResource() == "pods" && attrs.GetAPIGroup() == "" {
-				return authorizer.DecisionConditional, "", []authorizer.Condition{
+				return authorizer.DecisionConditionalAllow, "", []authorizer.Condition{
 					{
 						Type:      authorizer.ConditionType("my-query-language"),
 						Effect:    authorizer.ConditionEffectAllow,
@@ -289,13 +297,13 @@ func ExampleAuthorizeWithConditionalSupport_customquerylanguage_authorizerchain(
 			}
 			return authorizer.DecisionNoOpinion, "", nil, nil
 		},
-		resolveConditions: func(ctx context.Context, attrs authorizer.ConditionAttributes, conditions []authorizer.Condition) (authorizer.Decision, string, error) {
+		resolveConditions: func(ctx context.Context, attrs authorizer.ConditionAttributes, conditionSet *authorizer.ConditionSet) (authorizer.Decision, string, error) {
 			obj := attrs.GetObject().(*unstructured.Unstructured)
 			objSpec := obj.Object["spec"].(map[string]interface{})
-			if len(conditions) == 1 {
-				if conditions[0].Type == authorizer.ConditionType("my-query-language") &&
-					conditions[0].Condition == "spec.nodeName == 'test-node'" &&
-					conditions[0].Effect == authorizer.ConditionEffectAllow &&
+			if len(conditionSet.GetConditions()) == 1 {
+				if conditionSet.GetConditions()[0].Type == authorizer.ConditionType("my-query-language") &&
+					conditionSet.GetConditions()[0].Condition == "spec.nodeName == 'test-node'" &&
+					conditionSet.GetConditions()[0].Effect == authorizer.ConditionEffectAllow &&
 					objSpec["nodeName"] == "test-node" {
 					return authorizer.DecisionAllow, "pod node name is test-node, which is allowed", nil
 				}

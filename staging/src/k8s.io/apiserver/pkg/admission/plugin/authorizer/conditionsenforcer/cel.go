@@ -9,13 +9,14 @@ import (
 
 	celtypes "github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/interpreter"
-	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	admissionv1 "k8s.io/api/admission/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apiserver/pkg/admission"
 	plugincel "k8s.io/apiserver/pkg/admission/plugin/cel"
+	apiscel "k8s.io/apiserver/pkg/apis/cel"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	"k8s.io/apiserver/pkg/cel"
 )
@@ -27,58 +28,75 @@ const (
 var _ authorizer.BuiltinConditionsResolver = &celConditionsEnforcer{}
 
 type celConditionsEnforcer struct {
+	conditionCompiler *ConditionCompiler
 }
 
 func (e *celConditionsEnforcer) SupportedConditionTypes() sets.Set[authorizer.ConditionType] {
 	return sets.New(ConditionTypeAuthorizationCEL)
 }
 
-func (e *celConditionsEnforcer) ResolveConditions(ctx context.Context, a authorizer.ConditionAttributes, conditions []authorizer.Condition) (authorizer.Decision, string, error) {
+func (e *celConditionsEnforcer) ResolveConditions(ctx context.Context, a authorizer.ConditionAttributes, conditionSet *authorizer.ConditionSet) (authorizer.Decision, string, error) {
 	unionedAttrs := a.(*unionedAttributes)
 	admissionAttrs := unionedAttrs.VersionedAttributes
 
-	admissionRequest := plugincel.CreateAdmissionRequest(admissionAttrs, metav1.GroupVersionResource(admissionAttrs.GetResource()), metav1.GroupVersionKind(admissionAttrs.GetKind()))
-
-	results, _, err := forInput(ctx, admissionAttrs, admissionRequest, conditions)
+	compiledConditions, err := e.conditionCompiler.Compile(admissionAttrs.GetKind(), conditionSet)
 	if err != nil {
 		return authorizer.DecisionNoOpinion, "", err
 	}
+
+	admissionRequest := plugincel.CreateAdmissionRequest(admissionAttrs, metav1.GroupVersionResource(admissionAttrs.GetResource()), metav1.GroupVersionKind(admissionAttrs.GetKind()))
+
+	results, _, err := forInput(ctx, admissionAttrs, admissionRequest, compiledConditions)
+	if err != nil {
+		return authorizer.DecisionNoOpinion, "", err
+	}
+
+	var errlist []error
 
 	allowed := false
 	// TODO: Could optimize this by evaluating all deny policies first.
 	// TODO: Does it make sense to separate evaluation from authorization wrt authorizing the decisions?
 	for i, result := range results {
-		condition := &conditions[i]
+		condition := &conditionSet.GetConditions()[i]
 		if result.Error != nil {
-			// TODO: Add information about what source policy failed
-			resultErr := fmt.Errorf("conditional authorization policy %q produced an evaluation error", condition.ID)
-			err := admission.NewForbidden(a, resultErr).(*k8serrors.StatusError)
-			err.ErrStatus.Details.Causes = append(err.ErrStatus.Details.Causes, metav1.StatusCause{
-				Type:    metav1.CauseTypeFieldValueInvalid,
-				Message: result.Error.Error(),
-			})
-			return err
+			// If the policy is a deny policy, we return an error immediately, as it's not safe to ignore deny policies
+			// we do not know the value of.
+			if condition.Effect == authorizer.ConditionEffectDenyRequest || condition.Effect == authorizer.ConditionEffectDenyNoOpinion {
+
+				// TODO: Add information about what source policy failed
+				return authorizer.DecisionNoOpinion, "", fmt.Errorf("conditional authorization policy %q produced an evaluation error: %v", condition.ID, result.Error)
+			}
+			// In case of an allow policy, we can still aggregate the error in case no allow policy matches.
+			// If no allow policy matches, and at least one allow policy produced an error, the FailureMode of the authorizer
+			// determines whether to continue (NoOpinion) or fail the request (Deny).
+			// However, if any allow policy matches, erroring allow policies are ignored.
+			// TODO: We could add some logging here if we wanted though.
+			errlist = append(errlist, result.Error)
 		}
 		if condition.Effect == authorizer.ConditionEffectDenyRequest && result.EvalResult == celtypes.True {
 			reason := fmt.Sprintf("conditional authorization policy %q denied the request", condition.ID)
 			return authorizer.DecisionDeny, reason, nil
 		}
 
-		if condition.Effect == request.ConditionEffectAllow && result.EvalResult == celtypes.True {
+		if condition.Effect == authorizer.ConditionEffectDenyNoOpinion && result.EvalResult == celtypes.True {
+			reason := fmt.Sprintf("conditional authorization policy %q made the conditionset evaluate to NoOpinion", condition.ID)
+			return authorizer.DecisionNoOpinion, reason, nil
+		}
+
+		if condition.Effect == authorizer.ConditionEffectAllow && result.EvalResult == celtypes.True {
 			allowed = true
 			// flag that we found an allowing policy, but loop through all conditions, as there might be a denying policy,
 			// which has higher precedence to deny the request
 		}
 	}
-	if !allowed {
-		resultErr := fmt.Errorf("no conditional authorization policy allowed the request")
-		return admission.NewForbidden(a, resultErr)
+	if allowed {
+		return authorizer.DecisionAllow, "", nil
 	}
 
-	return authorizer.DecisionNoOpinion, "", nil
+	return authorizer.DecisionNoOpinion, "no conditional authorization policy allowed the request", nil
 }
 
-func forInput(ctx context.Context, versionedAttr *admission.VersionedAttributes, request *admissionv1.AdmissionRequest, compilationResults []request.CompiledCondition) ([]plugincel.EvaluationResult, int64, error) {
+func forInput(ctx context.Context, versionedAttr *admission.VersionedAttributes, request *admissionv1.AdmissionRequest, compilationResults []*plugincel.CompilationResult) ([]plugincel.EvaluationResult, int64, error) {
 	// TODO: replace unstructured with ref.Val for CEL variables when native type support is available
 	evaluations := make([]plugincel.EvaluationResult, len(compilationResults))
 	var err error
@@ -149,7 +167,7 @@ func (a *evaluationActivation) Parent() interpreter.Activation {
 
 // Evaluate runs a compiled CEL admission plugin expression using the provided activation and CEL
 // runtime cost budget.
-func (a *evaluationActivation) Evaluate(ctx context.Context, compilationResult request.CompiledCondition, remainingBudget int64) (plugincel.EvaluationResult, int64, error) {
+func (a *evaluationActivation) Evaluate(ctx context.Context, compilationResult *plugincel.CompilationResult, remainingBudget int64) (plugincel.EvaluationResult, int64, error) {
 	var evaluation = plugincel.EvaluationResult{}
 	if compilationResult.ExpressionAccessor == nil { // in case of placeholder
 		return evaluation, remainingBudget, nil

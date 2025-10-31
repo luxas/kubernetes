@@ -183,7 +183,15 @@ const (
 	// DecisionNoOpinion means that an authorizer has no opinion on whether
 	// to allow or deny an action.
 	DecisionNoOpinion
-	// DecisionConditional means that the request is authorized conditionally, only if the returned conditions
+	// DecisionConditionalAllow means that the request is authorized conditionally, only if the returned conditions
 	// end up being true.
-	DecisionConditional
+	DecisionConditionalAllow
+
+	// DecisionConditionalDeny means that the request is denied conditionally, if the returned conditions
+	// end up being true.
+	DecisionConditionalDeny
 )
+
+func (d Decision) IsConditional() bool {
+	return d == DecisionConditionalAllow || d == DecisionConditionalDeny
+}
