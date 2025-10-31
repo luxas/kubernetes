@@ -899,7 +899,6 @@ function indent() {
 function codegen::subprojects() {
     # Call generation on sub-projects.
     local subs=(
-        staging/src/k8s.io/code-generator/examples
         staging/src/k8s.io/kube-aggregator
         staging/src/k8s.io/sample-apiserver
         staging/src/k8s.io/sample-controller
