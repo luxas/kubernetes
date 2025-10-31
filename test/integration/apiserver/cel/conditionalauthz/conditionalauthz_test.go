@@ -141,6 +141,7 @@ func TestConditionalAuthz(t *testing.T) {
 	// Start the server with the desired feature enablement
 	server, err := apiservertesting.StartTestServer(t, nil, []string{
 		fmt.Sprintf("--feature-gates=ConditionalAuthorization=%v", featureEnabled),
+		"--enable-admission-plugins=AuthorizationConditionsEnforcer",
 		"--authorization-webhook-config-file=" + webhookConfigFile,
 		"--authorization-mode=Webhook",
 		"--authorization-webhook-version=v1",

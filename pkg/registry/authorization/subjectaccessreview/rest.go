@@ -24,7 +24,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
-	"k8s.io/apiserver/pkg/features"
 	genericfeatures "k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/registry/rest"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
@@ -85,7 +84,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 
 	authorizationAttributes := authorizationutil.AuthorizationAttributesFrom(subjectAccessReview.Spec)
 
-	var decision authorizer.Decision
+	/*var decision authorizer.Decision
 	var reason string
 	var conditionsEnforcer authorizer.ConditionsEnforcer
 	var evaluationErr error
@@ -101,8 +100,10 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	if utilfeature.DefaultFeatureGate.Enabled(features.ConditionalAuthorization) {
 		decision, reason, conditionsEnforcer, evaluationErr = authorizer.AuthorizeWithConditionalSupport(ctx, authorizationAttributes, r.authorizer)
 	} else {
-		decision, reason, evaluationErr = r.authorizer.Authorize(ctx, authorizationAttributes)
-	}
+
+	}*/
+
+	decision, reason, evaluationErr := r.authorizer.Authorize(ctx, authorizationAttributes)
 
 	subjectAccessReview.Status = authorizationapi.SubjectAccessReviewStatus{
 		Allowed: (decision == authorizer.DecisionAllow),

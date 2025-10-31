@@ -45,7 +45,9 @@ var _ genericadmissioninit.WantsExternalKubeClientSet = &ConditionalAuthorizatio
 var _ genericadmissioninit.WantsFeatures = &ConditionalAuthorizationEnforcer{}
 
 func NewConditionalAuthorizationEnforcer() *ConditionalAuthorizationEnforcer {
-	return &ConditionalAuthorizationEnforcer{}
+	return &ConditionalAuthorizationEnforcer{
+		enableBuiltinCEL: true,
+	}
 }
 
 type ConditionalAuthorizationEnforcer struct {

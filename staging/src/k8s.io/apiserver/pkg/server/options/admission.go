@@ -226,7 +226,7 @@ func (a *AdmissionOptions) Validate() []error {
 	}
 
 	if utilfeature.DefaultFeatureGate.Enabled(features.ConditionalAuthorization) {
-		if !registeredPlugins.Has(conditionsenforcer.PluginName) {
+		if !enablePlugins.Has(conditionsenforcer.PluginName) {
 			errs = append(errs, fmt.Errorf("conditional authorization feature is enabled, but mandatory admission plugin %s is not registered", conditionsenforcer.PluginName))
 		}
 	}
