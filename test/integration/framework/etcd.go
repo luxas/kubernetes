@@ -260,6 +260,13 @@ func EtcdMain(tests func() int) {
 	goleakOpts := IgnoreBackgroundGoroutines()
 
 	goleakOpts = append(goleakOpts,
+		// The Webhook Authorizer is leaking a goroutine by executing a HTTP/2 request that invokes
+		// -> net/http.(*Transport).startDialConnForLocked,
+		// -> golang.org/x/net/http2.(*clientConnPool).addConnIfNeeded,
+		// -> http2.(*Transport).newClientConn,
+		// -> internal/poll.runtime_pollWait
+		goleak.IgnoreTopFunction("internal/poll.runtime_pollWait"),
+
 		// lumberjack leaks a goroutine:
 		// https://github.com/natefinch/lumberjack/issues/56 This affects tests
 		// using --audit-log-path (like

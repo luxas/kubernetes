@@ -77,8 +77,10 @@ type Attributes interface {
 }
 
 // Authorizer makes an authorization decision based on information gained by making
-// zero or more calls to methods of the Attributes interface.  It returns nil when an action is
-// authorized, otherwise it returns an error.
+// zero or more calls to methods of the Attributes interface. It might return an error
+// together with any decision. It is then up to the caller to decide whether that error is critical or not.
+// If the decision is DecisionConditional, the conditions are written to the context and can be retrieved
+// with the ExtractConditions function.
 type Authorizer interface {
 	Authorize(ctx context.Context, a Attributes) (authorized Decision, reason string, err error)
 }
@@ -181,4 +183,15 @@ const (
 	// DecisionNoOpinion means that an authorizer has no opinion on whether
 	// to allow or deny an action.
 	DecisionNoOpinion
+	// DecisionConditionalAllow means that the request is authorized conditionally, only if the returned conditions
+	// end up being true.
+	DecisionConditionalAllow
+
+	// DecisionConditionalDeny means that the request is denied conditionally, if the returned conditions
+	// end up being true.
+	DecisionConditionalDeny
 )
+
+func (d Decision) IsConditional() bool {
+	return d == DecisionConditionalAllow || d == DecisionConditionalDeny
+}

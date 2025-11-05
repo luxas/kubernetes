@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
+	"k8s.io/apiserver/pkg/features"
 	genericfeatures "k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/registry/rest"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
@@ -94,13 +95,45 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		authorizationAttributes = authorizationutil.NonResourceAttributesFrom(userToCheck, *selfSAR.Spec.NonResourceAttributes)
 	}
 
-	decision, reason, evaluationErr := r.authorizer.Authorize(ctx, authorizationAttributes)
+	var decision authorizer.Decision
+	var reason string
+	var conditionsEnforcer authorizer.ConditionsEnforcer
+	var evaluationErr error
+	if utilfeature.DefaultFeatureGate.Enabled(features.ConditionalAuthorization) {
+		decision, reason, conditionsEnforcer, evaluationErr = authorizer.AuthorizeWithConditionalSupport(ctx, authorizationAttributes, r.authorizer)
+	} else {
+		decision, reason, evaluationErr = r.authorizer.Authorize(ctx, authorizationAttributes)
+	}
 
 	selfSAR.Status = authorizationapi.SubjectAccessReviewStatus{
 		Allowed: (decision == authorizer.DecisionAllow),
 		Denied:  (decision == authorizer.DecisionDeny),
 		Reason:  reason,
 	}
+
+	if decision.IsConditional() {
+		selfSAR.Status.ConditionsChain = make([]authorizationapi.SubjectAccessReviewConditionSet, 0, len(conditionsEnforcer.OrderedConditionSets(ctx, authorizationAttributes)))
+		for _, conditionSet := range conditionsEnforcer.OrderedConditionSets(ctx, authorizationAttributes) {
+
+			conditions := make([]authorizationapi.SubjectAccessReviewCondition, 0, len(conditionSet.GetConditions()))
+			for _, condition := range conditionSet.GetConditions() {
+				conditions = append(conditions, authorizationapi.SubjectAccessReviewCondition{
+					ID:          condition.ID,
+					Effect:      authorizationapi.SubjectAccessReviewConditionEffect(condition.Effect),
+					Type:        string(condition.Type),
+					Condition:   condition.Condition,
+					Description: condition.Description,
+				})
+			}
+			selfSAR.Status.ConditionsChain = append(selfSAR.Status.ConditionsChain, authorizationapi.SubjectAccessReviewConditionSet{
+				Allowed: conditionSet.UnconditionallyAllowed(),
+				Denied:  conditionSet.UnconditionallyDenied(),
+				// TODO: FailureMode here?
+				Conditions: conditions,
+			})
+		}
+	}
+
 	selfSAR.Status.EvaluationError = authorizationutil.BuildEvaluationError(evaluationErr, authorizationAttributes)
 
 	return selfSAR, nil

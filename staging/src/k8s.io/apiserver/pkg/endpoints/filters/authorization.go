@@ -68,16 +68,32 @@ func withAuthorization(handler http.Handler, a authorizer.Authorizer, s runtime.
 			responsewriters.InternalError(w, req, err)
 			return
 		}
-		authorized, reason, err := a.Authorize(ctx, attributes)
+		var decision authorizer.Decision
+		var reason string
+		conditionallyAllowed := false
+
+		if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
+			var conditionsEnforcer authorizer.ConditionsEnforcer
+			decision, reason, conditionsEnforcer, err = authorizer.AuthorizeWithConditionalSupport(ctx, attributes, a)
+
+			if decision == authorizer.DecisionConditionalAllow {
+				ctx = request.WithConditionalAuthorizationContext(ctx, conditionsEnforcer)
+				req = req.WithContext(ctx)
+				conditionallyAllowed = true
+			}
+		} else {
+			decision, reason, err = a.Authorize(ctx, attributes)
+		}
 
 		authorizationFinish := time.Now()
 		request.TrackAuthorizationLatency(ctx, authorizationFinish.Sub(authorizationStart))
 		defer func() {
-			metrics(ctx, authorized, err, authorizationStart, authorizationFinish)
+			metrics(ctx, decision, err, authorizationStart, authorizationFinish)
 		}()
 
 		// an authorizer like RBAC could encounter evaluation errors and still allow the request, so authorizer decision is checked before error here.
-		if authorized == authorizer.DecisionAllow {
+		if decision == authorizer.DecisionAllow || conditionallyAllowed {
+			// TODO: do we want to separate the allow and conditional audit values?
 			audit.AddAuditAnnotations(ctx,
 				decisionAnnotationKey, decisionAllow,
 				reasonAnnotationKey, reason)

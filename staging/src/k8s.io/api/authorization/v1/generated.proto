@@ -270,6 +270,42 @@ message SubjectAccessReview {
   optional SubjectAccessReviewStatus status = 3;
 }
 
+message SubjectAccessReviewCondition {
+  // TODO: Should all protobuf fields be marked opt?
+  optional string id = 1;
+
+  // TODO: Mark this as a closed enum or open? Nick Young says open.
+  optional string effect = 2;
+
+  optional string type = 3;
+
+  optional string condition = 4;
+
+  optional string description = 5;
+}
+
+message SubjectAccessReviewConditionSet {
+  // Allowed specifies whether this condition set is unconditionally allowed.
+  // Mutually exclusive with Denied and Conditions.
+  optional bool allowed = 1;
+
+  // Denied specifies whether this condition set is unconditionally denied.
+  // Mutually exclusive with Allowed and Conditions.
+  optional bool denied = 2;
+
+  // FailureMode specifies the failure mode for this condition set.
+  // Only relevant if the conditions are non-null.
+  optional string failureMode = 3;
+
+  // Conditions is an unordered set of conditions that should be evaluated against admission attributes, to determine
+  // whether this authorizer allows the request.
+  //
+  // +listType=map
+  // +listMapKey=id
+  // +optional
+  repeated SubjectAccessReviewCondition conditions = 4;
+}
+
 // SubjectAccessReviewSpec is a description of the access request.  Exactly one of ResourceAuthorizationAttributes
 // and NonResourceAuthorizationAttributes must be set
 message SubjectAccessReviewSpec {
@@ -312,6 +348,16 @@ message SubjectAccessReviewStatus {
   // may not be true if Allowed is true.
   // +optional
   optional bool denied = 4;
+
+  // ConditionsChain is an ordered list of condition sets, where every item of the list represents one authorizer's ConditionSet response.
+  // When evaluating the conditions, the first condition set must be evaluated as a whole first, and only if that condition set
+  // evaluates to NoOpinion, can the subsequent condition sets be evaluated.
+  //
+  // When ConditionsChain is non-null, Allowed and Denied must be false.
+  //
+  // +optional
+  // +listType=atomic
+  repeated SubjectAccessReviewConditionSet conditionsChain = 5;
 
   // Reason is optional.  It indicates why a request was allowed or denied.
   // +optional

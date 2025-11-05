@@ -48,7 +48,9 @@ func (authzHandler unionAuthzHandler) Authorize(ctx context.Context, a authorize
 		reasonlist []string
 	)
 
-	for _, currAuthzHandler := range authzHandler {
+	returnDecision := authorizer.DecisionNoOpinion
+
+	for i, currAuthzHandler := range authzHandler {
 		decision, reason, err := currAuthzHandler.Authorize(ctx, a)
 
 		if err != nil {
@@ -58,14 +60,34 @@ func (authzHandler unionAuthzHandler) Authorize(ctx context.Context, a authorize
 			reasonlist = append(reasonlist, reason)
 		}
 		switch decision {
-		case authorizer.DecisionAllow, authorizer.DecisionDeny:
+		case authorizer.DecisionAllow:
+			// If there were conditional denials before this unconditional allow, it means that:
+			// a) the request can become authorized, but
+			// b) conditional on the deny conditions being false.
+			// Thus, return a ConditionalAllow decision.
+			if returnDecision == authorizer.DecisionConditionalDeny {
+				return authorizer.UnconditionalAllowAfterConditionalDeny(ctx)
+			}
 			return decision, reason, err
+		case authorizer.DecisionDeny:
+			return decision, reason, err
+		case authorizer.DecisionConditionalAllow:
+			// If this is not the last authorizer in the chain, register the remaining authorizers
+			// to be called after the conditional response, if the conditions evaluate to NoOpinion.
+			if i < len(authzHandler)-1 {
+				authorizer.RegisterAuthorizerChainAfterConditionalResponse(ctx, authzHandler[i+1:])
+			}
+			return decision, reason, err
+		case authorizer.DecisionConditionalDeny:
+			// continue to the next authorizer, but remember that there were conditional denials.
+			// What to do if we have conditional denials first, and then unconditional allows?
+			// That should be a ConditionalAllow decision.
+			returnDecision = authorizer.DecisionConditionalDeny
 		case authorizer.DecisionNoOpinion:
 			// continue to the next authorizer
 		}
 	}
-
-	return authorizer.DecisionNoOpinion, strings.Join(reasonlist, "\n"), utilerrors.NewAggregate(errlist)
+	return returnDecision, strings.Join(reasonlist, "\n"), utilerrors.NewAggregate(errlist)
 }
 
 // unionAuthzRulesHandler authorizer against a chain of authorizer.RuleResolver

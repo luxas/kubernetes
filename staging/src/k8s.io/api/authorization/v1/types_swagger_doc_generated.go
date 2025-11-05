@@ -159,6 +159,17 @@ func (SubjectAccessReview) SwaggerDoc() map[string]string {
 	return map_SubjectAccessReview
 }
 
+var map_SubjectAccessReviewConditionSet = map[string]string{
+	"allowed":     "Allowed specifies whether this condition set is unconditionally allowed. Mutually exclusive with Denied and Conditions.",
+	"denied":      "Denied specifies whether this condition set is unconditionally denied. Mutually exclusive with Allowed and Conditions.",
+	"failureMode": "FailureMode specifies the failure mode for this condition set. Only relevant if the conditions are non-null.",
+	"conditions":  "Conditions is an unordered set of conditions that should be evaluated against admission attributes, to determine whether this authorizer allows the request.",
+}
+
+func (SubjectAccessReviewConditionSet) SwaggerDoc() map[string]string {
+	return map_SubjectAccessReviewConditionSet
+}
+
 var map_SubjectAccessReviewSpec = map[string]string{
 	"":                      "SubjectAccessReviewSpec is a description of the access request.  Exactly one of ResourceAuthorizationAttributes and NonResourceAuthorizationAttributes must be set",
 	"resourceAttributes":    "ResourceAuthorizationAttributes describes information for a resource access request",
@@ -177,6 +188,7 @@ var map_SubjectAccessReviewStatus = map[string]string{
 	"":                "SubjectAccessReviewStatus",
 	"allowed":         "Allowed is required. True if the action would be allowed, false otherwise.",
 	"denied":          "Denied is optional. True if the action would be denied, otherwise false. If both allowed is false and denied is false, then the authorizer has no opinion on whether to authorize the action. Denied may not be true if Allowed is true.",
+	"conditionsChain": "ConditionsChain is an ordered list of condition sets, where every item of the list represents one authorizer's ConditionSet response. When evaluating the conditions, the first condition set must be evaluated as a whole first, and only if that condition set evaluates to NoOpinion, can the subsequent condition sets be evaluated.\n\nWhen ConditionsChain is non-null, Allowed and Denied must be false.",
 	"reason":          "Reason is optional.  It indicates why a request was allowed or denied.",
 	"evaluationError": "EvaluationError is an indication that some error occurred during the authorization check. It is entirely possible to get an error and be able to continue determine authorization status in spite of it. For instance, RBAC can be missing a role, but enough roles are still present and bound to reason about the request.",
 }

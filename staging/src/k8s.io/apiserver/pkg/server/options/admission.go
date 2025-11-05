@@ -30,6 +30,7 @@ import (
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/apiserver/pkg/admission/initializer"
 	admissionmetrics "k8s.io/apiserver/pkg/admission/metrics"
+	"k8s.io/apiserver/pkg/admission/plugin/authorizer/conditionsenforcer"
 	"k8s.io/apiserver/pkg/admission/plugin/namespace/lifecycle"
 	mutatingadmissionpolicy "k8s.io/apiserver/pkg/admission/plugin/policy/mutating"
 	validatingadmissionpolicy "k8s.io/apiserver/pkg/admission/plugin/policy/validating"
@@ -38,7 +39,9 @@ import (
 	apiserverapi "k8s.io/apiserver/pkg/apis/apiserver"
 	apiserverapiv1 "k8s.io/apiserver/pkg/apis/apiserver/v1"
 	apiserverapiv1alpha1 "k8s.io/apiserver/pkg/apis/apiserver/v1alpha1"
+	"k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/server"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	cacheddiscovery "k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/informers"
@@ -220,6 +223,12 @@ func (a *AdmissionOptions) Validate() []error {
 		// Developer error, this should never run in.
 		errs = append(errs, fmt.Errorf("plugins %v registered are not in RecommendedPluginOrder",
 			registeredPlugins.Difference(intersections).List()))
+	}
+
+	if utilfeature.DefaultFeatureGate.Enabled(features.ConditionalAuthorization) {
+		if !enablePlugins.Has(conditionsenforcer.PluginName) {
+			errs = append(errs, fmt.Errorf("conditional authorization feature is enabled, but mandatory admission plugin %s is not registered", conditionsenforcer.PluginName))
+		}
 	}
 
 	return errs

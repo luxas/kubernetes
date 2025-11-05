@@ -21,6 +21,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apiserver/pkg/authentication/user"
+	"k8s.io/apiserver/pkg/authorization/authorizer"
 )
 
 // The key type is unexported to prevent collisions
@@ -32,6 +33,9 @@ const (
 
 	// userKey is the context key for the request user.
 	userKey
+
+	// used for propagating a conditional authorization context between authorization and admission
+	conditionalAuthorizationContextKey
 )
 
 // NewContext instantiates a base context object for request flows.
@@ -75,4 +79,15 @@ func WithUser(parent context.Context, user user.Info) context.Context {
 func UserFrom(ctx context.Context) (user.Info, bool) {
 	user, ok := ctx.Value(userKey).(user.Info)
 	return user, ok
+}
+
+// WithConditionalAuthorizationContext returns a copy of parent in which the conditional authorization enforcer is set
+func WithConditionalAuthorizationContext(parent context.Context, enforcer authorizer.ConditionsEnforcer) context.Context {
+	return WithValue(parent, conditionalAuthorizationContextKey, enforcer)
+}
+
+// ConditionalAuthorizationContextFrom returns the conditional authorization enforcer associated with the ctx
+func ConditionalAuthorizationContextFrom(ctx context.Context) (authorizer.ConditionsEnforcer, bool) {
+	enforcer, ok := ctx.Value(conditionalAuthorizationContextKey).(authorizer.ConditionsEnforcer)
+	return enforcer, ok
 }
