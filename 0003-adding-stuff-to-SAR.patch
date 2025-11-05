@@ -1,0 +1,546 @@
+From bb47cc122fe69302915fc81c1493636f904c4455 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Lucas=20K=C3=A4ldstr=C3=B6m?= <lucas.kaldstrom@upbound.io>
+Date: Fri, 31 Oct 2025 12:02:39 +0200
+Subject: [PATCH 03/11] adding stuff to SAR
+
+---
+ pkg/apis/authorization/types.go               |  39 ++++
+ pkg/apis/authorization/v1beta1/conversion.go  |  13 ++
+ .../src/k8s.io/api/authorization/v1/types.go  |  43 ++++
+ .../authorization/authorizer/conditional.go   |   6 +-
+ .../authorizer/conditional_test.go            |   6 +-
+ .../pkg/endpoints/filters/authorization.go    |  15 +-
+ .../plugin/pkg/authorizer/webhook/webhook.go  |  39 ++++
+ .../conditionalauthz/conditionalauthz_test.go | 207 ++++++++++++++++++
+ .../cel/conditionalauthz/main_test.go         |  24 ++
+ 9 files changed, 382 insertions(+), 10 deletions(-)
+ create mode 100644 pkg/apis/authorization/v1beta1/conversion.go
+ create mode 100644 test/integration/apiserver/cel/conditionalauthz/conditionalauthz_test.go
+ create mode 100644 test/integration/apiserver/cel/conditionalauthz/main_test.go
+
+diff --git a/pkg/apis/authorization/types.go b/pkg/apis/authorization/types.go
+index 997cd3879f7..95d54b0bc4c 100644
+--- a/pkg/apis/authorization/types.go
++++ b/pkg/apis/authorization/types.go
+@@ -199,6 +199,17 @@ type SubjectAccessReviewStatus struct {
+ 	// authorizer has no opinion on whether to authorize the action. Denied
+ 	// may not be true if Allowed is true.
+ 	Denied bool
++
++	// ConditionsChain is an ordered list of condition sets, where every item of the list represents one authorizer's ConditionSet response.
++	// When evaluating the conditions, the first condition set must be evaluated as a whole first, and only if that condition set
++	// evaluates to NoOpinion, can the subsequent condition sets be evaluated.
++	//
++	// When ConditionsChain is non-null, Allowed and Denied must be false.
++	//
++	// +optional
++	// +listType=atomic
++	ConditionsChain []SubjectAccessReviewConditionSet
++
+ 	// Reason is optional.  It indicates why a request was allowed or denied.
+ 	Reason string
+ 	// EvaluationError is an indication that some error occurred during the authorization check.
+@@ -207,6 +218,34 @@ type SubjectAccessReviewStatus struct {
+ 	EvaluationError string
+ }
+ 
++type SubjectAccessReviewConditionSet struct {
++	// Conditions is an unordered set of conditions that should be evaluated against admission attributes, to determine
++	// whether this authorizer allows the request.
++	//
++	// +listType=map
++	// +listMapKey=id
++	// +optional
++	Conditions []SubjectAccessReviewCondition
++}
++
++type SubjectAccessReviewCondition struct {
++	// TODO: Should all protobuf fields be marked opt?
++	ID string
++	// TODO: Mark this as a closed enum or open? Nick Young says open.
++	Effect      SubjectAccessReviewConditionEffect
++	Type        string
++	Condition   string
++	Description string
++}
++
++type SubjectAccessReviewConditionEffect string
++
++const (
++	SubjectAccessReviewConditionEffectAllow         SubjectAccessReviewConditionEffect = "Allow"
++	SubjectAccessReviewConditionEffectDenyRequest   SubjectAccessReviewConditionEffect = "DenyRequest"
++	SubjectAccessReviewConditionEffectDenyNoOpinion SubjectAccessReviewConditionEffect = "DenyNoOpinion"
++)
++
+ // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+ 
+ // SelfSubjectRulesReview enumerates the set of actions the current user can perform within a namespace.
+diff --git a/pkg/apis/authorization/v1beta1/conversion.go b/pkg/apis/authorization/v1beta1/conversion.go
+new file mode 100644
+index 00000000000..d206b6ba6b2
+--- /dev/null
++++ b/pkg/apis/authorization/v1beta1/conversion.go
+@@ -0,0 +1,13 @@
++package v1beta1
++
++import (
++	authorizationv1beta1 "k8s.io/api/authorization/v1beta1"
++	conversion "k8s.io/apimachinery/pkg/conversion"
++	authorization "k8s.io/kubernetes/pkg/apis/authorization"
++)
++
++func Convert_authorization_SubjectAccessReviewStatus_To_v1beta1_SubjectAccessReviewStatus(in *authorization.SubjectAccessReviewStatus, out *authorizationv1beta1.SubjectAccessReviewStatus, s conversion.Scope) error {
++	// TODO: What to do if conditions are set in the internal type, but we want to convert to the v1beta1 type?
++	// Error? Annotation? Add the field without a serialization tag?
++	return autoConvert_authorization_SubjectAccessReviewStatus_To_v1beta1_SubjectAccessReviewStatus(in, out, s)
++}
+diff --git a/staging/src/k8s.io/api/authorization/v1/types.go b/staging/src/k8s.io/api/authorization/v1/types.go
+index 251e776b024..0274d3a4ac5 100644
+--- a/staging/src/k8s.io/api/authorization/v1/types.go
++++ b/staging/src/k8s.io/api/authorization/v1/types.go
+@@ -247,6 +247,17 @@ type SubjectAccessReviewStatus struct {
+ 	// may not be true if Allowed is true.
+ 	// +optional
+ 	Denied bool `json:"denied,omitempty" protobuf:"varint,4,opt,name=denied"`
++
++	// ConditionsChain is an ordered list of condition sets, where every item of the list represents one authorizer's ConditionSet response.
++	// When evaluating the conditions, the first condition set must be evaluated as a whole first, and only if that condition set
++	// evaluates to NoOpinion, can the subsequent condition sets be evaluated.
++	//
++	// When ConditionsChain is non-null, Allowed and Denied must be false.
++	//
++	// +optional
++	// +listType=atomic
++	ConditionsChain []SubjectAccessReviewConditionSet `json:"conditionsChain,omitempty" protobuf:"bytes,5,rep,name=conditionsChain"`
++
+ 	// Reason is optional.  It indicates why a request was allowed or denied.
+ 	// +optional
+ 	Reason string `json:"reason,omitempty" protobuf:"bytes,2,opt,name=reason"`
+@@ -257,6 +268,38 @@ type SubjectAccessReviewStatus struct {
+ 	EvaluationError string `json:"evaluationError,omitempty" protobuf:"bytes,3,opt,name=evaluationError"`
+ }
+ 
++type SubjectAccessReviewConditionSet struct {
++	// TODO: Add FailureMode here?
++
++	// TODO: Add UnconditionalDecision here?
++
++	// Conditions is an unordered set of conditions that should be evaluated against admission attributes, to determine
++	// whether this authorizer allows the request.
++	//
++	// +listType=map
++	// +listMapKey=id
++	// +optional
++	Conditions []SubjectAccessReviewCondition `json:"conditions" protobuf:"bytes,1,rep,name=conditions"`
++}
++
++type SubjectAccessReviewCondition struct {
++	// TODO: Should all protobuf fields be marked opt?
++	ID string `json:"id" protobuf:"bytes,1,opt,name=id"`
++	// TODO: Mark this as a closed enum or open? Nick Young says open.
++	Effect      SubjectAccessReviewConditionEffect `json:"effect" protobuf:"bytes,2,opt,name=effect"`
++	Type        string                             `json:"type" protobuf:"bytes,3,opt,name=type"`
++	Condition   string                             `json:"condition" protobuf:"bytes,4,opt,name=condition"`
++	Description string                             `json:"description,omitempty" protobuf:"bytes,5,opt,name=description"`
++}
++
++type SubjectAccessReviewConditionEffect string
++
++const (
++	SubjectAccessReviewConditionEffectAllow         SubjectAccessReviewConditionEffect = "Allow"
++	SubjectAccessReviewConditionEffectDenyRequest   SubjectAccessReviewConditionEffect = "DenyRequest"
++	SubjectAccessReviewConditionEffectDenyNoOpinion SubjectAccessReviewConditionEffect = "DenyNoOpinion"
++)
++
+ // +genclient
+ // +genclient:nonNamespaced
+ // +genclient:onlyVerbs=create
+diff --git a/staging/src/k8s.io/apiserver/pkg/authorization/authorizer/conditional.go b/staging/src/k8s.io/apiserver/pkg/authorization/authorizer/conditional.go
+index e79515d9e11..0b1f00fd714 100644
+--- a/staging/src/k8s.io/apiserver/pkg/authorization/authorizer/conditional.go
++++ b/staging/src/k8s.io/apiserver/pkg/authorization/authorizer/conditional.go
+@@ -122,6 +122,7 @@ type ConditionalAuthorizer interface {
+ }
+ 
+ // FailureMode determines how to treat an error from ResolveConditions.
++// TODO: Don't have this externally, just use DecisionOnError() authorizer.Decision instead?
+ type FailureMode string
+ 
+ const (
+@@ -142,8 +143,9 @@ type ConditionSet struct {
+ 	conditions []Condition
+ }
+ 
+-func NewConditionSet(conditions ...Condition) *ConditionSet {
+-	return &ConditionSet{conditions: conditions}
++func NewConditionSet(conditions ...Condition) (*ConditionSet, error) {
++	// TODO: Validate the conditions here.
++	return &ConditionSet{conditions: conditions}, nil
+ }
+ 
+ func (c *ConditionSet) CanBecomeAuthorized() bool {
+diff --git a/staging/src/k8s.io/apiserver/pkg/authorization/authorizer/conditional_test.go b/staging/src/k8s.io/apiserver/pkg/authorization/authorizer/conditional_test.go
+index 1da613ffe2a..dd2b98cfc4c 100644
+--- a/staging/src/k8s.io/apiserver/pkg/authorization/authorizer/conditional_test.go
++++ b/staging/src/k8s.io/apiserver/pkg/authorization/authorizer/conditional_test.go
+@@ -47,7 +47,11 @@ func (mock *mockConditionalAuthorizer) ResolveConditions(ctx context.Context, at
+ func (mock *mockConditionalAuthorizer) Authorize(ctx context.Context, attrs authorizer.Attributes) (authorizer.Decision, string, error) {
+ 	decision, reason, conditions, err := mock.authorize(ctx, attrs)
+ 	if decision == authorizer.DecisionConditionalAllow {
+-		return authorizer.NewConditionalDecision(ctx, mock, authorizer.NewConditionSet(conditions...))
++		conditionSet, err := authorizer.NewConditionSet(conditions...)
++		if err != nil {
++			panic(err) // invalid test data
++		}
++		return authorizer.NewConditionalDecision(ctx, mock, conditionSet)
+ 	}
+ 	return decision, reason, err
+ }
+diff --git a/staging/src/k8s.io/apiserver/pkg/endpoints/filters/authorization.go b/staging/src/k8s.io/apiserver/pkg/endpoints/filters/authorization.go
+index 21871a7c2d1..e6b2dc7d9e4 100644
+--- a/staging/src/k8s.io/apiserver/pkg/endpoints/filters/authorization.go
++++ b/staging/src/k8s.io/apiserver/pkg/endpoints/filters/authorization.go
+@@ -70,18 +70,19 @@ func withAuthorization(handler http.Handler, a authorizer.Authorizer, s runtime.
+ 		}
+ 		var decision authorizer.Decision
+ 		var reason string
+-		allowed := false
++		conditionallyAllowed := false
+ 
+ 		if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
+ 			var conditionsEnforcer authorizer.ConditionsEnforcer
+ 			decision, reason, conditionsEnforcer, err = authorizer.AuthorizeWithConditionalSupport(ctx, attributes, a)
+-			ctx = request.WithConditionalAuthorizationContext(ctx, conditionsEnforcer)
+-			req = req.WithContext(ctx)
+-			// ok to proceed with the request; the conditions will be enforced in admission
+-			allowed = true
++
++			if decision == authorizer.DecisionConditionalAllow {
++				ctx = request.WithConditionalAuthorizationContext(ctx, conditionsEnforcer)
++				req = req.WithContext(ctx)
++				conditionallyAllowed = true
++			}
+ 		} else {
+ 			decision, reason, err = a.Authorize(ctx, attributes)
+-			allowed = decision == authorizer.DecisionAllow
+ 		}
+ 
+ 		authorizationFinish := time.Now()
+@@ -91,7 +92,7 @@ func withAuthorization(handler http.Handler, a authorizer.Authorizer, s runtime.
+ 		}()
+ 
+ 		// an authorizer like RBAC could encounter evaluation errors and still allow the request, so authorizer decision is checked before error here.
+-		if allowed {
++		if decision == authorizer.DecisionAllow || conditionallyAllowed {
+ 			// TODO: do we want to separate the allow and conditional audit values?
+ 			audit.AddAuditAnnotations(ctx,
+ 				decisionAnnotationKey, decisionAllow,
+diff --git a/staging/src/k8s.io/apiserver/plugin/pkg/authorizer/webhook/webhook.go b/staging/src/k8s.io/apiserver/plugin/pkg/authorizer/webhook/webhook.go
+index 3df8e580e44..24d519a0d93 100644
+--- a/staging/src/k8s.io/apiserver/plugin/pkg/authorizer/webhook/webhook.go
++++ b/staging/src/k8s.io/apiserver/plugin/pkg/authorizer/webhook/webhook.go
+@@ -292,12 +292,50 @@ func (w *WebhookAuthorizer) Authorize(ctx context.Context, attr authorizer.Attri
+ 		return authorizer.DecisionDeny, r.Status.Reason, nil
+ 	case r.Status.Allowed:
+ 		return authorizer.DecisionAllow, r.Status.Reason, nil
++	case len(r.Status.ConditionsChain) != 0 && utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization):
++		if len(r.Status.ConditionsChain) > 1 {
++			return authorizer.DecisionNoOpinion, "", fmt.Errorf("webhook authorizer does not support multiple conditions chains")
++		}
++		conditionSet, err := toAuthorizerConditions(r.Status.ConditionsChain[0])
++		if err != nil {
++			return authorizer.DecisionNoOpinion, "", err
++		}
++		return authorizer.NewConditionalDecision(ctx, w, conditionSet)
+ 	default:
+ 		return authorizer.DecisionNoOpinion, r.Status.Reason, nil
+ 	}
+ 
+ }
+ 
++func (w *WebhookAuthorizer) FailureMode() authorizer.FailureMode {
++	switch w.decisionOnError {
++	case authorizer.DecisionDeny:
++		return authorizer.FailureModeDeny
++	case authorizer.DecisionNoOpinion:
++		return authorizer.FailureModeNoOpinion
++	default:
++		return authorizer.FailureModeNoOpinion
++	}
++}
++
++func (w *WebhookAuthorizer) ResolveConditions(ctx context.Context, attr authorizer.ConditionAttributes, conditionSet *authorizer.ConditionSet) (authorizer.Decision, string, error) {
++	return authorizer.DecisionNoOpinion, "", fmt.Errorf("webhook authorizer does not support conditions resolution")
++}
++
++func toAuthorizerConditions(v1ConditionSet authorizationv1.SubjectAccessReviewConditionSet) (*authorizer.ConditionSet, error) {
++	conds := []authorizer.Condition{}
++	for _, condition := range v1ConditionSet.Conditions {
++		conds = append(conds, authorizer.Condition{
++			ID:          condition.ID,
++			Type:        authorizer.ConditionType(condition.Type),
++			Effect:      authorizer.ConditionEffect(condition.Effect),
++			Condition:   condition.Condition,
++			Description: condition.Description,
++		})
++	}
++	return authorizer.NewConditionSet(conds...)
++}
++
+ func resourceAttributesFrom(attr authorizer.Attributes) *authorizationv1.ResourceAttributes {
+ 	ret := &authorizationv1.ResourceAttributes{
+ 		Namespace:   attr.GetNamespace(),
+@@ -534,6 +572,7 @@ func (t *subjectAccessReviewV1beta1ClientGW) Create(ctx context.Context, subject
+ 
+ // shouldCache determines whether it is safe to cache the given request attributes. If the
+ // requester-controlled attributes are too large, this may be a DoS attempt, so we skip the cache.
++// With this in mind: do we ever want to cache conditions? They will naturally be larger than 10000 bytes.
+ func shouldCache(attr authorizer.Attributes) bool {
+ 	controlledAttrSize := int64(len(attr.GetNamespace())) +
+ 		int64(len(attr.GetVerb())) +
+diff --git a/test/integration/apiserver/cel/conditionalauthz/conditionalauthz_test.go b/test/integration/apiserver/cel/conditionalauthz/conditionalauthz_test.go
+new file mode 100644
+index 00000000000..080c2e84056
+--- /dev/null
++++ b/test/integration/apiserver/cel/conditionalauthz/conditionalauthz_test.go
+@@ -0,0 +1,207 @@
++/*
++Copyright 2024 The Kubernetes Authors.
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++    http://www.apache.org/licenses/LICENSE-2.0
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++See the License for the specific language governing permissions and
++limitations under the License.
++*/
++
++package conditionalauthz
++
++import (
++	"context"
++	"fmt"
++	"testing"
++
++	authorizationv1 "k8s.io/api/authorization/v1"
++	corev1 "k8s.io/api/core/v1"
++	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
++	"k8s.io/client-go/kubernetes"
++	"k8s.io/client-go/rest"
++	apiservertesting "k8s.io/kubernetes/cmd/kube-apiserver/app/testing"
++	"k8s.io/kubernetes/test/integration/framework"
++)
++
++/*func setupTestServer(t *testing.T) {
++	// Generate a private key
++	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
++	if err != nil {
++		log.Fatalf("Failed to generate private key: %v", err)
++	}
++	// Create certificate template
++	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
++	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
++	if err != nil {
++		log.Fatalf("Failed to generate serial number: %v", err)
++	}
++	template := x509.Certificate{
++		SerialNumber: serialNumber,
++		Subject: pkix.Name{
++			Organization: []string{"Test Company"},
++			CommonName:   "localhost",
++		},
++		DNSNames:              []string{"localhost"},
++		NotBefore:             time.Now(),
++		NotAfter:              time.Now().Add(365 * 24 * time.Hour), // Valid for 1 year
++		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
++		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
++		BasicConstraintsValid: true,
++	}
++	// Create certificate using the template and private key
++	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &privateKey.PublicKey, privateKey)
++	if err != nil {
++		log.Fatalf("Failed to create certificate: %v", err)
++	}
++	certBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
++	webhookConfig := `
++apiVersion: v1
++# kind of the API object
++kind: Config
++# clusters refers to the remote service.
++clusters:
++- name: authz-webhook
++  cluster:
++    # CA for verifying the remote service.
++    certificate-authority-data: ` + base64.StdEncoding.EncodeToString(certBytes) + `
++    # URL of remote service to query. Must use 'https'. May not include parameters.
++    server: https://localhost:4321/authorize
++# users refers to the API Server's webhook configuration.
++users:
++  - name: kube-apiserver
++    user:
++      token: abce
++# kubeconfig files require a context. Provide one for the API Server.
++current-context: authz-webhook
++contexts:
++- context:
++    cluster: authz-webhook
++    user: kube-apiserver
++  name: authz-webhook
++`
++	webhookConfigFile := "/tmp/webhook-config.yaml"
++	if err := os.WriteFile(webhookConfigFile, []byte(webhookConfig), 0644); err != nil {
++		log.Fatalf("Failed to write webhook config file: %v", err)
++	}
++	// Set up the HTTPS server
++	cert, err := tls.X509KeyPair(
++		certBytes,
++		pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(privateKey)}),
++	)
++	if err != nil {
++		log.Fatalf("Failed to load X509 key pair: %v", err)
++	}
++	tlsConfig := &tls.Config{
++		Certificates: []tls.Certificate{cert},
++	}
++	// Create a simple handler
++	http.HandleFunc("/authorize", func(w http.ResponseWriter, r *http.Request) {
++		sar := &authorizationv1.SubjectAccessReview{}
++		if err := json.NewDecoder(r.Body).Decode(sar); err != nil {
++			http.Error(w, err.Error(), http.StatusBadRequest)
++			return
++		}
++		sar.Status.Allowed = false
++		sar.Status.Denied = false
++		sar.Status.Conditions = []authorizationv1.SubjectAccessReviewCondition{
++			{
++				Condition: "has(object.metasdata.labels) && has(object.metadata.labels.foo) && object.metadata.labels.foo == 'bar'",
++			},
++		}
++		mw := io.MultiWriter(os.Stdout, w)
++		json.NewEncoder(mw).Encode(sar)
++	})
++	// Start the server
++	server := &http.Server{
++		Addr:      "localhost:4321",
++		TLSConfig: tlsConfig,
++	}
++	fmt.Println("Starting HTTPS server on https://localhost:4321, config file: ", webhookConfigFile)
++	log.Fatal(server.ListenAndServeTLS("", ""))
++}*/
++
++// TestAuthzSelectorsLibraryEnabled ensures that the authzselectors library feature enablement works properly.
++// CEL envs and compilers cached per process mean this must be the only test in this package.
++func TestConditionalAuthz(t *testing.T) {
++	/*if _, initialized := environment.AuthzSelectorsLibraryEnabled(); initialized {
++		// This ensures CEL environments don't get initialized during init(),
++		// before they can be informed by configured feature gates.
++		// If this check fails, uncomment the debug.PrintStack() when the authz selectors
++		// library is first initialized to find the culprit, and modify it to be lazily initialized on first use.
++		t.Fatalf("authz selector library was initialized before feature gates were finalized (possibly from an init() or package variable)")
++	}*/
++
++	featureEnabled := true
++	webhookConfigFile := "/tmp/webhook-config.yaml"
++
++	// Start the server with the desired feature enablement
++	server, err := apiservertesting.StartTestServer(t, nil, []string{
++		fmt.Sprintf("--feature-gates=ConditionalAuthorization=%v", featureEnabled),
++		"--authorization-webhook-config-file=" + webhookConfigFile,
++		"--authorization-mode=Webhook",
++		"--authorization-webhook-version=v1",
++	}, framework.SharedEtcd())
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(server.TearDownFn)
++
++	// Ensure the authz selectors library was initialzed and saw the right feature enablement
++	/*if gotEnabled, initialized := environment.AuthzSelectorsLibraryEnabled(); !initialized {
++		t.Fatalf("authz selector library was not initialized during API server construction")
++	} else if gotEnabled != featureEnabled {
++		t.Fatalf("authz selector library enabled=%v, expected %v", gotEnabled, featureEnabled)
++	}*/
++
++	// Attempt to create API objects using the fieldSelector and labelSelector authorizer functions,
++	// and ensure they are only allowed when the feature is enabled.
++
++	cfg := rest.CopyConfig(server.ClientConfig)
++	cfg.Impersonate.UserName = "system:serviceaccount:default:default"
++	cfg.Impersonate.Groups = []string{"system:serviceaccounts"}
++
++	c, err := kubernetes.NewForConfig(cfg)
++	if err != nil {
++		t.Fatalf("Failed to create clientset: %v", err)
++	}
++
++	ctx := context.Background()
++	ctx, cancel := context.WithCancel(ctx)
++	t.Cleanup(cancel)
++	sec := &corev1.Secret{
++		ObjectMeta: metav1.ObjectMeta{
++			Name:      "foo",
++			Namespace: "default",
++			Labels: map[string]string{
++				"foo": "bar",
++			},
++		},
++		StringData: map[string]string{
++			"hello": "hello",
++		},
++	}
++	sec, err = c.CoreV1().Secrets("default").Create(ctx, sec, metav1.CreateOptions{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	fmt.Println("secret created: ", sec)
++
++	selfSAR, err := c.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, &authorizationv1.SelfSubjectAccessReview{
++		Spec: authorizationv1.SelfSubjectAccessReviewSpec{
++			ResourceAttributes: &authorizationv1.ResourceAttributes{
++				Group:    "",
++				Resource: "secrets",
++				Verb:     "create",
++				Version:  "v1",
++			},
++		},
++	}, metav1.CreateOptions{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Errorf("selfSAR: %+v", selfSAR)
++}
+diff --git a/test/integration/apiserver/cel/conditionalauthz/main_test.go b/test/integration/apiserver/cel/conditionalauthz/main_test.go
+new file mode 100644
+index 00000000000..442ccff602e
+--- /dev/null
++++ b/test/integration/apiserver/cel/conditionalauthz/main_test.go
+@@ -0,0 +1,24 @@
++/*
++Copyright 2024 The Kubernetes Authors.
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++    http://www.apache.org/licenses/LICENSE-2.0
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++See the License for the specific language governing permissions and
++limitations under the License.
++*/
++
++package conditionalauthz
++
++import (
++	"testing"
++
++	"k8s.io/kubernetes/test/integration/framework"
++)
++
++func TestMain(m *testing.M) {
++	framework.EtcdMain(m.Run)
++}
+-- 
+2.50.1 (Apple Git-155)
+

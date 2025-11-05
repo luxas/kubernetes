@@ -1,0 +1,264 @@
+From 39b85a4e1b522d3fd64838ff0a3164494d44ca98 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Lucas=20K=C3=A4ldstr=C3=B6m?= <lucas.kaldstrom@upbound.io>
+Date: Fri, 31 Oct 2025 12:36:59 +0200
+Subject: [PATCH 06/11] end to end demo working!
+
+---
+ pkg/kubeapiserver/options/plugins.go          |   1 -
+ .../authorization/subjectaccessreview/rest.go |   9 +-
+ .../conditionsenforcer/conditionsenforcer.go  |   4 +-
+ .../apiserver/pkg/server/options/admission.go |   2 +-
+ test.go                                       | 154 ++++++++++++++++++
+ .../conditionalauthz/conditionalauthz_test.go |   1 +
+ 6 files changed, 164 insertions(+), 7 deletions(-)
+ create mode 100644 test.go
+
+diff --git a/pkg/kubeapiserver/options/plugins.go b/pkg/kubeapiserver/options/plugins.go
+index 656f9f6bd23..26349e70838 100644
+--- a/pkg/kubeapiserver/options/plugins.go
++++ b/pkg/kubeapiserver/options/plugins.go
+@@ -151,7 +151,6 @@ func RegisterAllAdmissionPlugins(plugins *admission.Plugins) {
+ 	ctbattest.Register(plugins)
+ 	certsubjectrestriction.Register(plugins)
+ 	podtopologylabels.Register(plugins)
+-	conditionsenforcer.Register(plugins)
+ }
+ 
+ // DefaultOffAdmissionPlugins get admission plugins off by default for kube-apiserver.
+diff --git a/pkg/registry/authorization/subjectaccessreview/rest.go b/pkg/registry/authorization/subjectaccessreview/rest.go
+index 1fff3863fcd..ac4b132b861 100644
+--- a/pkg/registry/authorization/subjectaccessreview/rest.go
++++ b/pkg/registry/authorization/subjectaccessreview/rest.go
+@@ -24,7 +24,6 @@ import (
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+ 	"k8s.io/apimachinery/pkg/runtime"
+ 	"k8s.io/apiserver/pkg/authorization/authorizer"
+-	"k8s.io/apiserver/pkg/features"
+ 	genericfeatures "k8s.io/apiserver/pkg/features"
+ 	"k8s.io/apiserver/pkg/registry/rest"
+ 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+@@ -85,7 +84,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation
+ 
+ 	authorizationAttributes := authorizationutil.AuthorizationAttributesFrom(subjectAccessReview.Spec)
+ 
+-	var decision authorizer.Decision
++	/*var decision authorizer.Decision
+ 	var reason string
+ 	var conditionsEnforcer authorizer.ConditionsEnforcer
+ 	var evaluationErr error
+@@ -101,8 +100,10 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation
+ 	if utilfeature.DefaultFeatureGate.Enabled(features.ConditionalAuthorization) {
+ 		decision, reason, conditionsEnforcer, evaluationErr = authorizer.AuthorizeWithConditionalSupport(ctx, authorizationAttributes, r.authorizer)
+ 	} else {
+-		decision, reason, evaluationErr = r.authorizer.Authorize(ctx, authorizationAttributes)
+-	}
++
++	}*/
++
++	decision, reason, evaluationErr := r.authorizer.Authorize(ctx, authorizationAttributes)
+ 
+ 	subjectAccessReview.Status = authorizationapi.SubjectAccessReviewStatus{
+ 		Allowed: (decision == authorizer.DecisionAllow),
+diff --git a/staging/src/k8s.io/apiserver/pkg/admission/plugin/authorizer/conditionsenforcer/conditionsenforcer.go b/staging/src/k8s.io/apiserver/pkg/admission/plugin/authorizer/conditionsenforcer/conditionsenforcer.go
+index b05b99a5a82..c248d2cb00b 100644
+--- a/staging/src/k8s.io/apiserver/pkg/admission/plugin/authorizer/conditionsenforcer/conditionsenforcer.go
++++ b/staging/src/k8s.io/apiserver/pkg/admission/plugin/authorizer/conditionsenforcer/conditionsenforcer.go
+@@ -45,7 +45,9 @@ var _ genericadmissioninit.WantsExternalKubeClientSet = &ConditionalAuthorizatio
+ var _ genericadmissioninit.WantsFeatures = &ConditionalAuthorizationEnforcer{}
+ 
+ func NewConditionalAuthorizationEnforcer() *ConditionalAuthorizationEnforcer {
+-	return &ConditionalAuthorizationEnforcer{}
++	return &ConditionalAuthorizationEnforcer{
++		enableBuiltinCEL: true,
++	}
+ }
+ 
+ type ConditionalAuthorizationEnforcer struct {
+diff --git a/staging/src/k8s.io/apiserver/pkg/server/options/admission.go b/staging/src/k8s.io/apiserver/pkg/server/options/admission.go
+index d0fe03350f7..4e2ff3265c3 100644
+--- a/staging/src/k8s.io/apiserver/pkg/server/options/admission.go
++++ b/staging/src/k8s.io/apiserver/pkg/server/options/admission.go
+@@ -226,7 +226,7 @@ func (a *AdmissionOptions) Validate() []error {
+ 	}
+ 
+ 	if utilfeature.DefaultFeatureGate.Enabled(features.ConditionalAuthorization) {
+-		if !registeredPlugins.Has(conditionsenforcer.PluginName) {
++		if !enablePlugins.Has(conditionsenforcer.PluginName) {
+ 			errs = append(errs, fmt.Errorf("conditional authorization feature is enabled, but mandatory admission plugin %s is not registered", conditionsenforcer.PluginName))
+ 		}
+ 	}
+diff --git a/test.go b/test.go
+new file mode 100644
+index 00000000000..1adc0e36b4d
+--- /dev/null
++++ b/test.go
+@@ -0,0 +1,154 @@
++package main
++
++import (
++	"crypto/rand"
++	"crypto/rsa"
++	"crypto/tls"
++	"crypto/x509"
++	"crypto/x509/pkix"
++	"encoding/base64"
++	"encoding/json"
++	"encoding/pem"
++	"fmt"
++	"io"
++	"log"
++	"math/big"
++	"net/http"
++	"os"
++	"time"
++
++	authorizationv1 "k8s.io/api/authorization/v1"
++)
++
++func main() {
++
++	/*tmpDir, err := os.MkdirTemp("", "kubernetes-kube-apiserver")
++	if err != nil {
++		log.Fatalf("Failed to create temp dir: %v", err)
++	}
++	defer os.RemoveAll(tmpDir)*/
++
++	// Generate a private key
++	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
++	if err != nil {
++		log.Fatalf("Failed to generate private key: %v", err)
++	}
++
++	// Create certificate template
++	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
++	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
++	if err != nil {
++		log.Fatalf("Failed to generate serial number: %v", err)
++	}
++
++	template := x509.Certificate{
++		SerialNumber: serialNumber,
++		Subject: pkix.Name{
++			Organization: []string{"Test Company"},
++			CommonName:   "localhost",
++		},
++		DNSNames:              []string{"localhost"},
++		NotBefore:             time.Now(),
++		NotAfter:              time.Now().Add(365 * 24 * time.Hour), // Valid for 1 year
++		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
++		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
++		BasicConstraintsValid: true,
++	}
++
++	// Create certificate using the template and private key
++	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &privateKey.PublicKey, privateKey)
++	if err != nil {
++		log.Fatalf("Failed to create certificate: %v", err)
++	}
++
++	certBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
++
++	webhookConfig := `
++apiVersion: v1
++# kind of the API object
++kind: Config
++# clusters refers to the remote service.
++clusters:
++- name: authz-webhook
++  cluster:
++    # CA for verifying the remote service.
++    certificate-authority-data: ` + base64.StdEncoding.EncodeToString(certBytes) + `
++    # URL of remote service to query. Must use 'https'. May not include parameters.
++    server: https://localhost:4321/authorize
++
++# users refers to the API Server's webhook configuration.
++users:
++  - name: kube-apiserver
++    user:
++      token: abce
++
++# kubeconfig files require a context. Provide one for the API Server.
++current-context: authz-webhook
++contexts:
++- context:
++    cluster: authz-webhook
++    user: kube-apiserver
++  name: authz-webhook
++`
++
++	webhookConfigFile := "/tmp/webhook-config.yaml"
++	if err := os.WriteFile(webhookConfigFile, []byte(webhookConfig), 0644); err != nil {
++		log.Fatalf("Failed to write webhook config file: %v", err)
++	}
++
++	// Set up the HTTPS server
++	cert, err := tls.X509KeyPair(
++		certBytes,
++		pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(privateKey)}),
++	)
++	if err != nil {
++		log.Fatalf("Failed to load X509 key pair: %v", err)
++	}
++
++	tlsConfig := &tls.Config{
++		Certificates: []tls.Certificate{cert},
++	}
++
++	// Create a simple handler
++	http.HandleFunc("/authorize", func(w http.ResponseWriter, r *http.Request) {
++		sar := &authorizationv1.SubjectAccessReview{}
++		if err := json.NewDecoder(r.Body).Decode(sar); err != nil {
++			http.Error(w, err.Error(), http.StatusBadRequest)
++			return
++		}
++		sar.Status.Allowed = false
++		sar.Status.Denied = false
++
++		if sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "selfsubjectaccessreviews" {
++			sar.Status.Allowed = true
++		}
++
++		// Respond by NoOpinion to everything but the default service account's secret requests
++		if sar.Spec.User == "system:serviceaccount:default:default" && sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "secrets" {
++			sar.Status.ConditionsChain = []authorizationv1.SubjectAccessReviewConditionSet{
++				{
++					Conditions: []authorizationv1.SubjectAccessReviewCondition{
++						{
++							ID:        "labels-foo-bar",
++							Type:      "k8s.io/authorization-cel",
++							Effect:    authorizationv1.SubjectAccessReviewConditionEffectAllow,
++							Condition: "has(object.metadata.labels) && has(object.metadata.labels.foo) && object.metadata.labels.foo == 'bar'",
++						},
++					},
++				},
++			}
++		}
++
++		mw := io.MultiWriter(os.Stdout, w)
++		json.NewEncoder(mw).Encode(sar)
++	})
++
++	// Start the server
++	server := &http.Server{
++		Addr:      "localhost:4321",
++		TLSConfig: tlsConfig,
++	}
++
++	fmt.Println("Starting HTTPS server on https://localhost:4321, config file: ", webhookConfigFile)
++	log.Fatal(server.ListenAndServeTLS("", ""))
++}
+diff --git a/test/integration/apiserver/cel/conditionalauthz/conditionalauthz_test.go b/test/integration/apiserver/cel/conditionalauthz/conditionalauthz_test.go
+index 080c2e84056..c8e81784d88 100644
+--- a/test/integration/apiserver/cel/conditionalauthz/conditionalauthz_test.go
++++ b/test/integration/apiserver/cel/conditionalauthz/conditionalauthz_test.go
+@@ -141,6 +141,7 @@ func TestConditionalAuthz(t *testing.T) {
+ 	// Start the server with the desired feature enablement
+ 	server, err := apiservertesting.StartTestServer(t, nil, []string{
+ 		fmt.Sprintf("--feature-gates=ConditionalAuthorization=%v", featureEnabled),
++		"--enable-admission-plugins=AuthorizationConditionsEnforcer",
+ 		"--authorization-webhook-config-file=" + webhookConfigFile,
+ 		"--authorization-mode=Webhook",
+ 		"--authorization-webhook-version=v1",
+-- 
+2.50.1 (Apple Git-155)
+

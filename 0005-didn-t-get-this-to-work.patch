@@ -1,0 +1,24 @@
+From 9163c32de244ede99e867ced375073d3d9bc652a Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Lucas=20K=C3=A4ldstr=C3=B6m?= <lucas.kaldstrom@upbound.io>
+Date: Fri, 31 Oct 2025 12:03:24 +0200
+Subject: [PATCH 05/11] didn't get this to work
+
+---
+ hack/update-codegen.sh | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/hack/update-codegen.sh b/hack/update-codegen.sh
+index e9d3974858d..d7b20b0d7f2 100755
+--- a/hack/update-codegen.sh
++++ b/hack/update-codegen.sh
+@@ -899,7 +899,6 @@ function indent() {
+ function codegen::subprojects() {
+     # Call generation on sub-projects.
+     local subs=(
+-        staging/src/k8s.io/code-generator/examples
+         staging/src/k8s.io/kube-aggregator
+         staging/src/k8s.io/sample-apiserver
+         staging/src/k8s.io/sample-controller
+-- 
+2.50.1 (Apple Git-155)
+

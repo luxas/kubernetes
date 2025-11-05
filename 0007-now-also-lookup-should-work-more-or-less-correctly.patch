@@ -1,0 +1,304 @@
+From 58800c99e11434ad7a241983dbd3c8c8e4a1eb5f Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Lucas=20K=C3=A4ldstr=C3=B6m?= <lucas.kaldstrom@upbound.io>
+Date: Fri, 31 Oct 2025 13:43:24 +0200
+Subject: [PATCH 07/11] now also lookup should work more or less correctly
+
+---
+ pkg/apis/authorization/types.go               | 12 +++
+ .../selfsubjectaccessreview/rest.go           | 35 ++++++++-
+ .../src/k8s.io/api/authorization/v1/types.go  | 13 +++-
+ .../authorization/authorizer/conditional.go   | 77 +++++++++++++++----
+ test/integration/framework/etcd.go            |  7 ++
+ 5 files changed, 124 insertions(+), 20 deletions(-)
+
+diff --git a/pkg/apis/authorization/types.go b/pkg/apis/authorization/types.go
+index 95d54b0bc4c..b69dbfdeb1d 100644
+--- a/pkg/apis/authorization/types.go
++++ b/pkg/apis/authorization/types.go
+@@ -219,8 +219,20 @@ type SubjectAccessReviewStatus struct {
+ }
+ 
+ type SubjectAccessReviewConditionSet struct {
++	// Allowed specifies whether this condition set is unconditionally allowed.
++	// Mutually exclusive with Denied and Conditions.
++	Allowed bool
++	// Denied specifies whether this condition set is unconditionally denied.
++	// Mutually exclusive with Allowed and Conditions.
++	Denied bool
++
++	// FailureMode specifies the failure mode for this condition set.
++	// Only relevant if the conditions are non-null.
++	FailureMode string
++
+ 	// Conditions is an unordered set of conditions that should be evaluated against admission attributes, to determine
+ 	// whether this authorizer allows the request.
++	// Mutually exclusive with Allowed and Denied.
+ 	//
+ 	// +listType=map
+ 	// +listMapKey=id
+diff --git a/pkg/registry/authorization/selfsubjectaccessreview/rest.go b/pkg/registry/authorization/selfsubjectaccessreview/rest.go
+index a64a84cabfa..27bd0a87365 100644
+--- a/pkg/registry/authorization/selfsubjectaccessreview/rest.go
++++ b/pkg/registry/authorization/selfsubjectaccessreview/rest.go
+@@ -25,6 +25,7 @@ import (
+ 	"k8s.io/apimachinery/pkg/runtime"
+ 	"k8s.io/apiserver/pkg/authorization/authorizer"
+ 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
++	"k8s.io/apiserver/pkg/features"
+ 	genericfeatures "k8s.io/apiserver/pkg/features"
+ 	"k8s.io/apiserver/pkg/registry/rest"
+ 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+@@ -94,13 +95,45 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation
+ 		authorizationAttributes = authorizationutil.NonResourceAttributesFrom(userToCheck, *selfSAR.Spec.NonResourceAttributes)
+ 	}
+ 
+-	decision, reason, evaluationErr := r.authorizer.Authorize(ctx, authorizationAttributes)
++	var decision authorizer.Decision
++	var reason string
++	var conditionsEnforcer authorizer.ConditionsEnforcer
++	var evaluationErr error
++	if utilfeature.DefaultFeatureGate.Enabled(features.ConditionalAuthorization) {
++		decision, reason, conditionsEnforcer, evaluationErr = authorizer.AuthorizeWithConditionalSupport(ctx, authorizationAttributes, r.authorizer)
++	} else {
++		decision, reason, evaluationErr = r.authorizer.Authorize(ctx, authorizationAttributes)
++	}
+ 
+ 	selfSAR.Status = authorizationapi.SubjectAccessReviewStatus{
+ 		Allowed: (decision == authorizer.DecisionAllow),
+ 		Denied:  (decision == authorizer.DecisionDeny),
+ 		Reason:  reason,
+ 	}
++
++	if decision.IsConditional() {
++		selfSAR.Status.ConditionsChain = make([]authorizationapi.SubjectAccessReviewConditionSet, 0, len(conditionsEnforcer.OrderedConditionSets(ctx, authorizationAttributes)))
++		for _, conditionSet := range conditionsEnforcer.OrderedConditionSets(ctx, authorizationAttributes) {
++
++			conditions := make([]authorizationapi.SubjectAccessReviewCondition, 0, len(conditionSet.GetConditions()))
++			for _, condition := range conditionSet.GetConditions() {
++				conditions = append(conditions, authorizationapi.SubjectAccessReviewCondition{
++					ID:          condition.ID,
++					Effect:      authorizationapi.SubjectAccessReviewConditionEffect(condition.Effect),
++					Type:        string(condition.Type),
++					Condition:   condition.Condition,
++					Description: condition.Description,
++				})
++			}
++			selfSAR.Status.ConditionsChain = append(selfSAR.Status.ConditionsChain, authorizationapi.SubjectAccessReviewConditionSet{
++				Allowed: conditionSet.UnconditionallyAllowed(),
++				Denied:  conditionSet.UnconditionallyDenied(),
++				// TODO: FailureMode here?
++				Conditions: conditions,
++			})
++		}
++	}
++
+ 	selfSAR.Status.EvaluationError = authorizationutil.BuildEvaluationError(evaluationErr, authorizationAttributes)
+ 
+ 	return selfSAR, nil
+diff --git a/staging/src/k8s.io/api/authorization/v1/types.go b/staging/src/k8s.io/api/authorization/v1/types.go
+index 0274d3a4ac5..616ff95c4a5 100644
+--- a/staging/src/k8s.io/api/authorization/v1/types.go
++++ b/staging/src/k8s.io/api/authorization/v1/types.go
+@@ -269,9 +269,16 @@ type SubjectAccessReviewStatus struct {
+ }
+ 
+ type SubjectAccessReviewConditionSet struct {
+-	// TODO: Add FailureMode here?
++	// Allowed specifies whether this condition set is unconditionally allowed.
++	// Mutually exclusive with Denied and Conditions.
++	Allowed bool `json:"allowed,omitempty" protobuf:"varint,1,opt,name=allowed"`
++	// Denied specifies whether this condition set is unconditionally denied.
++	// Mutually exclusive with Allowed and Conditions.
++	Denied bool `json:"denied,omitempty" protobuf:"varint,2,opt,name=denied"`
+ 
+-	// TODO: Add UnconditionalDecision here?
++	// FailureMode specifies the failure mode for this condition set.
++	// Only relevant if the conditions are non-null.
++	FailureMode string `json:"failureMode,omitempty" protobuf:"bytes,3,opt,name=failureMode"`
+ 
+ 	// Conditions is an unordered set of conditions that should be evaluated against admission attributes, to determine
+ 	// whether this authorizer allows the request.
+@@ -279,7 +286,7 @@ type SubjectAccessReviewConditionSet struct {
+ 	// +listType=map
+ 	// +listMapKey=id
+ 	// +optional
+-	Conditions []SubjectAccessReviewCondition `json:"conditions" protobuf:"bytes,1,rep,name=conditions"`
++	Conditions []SubjectAccessReviewCondition `json:"conditions,omitempty" protobuf:"bytes,4,rep,name=conditions"`
+ }
+ 
+ type SubjectAccessReviewCondition struct {
+diff --git a/staging/src/k8s.io/apiserver/pkg/authorization/authorizer/conditional.go b/staging/src/k8s.io/apiserver/pkg/authorization/authorizer/conditional.go
+index 0b1f00fd714..9c58b32be62 100644
+--- a/staging/src/k8s.io/apiserver/pkg/authorization/authorizer/conditional.go
++++ b/staging/src/k8s.io/apiserver/pkg/authorization/authorizer/conditional.go
+@@ -13,6 +13,7 @@ import (
+ 	"k8s.io/apiserver/pkg/authentication/user"
+ 	genericfeatures "k8s.io/apiserver/pkg/features"
+ 	utilfeature "k8s.io/apiserver/pkg/util/feature"
++	"k8s.io/utils/ptr"
+ )
+ 
+ /*
+@@ -136,11 +137,14 @@ const (
+ type ConditionsEnforcer interface {
+ 	EnforceConditions(ctx context.Context, admissionAttrs ConditionAttributes) (Decision, string, error)
+ 
++	OrderedConditionSets(ctx context.Context, authzAttrs Attributes) []*ConditionSet
++
+ 	WithBuiltinConditionsResolvers(builtinConditionsResolvers ...BuiltinConditionsResolver) ConditionsEnforcer
+ }
+ 
+ type ConditionSet struct {
+-	conditions []Condition
++	conditions            []Condition
++	unconditionalDecision *Decision
+ }
+ 
+ func NewConditionSet(conditions ...Condition) (*ConditionSet, error) {
+@@ -148,7 +152,28 @@ func NewConditionSet(conditions ...Condition) (*ConditionSet, error) {
+ 	return &ConditionSet{conditions: conditions}, nil
+ }
+ 
++func NewAlwaysAllowConditionSet() *ConditionSet {
++	return &ConditionSet{unconditionalDecision: ptr.To(DecisionAllow)}
++}
++
++func NewAlwaysDenyConditionSet() *ConditionSet {
++	return &ConditionSet{unconditionalDecision: ptr.To(DecisionDeny)}
++}
++
++func (c *ConditionSet) UnconditionallyAllowed() bool {
++	return c.unconditionalDecision != nil && *c.unconditionalDecision == DecisionAllow
++}
++func (c *ConditionSet) UnconditionallyDenied() bool {
++	return c.unconditionalDecision != nil && *c.unconditionalDecision == DecisionDeny
++}
++
+ func (c *ConditionSet) CanBecomeAuthorized() bool {
++	if c.UnconditionallyAllowed() {
++		return true
++	}
++	if c.UnconditionallyDenied() {
++		return false
++	}
+ 	for _, condition := range c.conditions {
+ 		if condition.Effect == ConditionEffectAllow {
+ 			return true
+@@ -207,6 +232,7 @@ func AuthorizeWithConditionalSupport(ctx context.Context, attrs Attributes, auth
+ 		return decision, reason, nil, err
+ 	}
+ 	// Only allow conditional authorization if the feature is enabled.
++	// TODO: Should this automatically result in a Deny decision?
+ 	if !utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
+ 		return DecisionNoOpinion, "", nil, ErrConditionalAuthorizationFeatureNotEnabled
+ 	}
+@@ -291,9 +317,8 @@ func NewConditionalDecision(ctx context.Context, self ConditionalAuthorizer, con
+ 	// TODO: Remember to encode the conditions in the SAR response of the API server self-check endpoints.
+ 
+ 	enforcer.precomputedConditionSets = append(enforcer.precomputedConditionSets, precomputedConditionSet{
+-		unconditionalAllow: false,
+-		conditions:         conditions,
+-		self:               self,
++		conditions: conditions,
++		self:       self,
+ 	})
+ 
+ 	if conditions.CanBecomeAuthorized() {
+@@ -309,18 +334,16 @@ func UnconditionalAllowAfterConditionalDeny(ctx context.Context) (Decision, stri
+ 	}
+ 
+ 	enforcer.precomputedConditionSets = append(enforcer.precomputedConditionSets, precomputedConditionSet{
+-		unconditionalAllow: true,
+-		conditions:         nil,
+-		self:               nil,
++		conditions: NewAlwaysAllowConditionSet(),
++		self:       nil,
+ 	})
+ 
+ 	return DecisionConditionalAllow, "conditionally authorized", nil
+ }
+ 
+ type precomputedConditionSet struct {
+-	unconditionalAllow bool
+-	conditions         *ConditionSet
+-	self               ConditionalAuthorizer
++	conditions *ConditionSet
++	self       ConditionalAuthorizer
+ }
+ 
+ type conditionsEnforcer struct {
+@@ -331,10 +354,7 @@ type conditionsEnforcer struct {
+ 
+ func (e *conditionsEnforcer) canBecomeAuthorized() bool {
+ 	for _, precomputedConditionSet := range e.precomputedConditionSets {
+-		if precomputedConditionSet.unconditionalAllow {
+-			return true
+-		}
+-		if precomputedConditionSet.conditions != nil && precomputedConditionSet.conditions.CanBecomeAuthorized() {
++		if precomputedConditionSet.conditions.CanBecomeAuthorized() {
+ 			return true
+ 		}
+ 	}
+@@ -353,10 +373,10 @@ func (e *conditionsEnforcer) EnforceConditions(ctx context.Context, admissionAtt
+ 
+ 	for _, precomputedConditionSet := range e.precomputedConditionSets {
+ 		// This only happens if the authorization chain got responses like ConditionalDeny,ConditionalDeny,Allow.
+-		// unconditionalAllow is true for the last item in precomputedConditionSets in that example. If he code
++		// UnconditionallyAllowed is true for the last item in precomputedConditionSets in that example. If he code
+ 		// reaches this point, it means that the previous ConditionalDeny responses were evaluated to NoOpinion,
+ 		// and thus is it safe to return Allow here.
+-		if precomputedConditionSet.unconditionalAllow {
++		if precomputedConditionSet.conditions.UnconditionallyAllowed() {
+ 			return DecisionAllow, "", nil
+ 		}
+ 
+@@ -460,3 +480,28 @@ func (e *conditionsEnforcer) WithBuiltinConditionsResolvers(builtinConditionsRes
+ 	e.builtinConditionsResolvers = append(e.builtinConditionsResolvers, builtinConditionsResolvers...)
+ 	return e
+ }
++
++func (e *conditionsEnforcer) OrderedConditionSets(ctx context.Context, authzAttrs Attributes) []*ConditionSet {
++	conditionSets := make([]*ConditionSet, 0, len(e.precomputedConditionSets))
++	for _, precomputedConditionSet := range e.precomputedConditionSets {
++		conditionSets = append(conditionSets, precomputedConditionSet.conditions)
++	}
++
++	for _, authorizer := range e.authorizerChain {
++		// TODO: Figure out error handling here.
++		decision, _, conditionsEnforcer, _ := AuthorizeWithConditionalSupport(ctx, authzAttrs, authorizer)
++		if decision == DecisionAllow {
++			conditionSets = append(conditionSets, NewAlwaysAllowConditionSet())
++			break
++		}
++		if decision == DecisionDeny {
++			conditionSets = append(conditionSets, NewAlwaysDenyConditionSet())
++			break
++		}
++
++		if decision.IsConditional() {
++			conditionSets = append(conditionSets, conditionsEnforcer.OrderedConditionSets(ctx, authzAttrs)...)
++		}
++	}
++	return conditionSets
++}
+diff --git a/test/integration/framework/etcd.go b/test/integration/framework/etcd.go
+index 1c0f6699433..9a9a18cdf15 100644
+--- a/test/integration/framework/etcd.go
++++ b/test/integration/framework/etcd.go
+@@ -260,6 +260,13 @@ func EtcdMain(tests func() int) {
+ 	goleakOpts := IgnoreBackgroundGoroutines()
+ 
+ 	goleakOpts = append(goleakOpts,
++		// The Webhook Authorizer is leaking a goroutine by executing a HTTP/2 request that invokes
++		// -> net/http.(*Transport).startDialConnForLocked,
++		// -> golang.org/x/net/http2.(*clientConnPool).addConnIfNeeded,
++		// -> http2.(*Transport).newClientConn,
++		// -> internal/poll.runtime_pollWait
++		goleak.IgnoreTopFunction("internal/poll.runtime_pollWait"),
++
+ 		// lumberjack leaks a goroutine:
+ 		// https://github.com/natefinch/lumberjack/issues/56 This affects tests
+ 		// using --audit-log-path (like
+-- 
+2.50.1 (Apple Git-155)
+

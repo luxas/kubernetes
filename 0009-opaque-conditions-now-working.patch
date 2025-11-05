@@ -1,0 +1,889 @@
+From 711b0b85739901f6f30522fc152445d23eaad9ac Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Lucas=20K=C3=A4ldstr=C3=B6m?= <lucas.kaldstrom@upbound.io>
+Date: Fri, 31 Oct 2025 21:44:09 +0200
+Subject: [PATCH 09/11] opaque conditions now working!
+
+---
+ pkg/apis/authorization/types.go               | 141 ++++++++++++++
+ pkg/apis/authorization/v1alpha1/doc.go        |  24 +++
+ pkg/apis/authorization/v1alpha1/register.go   |  48 +++++
+ .../k8s.io/api/authorization/v1alpha1/doc.go  |  25 +++
+ .../api/authorization/v1alpha1/register.go    |  52 ++++++
+ .../api/authorization/v1alpha1/types.go       | 145 +++++++++++++++
+ .../authorization/authorizer/conditional.go   |  14 +-
+ .../plugin/pkg/authorizer/webhook/webhook.go  | 176 +++++++++++++++---
+ test.go                                       |  81 +++++---
+ 9 files changed, 658 insertions(+), 48 deletions(-)
+ create mode 100644 pkg/apis/authorization/v1alpha1/doc.go
+ create mode 100644 pkg/apis/authorization/v1alpha1/register.go
+ create mode 100644 staging/src/k8s.io/api/authorization/v1alpha1/doc.go
+ create mode 100644 staging/src/k8s.io/api/authorization/v1alpha1/register.go
+ create mode 100644 staging/src/k8s.io/api/authorization/v1alpha1/types.go
+
+diff --git a/pkg/apis/authorization/types.go b/pkg/apis/authorization/types.go
+index b69dbfdeb1d..d080baf9f65 100644
+--- a/pkg/apis/authorization/types.go
++++ b/pkg/apis/authorization/types.go
+@@ -18,6 +18,10 @@ package authorization
+ 
+ import (
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
++	"k8s.io/apimachinery/pkg/runtime"
++	"k8s.io/apimachinery/pkg/types"
++	"k8s.io/kubernetes/pkg/apis/admission"
++	"k8s.io/kubernetes/pkg/apis/authentication"
+ )
+ 
+ // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+@@ -327,3 +331,140 @@ type NonResourceRule struct {
+ 	// final step in the path.  "*" means all.
+ 	NonResourceURLs []string
+ }
++
++// AuthorizationConditionsReview types
++
++// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
++// +k8s:prerelease-lifecycle-gen:introduced=1.19
++
++// AuthorizationConditionsReview describes a request to evaluate authorization conditions.
++type AuthorizationConditionsReview struct {
++	metav1.TypeMeta
++	// Request describes the attributes for the authorization conditions request.
++	// +optional
++	Request *AuthorizationConditionsRequest
++	// Response describes the attributes for the authorization conditions response.
++	// +optional
++	Response *AuthorizationConditionsResponse
++}
++
++// AuthorizationConditionsRequest describes the authorization conditions request.
++type AuthorizationConditionsRequest struct {
++	// UID is an identifier for the individual request/response. It allows us to distinguish instances of requests which are
++	// otherwise identical (parallel requests, requests when earlier requests did not modify etc)
++	// The UID is meant to track the round trip (request/response) between the KAS and the WebHook, not the user request.
++	// It is suitable for correlating log entries between the webhook and apiserver, for either auditing or debugging.
++	// TODO: Does this need to be here?
++	UID types.UID
++	// Kind is the fully-qualified type of object being submitted (for example, v1.Pod or autoscaling.v1.Scale)
++	Kind metav1.GroupVersionKind
++	// Resource is the fully-qualified resource being requested (for example, v1.pods)
++	Resource metav1.GroupVersionResource
++	// SubResource is the subresource being requested, if any (for example, "status" or "scale")
++	// +optional
++	SubResource string
++
++	// RequestKind is the fully-qualified type of the original API request (for example, v1.Pod or autoscaling.v1.Scale).
++	// If this is specified and differs from the value in "kind", an equivalent match and conversion was performed.
++	//
++	// For example, if deployments can be modified via apps/v1 and apps/v1beta1, and a webhook registered a rule of
++	// `apiGroups:["apps"], apiVersions:["v1"], resources: ["deployments"]` and `matchPolicy: Equivalent`,
++	// an API request to apps/v1beta1 deployments would be converted and sent to the webhook
++	// with `kind: {group:"apps", version:"v1", kind:"Deployment"}` (matching the rule the webhook registered for),
++	// and `requestKind: {group:"apps", version:"v1beta1", kind:"Deployment"}` (indicating the kind of the original API request).
++	//
++	// See documentation for the "matchPolicy" field in the webhook configuration type for more details.
++	// +optional
++	RequestKind *metav1.GroupVersionKind
++	// RequestResource is the fully-qualified resource of the original API request (for example, v1.pods).
++	// If this is specified and differs from the value in "resource", an equivalent match and conversion was performed.
++	//
++	// For example, if deployments can be modified via apps/v1 and apps/v1beta1, and a webhook registered a rule of
++	// `apiGroups:["apps"], apiVersions:["v1"], resources: ["deployments"]` and `matchPolicy: Equivalent`,
++	// an API request to apps/v1beta1 deployments would be converted and sent to the webhook
++	// with `resource: {group:"apps", version:"v1", resource:"deployments"}` (matching the resource the webhook registered for),
++	// and `requestResource: {group:"apps", version:"v1beta1", resource:"deployments"}` (indicating the resource of the original API request).
++	//
++	// See documentation for the "matchPolicy" field in the webhook configuration type.
++	// +optional
++	RequestResource *metav1.GroupVersionResource
++	// RequestSubResource is the name of the subresource of the original API request, if any (for example, "status" or "scale")
++	// If this is specified and differs from the value in "subResource", an equivalent match and conversion was performed.
++	// See documentation for the "matchPolicy" field in the webhook configuration type.
++	// +optional
++	RequestSubResource string
++
++	// Name is the name of the object as presented in the request.  On a CREATE operation, the client may omit name and
++	// rely on the server to generate the name.  If that is the case, this field will contain an empty string.
++	// +optional
++	Name string
++	// Namespace is the namespace associated with the request (if any).
++	// +optional
++	Namespace string
++	// Operation is the operation being performed. This may be different than the operation
++	// requested. e.g. a patch can result in either a CREATE or UPDATE Operation.
++	Operation         admission.Operation
++	AuthorizationVerb string
++
++	// UserInfo is information about the requesting user
++	UserInfo authentication.UserInfo
++	// Object is the object from the incoming request.
++	// +optional
++	Object runtime.RawExtension
++	// OldObject is the existing object. Only populated for DELETE and UPDATE requests.
++	// +optional
++	OldObject runtime.RawExtension
++	// DryRun indicates that modifications will definitely not be persisted for this request.
++	// Defaults to false.
++	// +optional
++	DryRun *bool
++	// Options is the operation option structure of the operation being performed.
++	// e.g. `meta.k8s.io/v1.DeleteOptions` or `meta.k8s.io/v1.CreateOptions`. This may be
++	// different than the options the caller provided. e.g. for a patch request the performed
++	// Operation might be a CREATE, in which case the Options will a
++	// `meta.k8s.io/v1.CreateOptions` even though the caller provided `meta.k8s.io/v1.PatchOptions`.
++	// +optional
++	Options runtime.RawExtension
++
++	ConditionSet SubjectAccessReviewConditionSet
++}
++
++// AuthorizationConditionsResponse describes an authorization conditions response.
++type AuthorizationConditionsResponse struct {
++	// UID is an identifier for the individual request/response.
++	// This must be copied over from the corresponding AuthorizationConditionsRequest.
++	// TODO: Does this need to be here?
++	UID types.UID
++
++	// Allowed indicates whether or not the request is authorized according to the authorization conditions.
++	// Mutually exclusive with Denied.
++	// Allowed=false and Denied=false means that the authorizer has no NoOpinion on the request.
++	Allowed bool
++
++	// Denied indicates whether or not the request is denied according to the authorization conditions.
++	// Mutually exclusive with Allowed.
++	// Allowed=false and Denied=false means that the authorizer has no NoOpinion on the request.
++	Denied bool
++
++	// Result contains extra details into why an authorization conditions request was denied.
++	// This field IS NOT consulted in any way if "Allowed" is "true".
++	// +optional
++	Result *metav1.Status
++
++	// AuditAnnotations is an unstructured key value map set by remote admission controller (e.g. error=image-blacklisted).
++	// MutatingAdmissionWebhook and ValidatingAdmissionWebhook admission controller will prefix the keys with
++	// admission webhook name (e.g. imagepolicy.example.com/error=image-blacklisted). AuditAnnotations will be provided by
++	// the admission webhook to add additional context to the audit log for this request.
++	// TODO: Does this need to be here?
++	// +optional
++	AuditAnnotations map[string]string
++
++	// warnings is a list of warning messages to return to the requesting API client.
++	// Warning messages describe a problem the client making the API request should correct or be aware of.
++	// Limit warnings to 120 characters if possible.
++	// Warnings over 256 characters and large numbers of warnings may be truncated.
++	// TODO: Does this need to be here?
++	// +optional
++	// +listType=atomic
++	Warnings []string
++}
+diff --git a/pkg/apis/authorization/v1alpha1/doc.go b/pkg/apis/authorization/v1alpha1/doc.go
+new file mode 100644
+index 00000000000..5a4723aef60
+--- /dev/null
++++ b/pkg/apis/authorization/v1alpha1/doc.go
+@@ -0,0 +1,24 @@
++/*
++Copyright 2017 The Kubernetes Authors.
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++    http://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++See the License for the specific language governing permissions and
++limitations under the License.
++*/
++
++// +k8s:conversion-gen=k8s.io/kubernetes/pkg/apis/authorization
++// +k8s:conversion-gen-external-types=k8s.io/api/authorization/v1alpha1
++// +k8s:defaulter-gen=TypeMeta
++// +k8s:defaulter-gen-input=k8s.io/api/authorization/v1alpha1
++
++// +groupName=authorization.k8s.io
++
++package v1alpha1
+diff --git a/pkg/apis/authorization/v1alpha1/register.go b/pkg/apis/authorization/v1alpha1/register.go
+new file mode 100644
+index 00000000000..29ce7cc5b81
+--- /dev/null
++++ b/pkg/apis/authorization/v1alpha1/register.go
+@@ -0,0 +1,48 @@
++package v1alpha1
++
++/*
++Copyright 2017 The Kubernetes Authors.
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++    http://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++See the License for the specific language governing permissions and
++limitations under the License.
++*/
++
++import (
++	authorizationv1alpha1 "k8s.io/api/authorization/v1alpha1"
++	"k8s.io/apimachinery/pkg/runtime/schema"
++)
++
++// GroupName is the group name use in this package
++const GroupName = "authorization.k8s.io"
++
++// SchemeGroupVersion is group version used to register these objects
++var SchemeGroupVersion = schema.GroupVersion{Group: GroupName, Version: "v1alpha1"}
++
++// Resource takes an unqualified resource and returns a Group qualified GroupResource
++func Resource(resource string) schema.GroupResource {
++	return SchemeGroupVersion.WithResource(resource).GroupResource()
++}
++
++var (
++	// localSchemeBuilder extends the SchemeBuilder instance with the external types. In this package,
++	// defaulting and conversion init funcs are registered as well.
++	localSchemeBuilder = &authorizationv1alpha1.SchemeBuilder
++	// AddToScheme is a global function that registers this API group & version to a scheme
++	AddToScheme = localSchemeBuilder.AddToScheme
++)
++
++func init() {
++	// We only register manually written functions here. The registration of the
++	// generated functions takes place in the generated files. The separation
++	// makes the code compile even when the generated files are missing.
++	localSchemeBuilder.Register(addDefaultingFuncs)
++}
+diff --git a/staging/src/k8s.io/api/authorization/v1alpha1/doc.go b/staging/src/k8s.io/api/authorization/v1alpha1/doc.go
+new file mode 100644
+index 00000000000..796b4037aa9
+--- /dev/null
++++ b/staging/src/k8s.io/api/authorization/v1alpha1/doc.go
+@@ -0,0 +1,25 @@
++/*
++Copyright 2016 The Kubernetes Authors.
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++    http://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++See the License for the specific language governing permissions and
++limitations under the License.
++*/
++
++// +k8s:deepcopy-gen=package
++// +k8s:protobuf-gen=package
++// +k8s:openapi-gen=true
++// +k8s:prerelease-lifecycle-gen=true
++// +k8s:openapi-model-package=io.k8s.api.authorization.v1alpha1
++
++// +groupName=authorization.k8s.io
++
++package v1alpha1
+diff --git a/staging/src/k8s.io/api/authorization/v1alpha1/register.go b/staging/src/k8s.io/api/authorization/v1alpha1/register.go
+new file mode 100644
+index 00000000000..0dcaed463a9
+--- /dev/null
++++ b/staging/src/k8s.io/api/authorization/v1alpha1/register.go
+@@ -0,0 +1,52 @@
++/*
++Copyright 2015 The Kubernetes Authors.
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++    http://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++See the License for the specific language governing permissions and
++limitations under the License.
++*/
++
++package v1alpha1
++
++import (
++	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
++	"k8s.io/apimachinery/pkg/runtime"
++	"k8s.io/apimachinery/pkg/runtime/schema"
++)
++
++// GroupName is the group name use in this package
++const GroupName = "authorization.k8s.io"
++
++// SchemeGroupVersion is group version used to register these objects
++var SchemeGroupVersion = schema.GroupVersion{Group: GroupName, Version: "v1alpha1"}
++
++// Resource takes an unqualified resource and returns a Group qualified GroupResource
++func Resource(resource string) schema.GroupResource {
++	return SchemeGroupVersion.WithResource(resource).GroupResource()
++}
++
++var (
++	// TODO: move SchemeBuilder with zz_generated.deepcopy.go to k8s.io/api.
++	// localSchemeBuilder and AddToScheme will stay in k8s.io/kubernetes.
++	SchemeBuilder      = runtime.NewSchemeBuilder(addKnownTypes)
++	localSchemeBuilder = &SchemeBuilder
++	AddToScheme        = localSchemeBuilder.AddToScheme
++)
++
++// Adds the list of known types to the given scheme.
++func addKnownTypes(scheme *runtime.Scheme) error {
++	scheme.AddKnownTypes(SchemeGroupVersion,
++		&AuthorizationConditionsReview{},
++	)
++
++	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
++	return nil
++}
+diff --git a/staging/src/k8s.io/api/authorization/v1alpha1/types.go b/staging/src/k8s.io/api/authorization/v1alpha1/types.go
+new file mode 100644
+index 00000000000..f2a29aee532
+--- /dev/null
++++ b/staging/src/k8s.io/api/authorization/v1alpha1/types.go
+@@ -0,0 +1,145 @@
++package v1alpha1
++
++import (
++	admissionv1 "k8s.io/api/admission/v1"
++	authenticationv1 "k8s.io/api/authentication/v1"
++	authorizationv1 "k8s.io/api/authorization/v1"
++	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
++	"k8s.io/apimachinery/pkg/runtime"
++	"k8s.io/apimachinery/pkg/types"
++)
++
++// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
++// +k8s:prerelease-lifecycle-gen:introduced=1.19
++
++// AuthorizationConditionsReview describes a request to evaluate authorization conditions.
++type AuthorizationConditionsReview struct {
++	metav1.TypeMeta `json:",inline"`
++	// Request describes the attributes for the authorization conditions request.
++	// +optional
++	Request *AuthorizationConditionsRequest `json:"request,omitempty" protobuf:"bytes,1,opt,name=request"`
++	// Response describes the attributes for the authorization conditions response.
++	// +optional
++	Response *AuthorizationConditionsResponse `json:"response,omitempty" protobuf:"bytes,2,opt,name=response"`
++}
++
++// AuthorizationConditionsRequest describes the authorization conditions request.
++type AuthorizationConditionsRequest struct {
++	// UID is an identifier for the individual request/response. It allows us to distinguish instances of requests which are
++	// otherwise identical (parallel requests, requests when earlier requests did not modify etc)
++	// The UID is meant to track the round trip (request/response) between the KAS and the WebHook, not the user request.
++	// It is suitable for correlating log entries between the webhook and apiserver, for either auditing or debugging.
++	// TODO: Does this need to be here?
++	UID types.UID `json:"uid" protobuf:"bytes,1,opt,name=uid"`
++	// Kind is the fully-qualified type of object being submitted (for example, v1.Pod or autoscaling.v1.Scale)
++	Kind metav1.GroupVersionKind `json:"kind" protobuf:"bytes,2,opt,name=kind"`
++	// Resource is the fully-qualified resource being requested (for example, v1.pods)
++	Resource metav1.GroupVersionResource `json:"resource" protobuf:"bytes,3,opt,name=resource"`
++	// SubResource is the subresource being requested, if any (for example, "status" or "scale")
++	// +optional
++	SubResource string `json:"subResource,omitempty" protobuf:"bytes,4,opt,name=subResource"`
++
++	// RequestKind is the fully-qualified type of the original API request (for example, v1.Pod or autoscaling.v1.Scale).
++	// If this is specified and differs from the value in "kind", an equivalent match and conversion was performed.
++	//
++	// For example, if deployments can be modified via apps/v1 and apps/v1beta1, and a webhook registered a rule of
++	// `apiGroups:["apps"], apiVersions:["v1"], resources: ["deployments"]` and `matchPolicy: Equivalent`,
++	// an API request to apps/v1beta1 deployments would be converted and sent to the webhook
++	// with `kind: {group:"apps", version:"v1", kind:"Deployment"}` (matching the rule the webhook registered for),
++	// and `requestKind: {group:"apps", version:"v1beta1", kind:"Deployment"}` (indicating the kind of the original API request).
++	//
++	// See documentation for the "matchPolicy" field in the webhook configuration type for more details.
++	// +optional
++	RequestKind *metav1.GroupVersionKind `json:"requestKind,omitempty" protobuf:"bytes,14,opt,name=requestKind"`
++	// RequestResource is the fully-qualified resource of the original API request (for example, v1.pods).
++	// If this is specified and differs from the value in "resource", an equivalent match and conversion was performed.
++	//
++	// For example, if deployments can be modified via apps/v1 and apps/v1beta1, and a webhook registered a rule of
++	// `apiGroups:["apps"], apiVersions:["v1"], resources: ["deployments"]` and `matchPolicy: Equivalent`,
++	// an API request to apps/v1beta1 deployments would be converted and sent to the webhook
++	// with `resource: {group:"apps", version:"v1", resource:"deployments"}` (matching the resource the webhook registered for),
++	// and `requestResource: {group:"apps", version:"v1beta1", resource:"deployments"}` (indicating the resource of the original API request).
++	//
++	// See documentation for the "matchPolicy" field in the webhook configuration type.
++	// +optional
++	RequestResource *metav1.GroupVersionResource `json:"requestResource,omitempty" protobuf:"bytes,15,opt,name=requestResource"`
++	// RequestSubResource is the name of the subresource of the original API request, if any (for example, "status" or "scale")
++	// If this is specified and differs from the value in "subResource", an equivalent match and conversion was performed.
++	// See documentation for the "matchPolicy" field in the webhook configuration type.
++	// +optional
++	RequestSubResource string `json:"requestSubResource,omitempty" protobuf:"bytes,16,opt,name=requestSubResource"`
++
++	// Name is the name of the object as presented in the request.  On a CREATE operation, the client may omit name and
++	// rely on the server to generate the name.  If that is the case, this field will contain an empty string.
++	// +optional
++	Name string `json:"name,omitempty" protobuf:"bytes,5,opt,name=name"`
++	// Namespace is the namespace associated with the request (if any).
++	// +optional
++	Namespace string `json:"namespace,omitempty" protobuf:"bytes,6,opt,name=namespace"`
++	// Operation is the operation being performed. This may be different than the operation
++	// requested. e.g. a patch can result in either a CREATE or UPDATE Operation.
++	Operation         admissionv1.Operation `json:"operation" protobuf:"bytes,7,opt,name=operation"`
++	AuthorizationVerb string                `json:"authorizationVerb" protobuf:"bytes,8,opt,name=authorizationVerb"`
++
++	// UserInfo is information about the requesting user
++	UserInfo authenticationv1.UserInfo `json:"userInfo" protobuf:"bytes,9,opt,name=userInfo"`
++	// Object is the object from the incoming request.
++	// +optional
++	Object runtime.RawExtension `json:"object,omitempty" protobuf:"bytes,10,opt,name=object"`
++	// OldObject is the existing object. Only populated for DELETE and UPDATE requests.
++	// +optional
++	OldObject runtime.RawExtension `json:"oldObject,omitempty" protobuf:"bytes,11,opt,name=oldObject"`
++	// DryRun indicates that modifications will definitely not be persisted for this request.
++	// Defaults to false.
++	// +optional
++	DryRun *bool `json:"dryRun,omitempty" protobuf:"varint,12,opt,name=dryRun"`
++	// Options is the operation option structure of the operation being performed.
++	// e.g. `meta.k8s.io/v1.DeleteOptions` or `meta.k8s.io/v1.CreateOptions`. This may be
++	// different than the options the caller provided. e.g. for a patch request the performed
++	// Operation might be a CREATE, in which case the Options will a
++	// `meta.k8s.io/v1.CreateOptions` even though the caller provided `meta.k8s.io/v1.PatchOptions`.
++	// +optional
++	Options runtime.RawExtension `json:"options,omitempty" protobuf:"bytes,13,opt,name=options"`
++
++	ConditionSet authorizationv1.SubjectAccessReviewConditionSet `json:"conditionSet,omitempty" protobuf:"bytes,17,opt,name=conditionSet"`
++}
++
++// AuthorizationConditionsResponse describes an authorization conditions response.
++type AuthorizationConditionsResponse struct {
++	// UID is an identifier for the individual request/response.
++	// This must be copied over from the corresponding AuthorizationConditionsRequest.
++	// TODO: Does this need to be here?
++	UID types.UID `json:"uid" protobuf:"bytes,1,opt,name=uid"`
++
++	// Allowed indicates whether or not the request is authorized according to the authorization conditions.
++	// Mutually exclusive with Denied.
++	// Allowed=false and Denied=false means that the authorizer has no NoOpinion on the request.
++	Allowed bool `json:"allowed" protobuf:"varint,2,opt,name=allowed"`
++
++	// Denied indicates whether or not the request is denied according to the authorization conditions.
++	// Mutually exclusive with Allowed.
++	// Allowed=false and Denied=false means that the authorizer has no NoOpinion on the request.
++	Denied bool `json:"denied,omitempty" protobuf:"varint,3,opt,name=denied"`
++
++	// Result contains extra details into why an authorization conditions request was denied.
++	// This field IS NOT consulted in any way if "Allowed" is "true".
++	// +optional
++	Result *metav1.Status `json:"status,omitempty" protobuf:"bytes,4,opt,name=status"`
++
++	// AuditAnnotations is an unstructured key value map set by remote admission controller (e.g. error=image-blacklisted).
++	// MutatingAdmissionWebhook and ValidatingAdmissionWebhook admission controller will prefix the keys with
++	// admission webhook name (e.g. imagepolicy.example.com/error=image-blacklisted). AuditAnnotations will be provided by
++	// the admission webhook to add additional context to the audit log for this request.
++	// TODO: Does this need to be here?
++	// +optional
++	AuditAnnotations map[string]string `json:"auditAnnotations,omitempty" protobuf:"bytes,5,opt,name=auditAnnotations"`
++
++	// warnings is a list of warning messages to return to the requesting API client.
++	// Warning messages describe a problem the client making the API request should correct or be aware of.
++	// Limit warnings to 120 characters if possible.
++	// Warnings over 256 characters and large numbers of warnings may be truncated.
++	// TODO: Does this need to be here?
++	// +optional
++	// +listType=atomic
++	Warnings []string `json:"warnings,omitempty" protobuf:"bytes,6,rep,name=warnings"`
++}
+diff --git a/staging/src/k8s.io/apiserver/pkg/authorization/authorizer/conditional.go b/staging/src/k8s.io/apiserver/pkg/authorization/authorizer/conditional.go
+index 9c58b32be62..5fb162d8146 100644
+--- a/staging/src/k8s.io/apiserver/pkg/authorization/authorizer/conditional.go
++++ b/staging/src/k8s.io/apiserver/pkg/authorization/authorizer/conditional.go
+@@ -18,11 +18,15 @@ import (
+ 
+ /*
+   TODO:
+-  - Move the typechecker and the CEL compiler to the ConditionsEnforcer package
+-  - Add the conditions field to the SAR interface, potentially as a two-level list of conditions
+-  - Implement caching and conditions extraction in the webhook authorizer; and a noop conditionsresolver to begin with.
+-  - Do end to end testing
+-  - Add the AuthorizationConditionsReview API as the ResolveConditions implementation for the webhook authorizer.
++  - Implement conditional authz for the patch -> create/update authorization flow.
++  - Add the field to the AuthorizationConfiguration to determine which context to use for the conditions review webhook.
++  - Better error handling
++  - More efficient CEL implementation
++  - Should the webhook SAR cache its responses?
++  - Would it make sense to use a bidirectional gRPC stream to authorizers instead, in order to reduce the cost of these checks?
++  - Should we try to make it possible for a webhook authorizer to return multiple condition sets?
++    - If so, should the resolution still be chunked per physical or logical authorizer?'
++  - Built webhook authorizer from a normal client-go client instead of a kubeconfig.
+ */
+ 
+ // Attributes is an interface used by AdmissionController to get information about a request
+diff --git a/staging/src/k8s.io/apiserver/plugin/pkg/authorizer/webhook/webhook.go b/staging/src/k8s.io/apiserver/plugin/pkg/authorizer/webhook/webhook.go
+index 24d519a0d93..8a8537ff753 100644
+--- a/staging/src/k8s.io/apiserver/plugin/pkg/authorizer/webhook/webhook.go
++++ b/staging/src/k8s.io/apiserver/plugin/pkg/authorizer/webhook/webhook.go
+@@ -26,7 +26,10 @@ import (
+ 	"strconv"
+ 	"time"
+ 
++	admissionv1 "k8s.io/api/admission/v1"
++	authenticationv1 "k8s.io/api/authentication/v1"
+ 	authorizationv1 "k8s.io/api/authorization/v1"
++	authorizationv1alpha1 "k8s.io/api/authorization/v1alpha1"
+ 	authorizationv1beta1 "k8s.io/api/authorization/v1beta1"
+ 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+@@ -49,6 +52,7 @@ import (
+ 	authorizationv1client "k8s.io/client-go/kubernetes/typed/authorization/v1"
+ 	"k8s.io/client-go/rest"
+ 	"k8s.io/klog/v2"
++	"k8s.io/utils/ptr"
+ )
+ 
+ const (
+@@ -70,20 +74,21 @@ type subjectAccessReviewer interface {
+ }
+ 
+ type WebhookAuthorizer struct {
+-	subjectAccessReview subjectAccessReviewer
+-	responseCache       *cache.LRUExpireCache
+-	authorizedTTL       time.Duration
+-	unauthorizedTTL     time.Duration
+-	retryBackoff        wait.Backoff
+-	decisionOnError     authorizer.Decision
+-	metrics             metrics.AuthorizerMetrics
+-	celMatcher          *authorizationcel.CELMatcher
+-	name                string
++	subjectAccessReview           subjectAccessReviewer
++	authorizationConditionsReview *authorizationConditionsClient
++	responseCache                 *cache.LRUExpireCache
++	authorizedTTL                 time.Duration
++	unauthorizedTTL               time.Duration
++	retryBackoff                  wait.Backoff
++	decisionOnError               authorizer.Decision
++	metrics                       metrics.AuthorizerMetrics
++	celMatcher                    *authorizationcel.CELMatcher
++	name                          string
+ }
+ 
+ // NewFromInterface creates a WebhookAuthorizer using the given subjectAccessReview client
+ func NewFromInterface(subjectAccessReview authorizationv1client.AuthorizationV1Interface, authorizedTTL, unauthorizedTTL time.Duration, retryBackoff wait.Backoff, decisionOnError authorizer.Decision, metrics metrics.AuthorizerMetrics, compiler authorizationcel.Compiler) (*WebhookAuthorizer, error) {
+-	return newWithBackoff(&subjectAccessReviewV1Client{subjectAccessReview.RESTClient()}, authorizedTTL, unauthorizedTTL, retryBackoff, decisionOnError, nil, metrics, compiler, "")
++	return newWithBackoff(&subjectAccessReviewV1Client{subjectAccessReview.RESTClient()}, authorizedTTL, unauthorizedTTL, retryBackoff, decisionOnError, nil, metrics, compiler, "", nil) // TODO: fixme
+ }
+ 
+ // New creates a new WebhookAuthorizer from the provided kubeconfig file.
+@@ -110,11 +115,15 @@ func New(config *rest.Config, version string, authorizedTTL, unauthorizedTTL tim
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	return newWithBackoff(subjectAccessReview, authorizedTTL, unauthorizedTTL, retryBackoff, decisionOnError, matchConditions, metrics, compiler, name)
++	authorizationConditionsReview, err := buildAuthorizationConditionsClient(config, retryBackoff)
++	if err != nil {
++		return nil, err
++	}
++	return newWithBackoff(subjectAccessReview, authorizedTTL, unauthorizedTTL, retryBackoff, decisionOnError, matchConditions, metrics, compiler, name, authorizationConditionsReview)
+ }
+ 
+ // newWithBackoff allows tests to skip the sleep.
+-func newWithBackoff(subjectAccessReview subjectAccessReviewer, authorizedTTL, unauthorizedTTL time.Duration, retryBackoff wait.Backoff, decisionOnError authorizer.Decision, matchConditions []apiserver.WebhookMatchCondition, am metrics.AuthorizerMetrics, compiler authorizationcel.Compiler, name string) (*WebhookAuthorizer, error) {
++func newWithBackoff(subjectAccessReview subjectAccessReviewer, authorizedTTL, unauthorizedTTL time.Duration, retryBackoff wait.Backoff, decisionOnError authorizer.Decision, matchConditions []apiserver.WebhookMatchCondition, am metrics.AuthorizerMetrics, compiler authorizationcel.Compiler, name string, authorizationConditionsReview *authorizationConditionsClient) (*WebhookAuthorizer, error) {
+ 	// compile all expressions once in validation and save the results to be used for eval later
+ 	cm, fieldErr := apiservervalidation.ValidateAndCompileMatchConditions(compiler, matchConditions)
+ 	if err := fieldErr.ToAggregate(); err != nil {
+@@ -126,15 +135,16 @@ func newWithBackoff(subjectAccessReview subjectAccessReviewer, authorizedTTL, un
+ 		cm.Metrics = am
+ 	}
+ 	return &WebhookAuthorizer{
+-		subjectAccessReview: subjectAccessReview,
+-		responseCache:       cache.NewLRUExpireCache(8192),
+-		authorizedTTL:       authorizedTTL,
+-		unauthorizedTTL:     unauthorizedTTL,
+-		retryBackoff:        retryBackoff,
+-		decisionOnError:     decisionOnError,
+-		metrics:             am,
+-		celMatcher:          cm,
+-		name:                name,
++		subjectAccessReview:           subjectAccessReview,
++		authorizationConditionsReview: authorizationConditionsReview,
++		responseCache:                 cache.NewLRUExpireCache(8192),
++		authorizedTTL:                 authorizedTTL,
++		unauthorizedTTL:               unauthorizedTTL,
++		retryBackoff:                  retryBackoff,
++		decisionOnError:               decisionOnError,
++		metrics:                       am,
++		celMatcher:                    cm,
++		name:                          name,
+ 	}, nil
+ }
+ 
+@@ -319,7 +329,70 @@ func (w *WebhookAuthorizer) FailureMode() authorizer.FailureMode {
+ }
+ 
+ func (w *WebhookAuthorizer) ResolveConditions(ctx context.Context, attr authorizer.ConditionAttributes, conditionSet *authorizer.ConditionSet) (authorizer.Decision, string, error) {
+-	return authorizer.DecisionNoOpinion, "", fmt.Errorf("webhook authorizer does not support conditions resolution")
++	r := &authorizationv1alpha1.AuthorizationConditionsReview{
++		Request: &authorizationv1alpha1.AuthorizationConditionsRequest{
++			Kind:        metav1.GroupVersionKind(attr.GetKind()),
++			Resource:    metav1.GroupVersionResource(attr.GetResource()),
++			SubResource: attr.GetSubresource(),
++			// TODO: Figure out RequestKind and RequestResource
++			Name:              attr.GetName(),
++			Namespace:         attr.GetNamespace(),
++			Operation:         admissionv1.Operation(attr.GetOperation()),
++			AuthorizationVerb: attr.GetAuthorizationVerb(),
++			Object: runtime.RawExtension{
++				Object: attr.GetObject(),
++			},
++			OldObject: runtime.RawExtension{
++				Object: attr.GetOldObject(),
++			},
++			DryRun: ptr.To(attr.IsDryRun()),
++			Options: runtime.RawExtension{
++				Object: attr.GetOperationOptions(),
++			},
++			ConditionSet: fromAuthorizerConditions(conditionSet),
++		},
++	}
++	if user := attr.GetUserInfo(); user != nil {
++		r.Request.UserInfo = authenticationv1.UserInfo{
++			Username: user.GetName(),
++			UID:      user.GetUID(),
++			Groups:   user.GetGroups(),
++			Extra:    convertToAuthenticationExtra(user.GetExtra()),
++		}
++	}
++
++	var result *authorizationv1alpha1.AuthorizationConditionsReview
++	var metricsResult string
++	// WithExponentialBackoff will return SAR create error (sarErr) if any.
++	if err := webhook.WithExponentialBackoff(ctx, w.retryBackoff, func() error {
++		var sarErr error
++		result, _, sarErr = w.authorizationConditionsReview.Create(ctx, r, metav1.CreateOptions{})
++		// TODO: add metrics
++
++		return sarErr
++	}, webhook.DefaultShouldRetry); err != nil {
++		klog.Errorf("Failed to make webhook authorizer request: %v", err)
++
++		// we're returning NoOpinion, and the parent context has not timed out or been canceled
++		if w.decisionOnError == authorizer.DecisionNoOpinion && ctx.Err() == nil {
++			w.metrics.RecordWebhookFailOpen(ctx, w.name, metricsResult)
++		}
++
++		return w.decisionOnError, "", err
++	}
++
++	switch {
++	case result.Response == nil:
++		return authorizer.DecisionNoOpinion, "", nil
++	case result.Response.Denied && result.Response.Allowed:
++		return authorizer.DecisionDeny, "TODO", fmt.Errorf("webhook subject access review returned both allow and deny response")
++	case result.Response.Denied:
++		return authorizer.DecisionDeny, "TODO", nil
++	case result.Response.Allowed:
++		return authorizer.DecisionAllow, "TODO", nil
++	default:
++		return authorizer.DecisionNoOpinion, "TODO", nil
++	}
+ }
+ 
+ func toAuthorizerConditions(v1ConditionSet authorizationv1.SubjectAccessReviewConditionSet) (*authorizer.ConditionSet, error) {
+@@ -336,6 +409,20 @@ func toAuthorizerConditions(v1ConditionSet authorizationv1.SubjectAccessReviewCo
+ 	return authorizer.NewConditionSet(conds...)
+ }
+ 
++func fromAuthorizerConditions(conditionSet *authorizer.ConditionSet) authorizationv1.SubjectAccessReviewConditionSet {
++	conds := []authorizationv1.SubjectAccessReviewCondition{}
++	for _, condition := range conditionSet.GetConditions() {
++		conds = append(conds, authorizationv1.SubjectAccessReviewCondition{
++			ID:          condition.ID,
++			Type:        string(condition.Type),
++			Effect:      authorizationv1.SubjectAccessReviewConditionEffect(condition.Effect),
++			Condition:   condition.Condition,
++			Description: condition.Description,
++		})
++	}
++	return authorizationv1.SubjectAccessReviewConditionSet{Conditions: conds}
++}
++
+ func resourceAttributesFrom(attr authorizer.Attributes) *authorizationv1.ResourceAttributes {
+ 	ret := &authorizationv1.ResourceAttributes{
+ 		Namespace:   attr.GetNamespace(),
+@@ -473,6 +560,34 @@ func convertToSARExtra(extra map[string][]string) map[string]authorizationv1.Ext
+ 	return ret
+ }
+ 
++func convertToAuthenticationExtra(extra map[string][]string) map[string]authenticationv1.ExtraValue {
++	if extra == nil {
++		return nil
++	}
++	ret := map[string]authenticationv1.ExtraValue{}
++	for k, v := range extra {
++		ret[k] = authenticationv1.ExtraValue(v)
++	}
++
++	return ret
++}
++
++func buildAuthorizationConditionsClient(config *rest.Config, retryBackoff wait.Backoff) (*authorizationConditionsClient, error) {
++	localScheme := runtime.NewScheme()
++	if err := authorizationv1alpha1.AddToScheme(localScheme); err != nil {
++		return nil, err
++	}
++	groupVersions := []schema.GroupVersion{authorizationv1alpha1.SchemeGroupVersion}
++	if err := localScheme.SetVersionPriority(groupVersions...); err != nil {
++		return nil, err
++	}
++	gw, err := webhook.NewGenericWebhook(localScheme, scheme.Codecs, config, groupVersions, retryBackoff)
++	if err != nil {
++		return nil, err
++	}
++	return &authorizationConditionsClient{gw.RestClient}, nil
++}
++
+ // subjectAccessReviewInterfaceFromConfig builds a client from the specified kubeconfig file,
+ // and returns a SubjectAccessReviewInterface that uses that client. Note that the client submits SubjectAccessReview
+ // requests to the exact path specified in the kubeconfig file, so arbitrary non-API servers can be targeted.
+@@ -533,6 +648,23 @@ func (t *subjectAccessReviewV1Client) Create(ctx context.Context, subjectAccessR
+ 	return
+ }
+ 
++// authorizationConditionsClient used by the generic webhook, doesn't specify GVR.
++type authorizationConditionsClient struct {
++	client rest.Interface
++}
++
++func (t *authorizationConditionsClient) Create(ctx context.Context, authorizationConditionsReview *authorizationv1alpha1.AuthorizationConditionsReview, _ metav1.CreateOptions) (*authorizationv1alpha1.AuthorizationConditionsReview, int, error) {
++	var statusCode int
++	result := &authorizationv1alpha1.AuthorizationConditionsReview{}
++
++	restResult := t.client.Post().Body(authorizationConditionsReview).Do(ctx)
++
++	restResult.StatusCode(&statusCode)
++	err := restResult.Into(result)
++
++	return result, statusCode, err
++}
++
+ // subjectAccessReviewV1ClientGW used by the generic webhook, doesn't specify GVR.
+ type subjectAccessReviewV1ClientGW struct {
+ 	client rest.Interface
+diff --git a/test.go b/test.go
+index 1adc0e36b4d..206fe58b940 100644
+--- a/test.go
++++ b/test.go
+@@ -18,6 +18,8 @@ import (
+ 	"time"
+ 
+ 	authorizationv1 "k8s.io/api/authorization/v1"
++	authorizationv1alpha1 "k8s.io/api/authorization/v1alpha1"
++	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+ )
+ 
+ func main() {
+@@ -111,36 +113,73 @@ contexts:
+ 
+ 	// Create a simple handler
+ 	http.HandleFunc("/authorize", func(w http.ResponseWriter, r *http.Request) {
+-		sar := &authorizationv1.SubjectAccessReview{}
+-		if err := json.NewDecoder(r.Body).Decode(sar); err != nil {
+-			http.Error(w, err.Error(), http.StatusBadRequest)
++		requestBody, err := io.ReadAll(r.Body)
++		if err != nil {
++			http.Error(w, err.Error(), http.StatusInternalServerError)
+ 			return
+ 		}
+-		sar.Status.Allowed = false
+-		sar.Status.Denied = false
++		defer r.Body.Close()
++		fmt.Println("request body: ", string(requestBody))
+ 
+-		if sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "selfsubjectaccessreviews" {
+-			sar.Status.Allowed = true
++		tm := metav1.TypeMeta{}
++		if err := json.Unmarshal(requestBody, &tm); err != nil {
++			http.Error(w, err.Error(), http.StatusBadRequest)
++			return
+ 		}
+ 
+-		// Respond by NoOpinion to everything but the default service account's secret requests
+-		if sar.Spec.User == "system:serviceaccount:default:default" && sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "secrets" {
+-			sar.Status.ConditionsChain = []authorizationv1.SubjectAccessReviewConditionSet{
+-				{
+-					Conditions: []authorizationv1.SubjectAccessReviewCondition{
+-						{
+-							ID:        "labels-foo-bar",
+-							Type:      "k8s.io/authorization-cel",
+-							Effect:    authorizationv1.SubjectAccessReviewConditionEffectAllow,
+-							Condition: "has(object.metadata.labels) && has(object.metadata.labels.foo) && object.metadata.labels.foo == 'bar'",
++		if tm.Kind == "SubjectAccessReview" {
++
++			sar := &authorizationv1.SubjectAccessReview{}
++			if err := json.Unmarshal(requestBody, sar); err != nil {
++				http.Error(w, err.Error(), http.StatusBadRequest)
++				return
++			}
++			sar.Status.Allowed = false
++			sar.Status.Denied = false
++
++			if sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "selfsubjectaccessreviews" {
++				sar.Status.Allowed = true
++			}
++
++			// Respond by NoOpinion to everything but the default service account's secret requests
++			if sar.Spec.User == "system:serviceaccount:default:default" && sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "secrets" {
++				sar.Status.ConditionsChain = []authorizationv1.SubjectAccessReviewConditionSet{
++					{
++						Conditions: []authorizationv1.SubjectAccessReviewCondition{
++							{
++								ID:        "labels-foo-bar",
++								Type:      "opaque",
++								Effect:    authorizationv1.SubjectAccessReviewConditionEffectAllow,
++								Condition: "policy16",
++								//Condition: "has(object.metadata.labels) && has(object.metadata.labels.foo) && object.metadata.labels.foo == 'bar'",
++							},
+ 						},
+ 					},
+-				},
++				}
+ 			}
++			mw := io.MultiWriter(os.Stdout, w)
++			json.NewEncoder(mw).Encode(sar)
++			return
++		}
++		if tm.Kind == "AuthorizationConditionsReview" {
++			ac := &authorizationv1alpha1.AuthorizationConditionsReview{}
++			if err := json.Unmarshal(requestBody, ac); err != nil {
++				http.Error(w, err.Error(), http.StatusBadRequest)
++				return
++			}
++			ac.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
++				Allowed: false,
++				Denied:  false,
++			}
++			if ac.Request.UserInfo.Username == "system:serviceaccount:default:default" &&
++				ac.Request.Resource.Resource == "secrets" &&
++				ac.Request.ConditionSet.Conditions[0].Condition == "policy16" {
++				ac.Response.Allowed = true
++			}
++			mw := io.MultiWriter(os.Stdout, w)
++			json.NewEncoder(mw).Encode(ac)
++			return
+ 		}
+-
+-		mw := io.MultiWriter(os.Stdout, w)
+-		json.NewEncoder(mw).Encode(sar)
+ 	})
+ 
+ 	// Start the server
+-- 
+2.50.1 (Apple Git-155)
+
