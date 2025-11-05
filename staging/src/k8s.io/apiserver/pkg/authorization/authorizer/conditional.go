@@ -27,10 +27,21 @@ import (
   - Should we try to make it possible for a webhook authorizer to return multiple condition sets?
     - If so, should the resolution still be chunked per physical or logical authorizer?'
   - Built webhook authorizer from a normal client-go client instead of a kubeconfig.
+  - Scope down the ConditionAttributes interface to only the fields that are needed.
+    - If too much information is given, it increases the temptation to not do partial evaluation,
+	  but to just put the whole policy in the condition, which is wrong.
+	- Needed are:
+	  - Operation (e.g. in case of authorizationVerb=patch, we don't know what the operation will be)
+	  - New + old object
+	  - Operation options
+	  - Namespace??
+  - Build the NodeRestriction plugin using the conditional authorization framework, where all conditions resolution is still done in code.
+  - Enable automatically the admission plugin if the feature is enabled.
 */
 
 // Attributes is an interface used by AdmissionController to get information about a request
 // that is used to make an admission decision.
+// TODO: Decide on naming, e.g. ConditionData? RequestData? ConditionRequestData? ConditionAttributes? ResidualData?
 type ConditionAttributes interface {
 	// GetName returns the name of the object as presented in the request.  On a CREATE operation, the client
 	// may omit name and rely on the server to generate the name.  If that is the case, this method will return
@@ -108,6 +119,7 @@ const (
 	ConditionEffectDenyNoOpinion ConditionEffect = "DenyNoOpinion"
 )
 
+// TODO: Rename to ConditionSetEvaluator
 type ConditionsResolver interface {
 	// ResolveConditions resolve a set of conditions into a concrete decision (Allow, Deny, NoOpinion),
 	// given full information about the request (ConditionAttributes, which includes e.g. the old and new objects).
@@ -227,6 +239,7 @@ func AuthorizeWithConditionalSupport(ctx context.Context, attrs Attributes, auth
 	// Populate the context with an empty conditions enforcer.
 	// During the Authorize call, an authorizer that wishes to return conditions can
 	// write into this pointer by calling NewConditionalDecision.
+	// TODO: Feed the original attributes into the conditions enforcer, so that they can be used for serialization.
 	enforcer := &conditionsEnforcer{}
 	ctx = withConditionsEnforcer(ctx, enforcer)
 
