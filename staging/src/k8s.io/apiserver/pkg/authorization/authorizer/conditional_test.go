@@ -432,3 +432,358 @@ func TestSampleAuthorizer(t *testing.T) {
 		})
 	}
 }
+
+func TestEvaluateConditionSet(t *testing.T) {
+	evalErr := errors.New("eval error")
+
+	tests := []struct {
+		name          string
+		conditionSet  *ConditionSet
+		supportedType string
+		eval          func(string) (bool, error)
+		wantDecision  string
+		wantErr       bool
+		wantReason    string
+	}{
+		// nil conditionSet
+		{
+			name:          "nil condition set",
+			conditionSet:  nil,
+			supportedType: "test",
+			eval:          func(string) (bool, error) { panic("should not be called") },
+			wantDecision:  "NoOpinion",
+		},
+
+		// wrong condition type
+		{
+			name: "wrong type with only allow conditions",
+			conditionSet: &ConditionSet{
+				conditionType: "wrong-type",
+				conditions: []Condition{
+					{ID: "allow-cond", Condition: "x", Effect: ConditionEffectAllow},
+				},
+			},
+			supportedType: "test",
+			eval:          func(string) (bool, error) { panic("should not be called") },
+			wantDecision:  "NoOpinion",
+			wantErr:       true,
+		},
+		{
+			name: "wrong type with only noopinion conditions",
+			conditionSet: &ConditionSet{
+				conditionType: "wrong-type",
+				conditions: []Condition{
+					{ID: "nop-cond", Condition: "x", Effect: ConditionEffectNoOpinion},
+				},
+			},
+			supportedType: "test",
+			eval:          func(string) (bool, error) { panic("should not be called") },
+			wantDecision:  "NoOpinion",
+			wantErr:       true,
+		},
+		{
+			name: "wrong type with deny conditions",
+			conditionSet: &ConditionSet{
+				conditionType: "wrong-type",
+				conditions: []Condition{
+					{ID: "deny-cond", Condition: "x", Effect: ConditionEffectDeny},
+					{ID: "allow-cond", Condition: "x", Effect: ConditionEffectAllow},
+				},
+			},
+			supportedType: "test",
+			eval:          func(string) (bool, error) { panic("should not be called") },
+			wantDecision:  "Deny",
+			wantErr:       true,
+		},
+
+		// Deny conditions
+		{
+			name: "deny condition matches",
+			conditionSet: &ConditionSet{
+				conditionType: "test",
+				conditions: []Condition{
+					{ID: "deny-cond", Condition: "x", Effect: ConditionEffectDeny, Description: "access denied"},
+				},
+			},
+			supportedType: "test",
+			eval:          func(string) (bool, error) { return true, nil },
+			wantDecision:  "Deny",
+			wantReason:    `condition "deny-cond" denied the request with description "access denied"`,
+		},
+		{
+			name: "deny condition does not match",
+			conditionSet: &ConditionSet{
+				conditionType: "test",
+				conditions: []Condition{
+					{ID: "deny-cond", Condition: "x", Effect: ConditionEffectDeny},
+				},
+			},
+			supportedType: "test",
+			eval:          func(string) (bool, error) { return false, nil },
+			wantDecision:  "NoOpinion",
+			wantReason:    "no conditions matched",
+		},
+		{
+			name: "deny condition eval error",
+			conditionSet: &ConditionSet{
+				conditionType: "test",
+				conditions: []Condition{
+					{ID: "deny-cond", Condition: "x", Effect: ConditionEffectDeny},
+				},
+			},
+			supportedType: "test",
+			eval:          func(string) (bool, error) { return false, evalErr },
+			wantDecision:  "Deny",
+			wantErr:       true,
+			wantReason:    "an error occurred",
+		},
+		{
+			name: "first deny no match second deny matches",
+			conditionSet: &ConditionSet{
+				conditionType: "test",
+				conditions: []Condition{
+					{ID: "deny-no", Condition: "no-match", Effect: ConditionEffectDeny},
+					{ID: "deny-yes", Condition: "match", Effect: ConditionEffectDeny},
+				},
+			},
+			supportedType: "test",
+			eval: func(cond string) (bool, error) {
+				return cond == "match", nil
+			},
+			wantDecision: "Deny",
+			wantReason:   `condition "deny-yes" denied the request`,
+		},
+
+		// NoOpinion conditions
+		{
+			name: "noopinion condition matches",
+			conditionSet: &ConditionSet{
+				conditionType: "test",
+				conditions: []Condition{
+					{ID: "nop-cond", Condition: "x", Effect: ConditionEffectNoOpinion, Description: "not relevant"},
+				},
+			},
+			supportedType: "test",
+			eval:          func(string) (bool, error) { return true, nil },
+			wantDecision:  "NoOpinion",
+			wantReason:    `condition "nop-cond" evaluated to NoOpinion with description "not relevant"`,
+		},
+		{
+			name: "noopinion condition does not match",
+			conditionSet: &ConditionSet{
+				conditionType: "test",
+				conditions: []Condition{
+					{ID: "nop-cond", Condition: "x", Effect: ConditionEffectNoOpinion},
+				},
+			},
+			supportedType: "test",
+			eval:          func(string) (bool, error) { return false, nil },
+			wantDecision:  "NoOpinion",
+			wantReason:    "no conditions matched",
+		},
+		{
+			name: "noopinion condition eval error",
+			conditionSet: &ConditionSet{
+				conditionType: "test",
+				conditions: []Condition{
+					{ID: "nop-cond", Condition: "x", Effect: ConditionEffectNoOpinion},
+				},
+			},
+			supportedType: "test",
+			eval:          func(string) (bool, error) { return false, evalErr },
+			wantDecision:  "NoOpinion",
+			wantErr:       true,
+			wantReason:    "an error occurred",
+		},
+		{
+			name: "first noopinion no match second noopinion matches",
+			conditionSet: &ConditionSet{
+				conditionType: "test",
+				conditions: []Condition{
+					{ID: "nop-no", Condition: "no-match", Effect: ConditionEffectNoOpinion},
+					{ID: "nop-yes", Condition: "match", Effect: ConditionEffectNoOpinion},
+				},
+			},
+			supportedType: "test",
+			eval: func(cond string) (bool, error) {
+				return cond == "match", nil
+			},
+			wantDecision: "NoOpinion",
+			wantReason:   `condition "nop-yes" evaluated to NoOpinion`,
+		},
+
+		// Allow conditions
+		{
+			name: "allow condition matches",
+			conditionSet: &ConditionSet{
+				conditionType: "test",
+				conditions: []Condition{
+					{ID: "allow-cond", Condition: "x", Effect: ConditionEffectAllow, Description: "access granted"},
+				},
+			},
+			supportedType: "test",
+			eval:          func(string) (bool, error) { return true, nil },
+			wantDecision:  "Allow",
+			wantReason:    `condition "allow-cond" allowed the request with description "access granted"`,
+		},
+		{
+			name: "allow condition does not match",
+			conditionSet: &ConditionSet{
+				conditionType: "test",
+				conditions: []Condition{
+					{ID: "allow-cond", Condition: "x", Effect: ConditionEffectAllow},
+				},
+			},
+			supportedType: "test",
+			eval:          func(string) (bool, error) { return false, nil },
+			wantDecision:  "NoOpinion",
+			wantReason:    "no conditions matched",
+		},
+		{
+			name: "allow condition eval error no other allows",
+			conditionSet: &ConditionSet{
+				conditionType: "test",
+				conditions: []Condition{
+					{ID: "allow-cond", Condition: "x", Effect: ConditionEffectAllow},
+				},
+			},
+			supportedType: "test",
+			eval:          func(string) (bool, error) { return false, evalErr },
+			wantDecision:  "NoOpinion",
+			wantErr:       true,
+			wantReason:    "no conditions matched",
+		},
+		{
+			name: "allow first errors second matches",
+			conditionSet: &ConditionSet{
+				conditionType: "test",
+				conditions: []Condition{
+					{ID: "allow-err", Condition: "error-cond", Effect: ConditionEffectAllow},
+					{ID: "allow-ok", Condition: "match-cond", Effect: ConditionEffectAllow},
+				},
+			},
+			supportedType: "test",
+			eval: func(cond string) (bool, error) {
+				if cond == "error-cond" {
+					return false, evalErr
+				}
+				return true, nil
+			},
+			wantDecision: "Allow",
+			wantErr:      true,
+			wantReason:   `condition "allow-ok" allowed the request`,
+		},
+
+		// Precedence: Deny > NoOpinion > Allow
+		{
+			name: "deny takes precedence over allow",
+			conditionSet: &ConditionSet{
+				conditionType: "test",
+				conditions: []Condition{
+					{ID: "allow-cond", Condition: "x", Effect: ConditionEffectAllow},
+					{ID: "deny-cond", Condition: "x", Effect: ConditionEffectDeny},
+				},
+			},
+			supportedType: "test",
+			eval:          func(string) (bool, error) { return true, nil },
+			wantDecision:  "Deny",
+			wantReason:    `condition "deny-cond" denied the request`,
+		},
+		{
+			name: "deny takes precedence over noopinion and allow",
+			conditionSet: &ConditionSet{
+				conditionType: "test",
+				conditions: []Condition{
+					{ID: "allow-cond", Condition: "x", Effect: ConditionEffectAllow},
+					{ID: "nop-cond", Condition: "x", Effect: ConditionEffectNoOpinion},
+					{ID: "deny-cond", Condition: "x", Effect: ConditionEffectDeny},
+				},
+			},
+			supportedType: "test",
+			eval:          func(string) (bool, error) { return true, nil },
+			wantDecision:  "Deny",
+			wantReason:    `condition "deny-cond" denied the request`,
+		},
+		{
+			name: "noopinion takes precedence over allow",
+			conditionSet: &ConditionSet{
+				conditionType: "test",
+				conditions: []Condition{
+					{ID: "allow-cond", Condition: "x", Effect: ConditionEffectAllow},
+					{ID: "nop-cond", Condition: "x", Effect: ConditionEffectNoOpinion},
+				},
+			},
+			supportedType: "test",
+			eval:          func(string) (bool, error) { return true, nil },
+			wantDecision:  "NoOpinion",
+			wantReason:    `condition "nop-cond" evaluated to NoOpinion`,
+		},
+
+		// Selective matching across effect types
+		{
+			name: "deny no match, noopinion matches, allow matches",
+			conditionSet: &ConditionSet{
+				conditionType: "test",
+				conditions: []Condition{
+					{ID: "deny-cond", Condition: "deny-check", Effect: ConditionEffectDeny},
+					{ID: "nop-cond", Condition: "nop-check", Effect: ConditionEffectNoOpinion},
+					{ID: "allow-cond", Condition: "allow-check", Effect: ConditionEffectAllow},
+				},
+			},
+			supportedType: "test",
+			eval: func(cond string) (bool, error) {
+				return cond != "deny-check", nil
+			},
+			wantDecision: "NoOpinion",
+			wantReason:   `condition "nop-cond" evaluated to NoOpinion`,
+		},
+		{
+			name: "only allow matches",
+			conditionSet: &ConditionSet{
+				conditionType: "test",
+				conditions: []Condition{
+					{ID: "deny-cond", Condition: "deny-check", Effect: ConditionEffectDeny},
+					{ID: "nop-cond", Condition: "nop-check", Effect: ConditionEffectNoOpinion},
+					{ID: "allow-cond", Condition: "allow-check", Effect: ConditionEffectAllow},
+				},
+			},
+			supportedType: "test",
+			eval: func(cond string) (bool, error) {
+				return cond == "allow-check", nil
+			},
+			wantDecision: "Allow",
+			wantReason:   `condition "allow-cond" allowed the request`,
+		},
+		{
+			name: "no conditions match across all effects",
+			conditionSet: &ConditionSet{
+				conditionType: "test",
+				conditions: []Condition{
+					{ID: "deny-cond", Condition: "x", Effect: ConditionEffectDeny},
+					{ID: "nop-cond", Condition: "x", Effect: ConditionEffectNoOpinion},
+					{ID: "allow-cond", Condition: "x", Effect: ConditionEffectAllow},
+				},
+			},
+			supportedType: "test",
+			eval:          func(string) (bool, error) { return false, nil },
+			wantDecision:  "NoOpinion",
+			wantReason:    "no conditions matched",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decision, err := EvaluateConditionSet(tt.conditionSet, tt.supportedType, tt.eval)
+
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("EvaluateConditionSet() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if decision.String() != tt.wantDecision {
+				t.Errorf("got decision %s (reason: %q), want %s", decision.String(), decision.Reason(), tt.wantDecision)
+			}
+			if decision.Reason() != tt.wantReason {
+				t.Errorf("got reason %q, want %q", decision.Reason(), tt.wantReason)
+			}
+		})
+	}
+}
