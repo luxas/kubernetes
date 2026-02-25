@@ -2460,9 +2460,9 @@ var defaultKubernetesFeatureGateDependencies = map[featuregate.Feature][]feature
 
 	genericfeatures.ConcurrentWatchObjectDecode: {},
 
-	genericfeatures.ConsistentListFromCache: {},
-
 	genericfeatures.ConditionalAuthorization: {},
+
+	genericfeatures.ConsistentListFromCache: {},
 
 	genericfeatures.ConstrainedImpersonation: {},
 
