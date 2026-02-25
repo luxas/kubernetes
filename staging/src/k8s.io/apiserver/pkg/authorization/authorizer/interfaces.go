@@ -18,6 +18,7 @@ package authorizer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -209,48 +210,114 @@ func (a AttributesRecord) GetConditionsMode() ConditionsMode {
 	return a.ConditionsMode
 }
 
-// decision is the internal enum type backing Decision.
-type decision int
+// unconditionalDecision is the internal enum type backing Decision.
+type unconditionalDecision int
 
 const (
-	decisionDeny decision = iota
+	decisionDeny unconditionalDecision = iota
 	decisionAllow
 	decisionNoOpinion
 )
 
 // Decision models an authorization decision. It can be Allow, Deny, or NoOpinion.
-// The zero value is equivalent to DecisionDeny("").
+// The zero value (Decision{}) is equivalent to DecisionDeny("").
 // A Decision is passed by value.
 // Decision equality must be checked with Decision.Equal, not reflect.DeepEqual.
 type Decision struct {
-	decision decision
+	unconditionalDecision unconditionalDecision
+
+	conditionSet *ConditionSet
+	authorizer   Authorizer
+
 	// each reasons element should be a non-empty string
 	reasons []string
 }
 
 // DecisionAllow constructs an Allow decision with the given reason.
 func DecisionAllow(reasons ...string) Decision {
-	return Decision{decision: decisionAllow, reasons: nil}.WithAdditionalReasons(reasons...)
+	return Decision{
+		unconditionalDecision: decisionAllow,
+		// on purpose nil
+		conditionSet: nil,
+		authorizer:   nil,
+		reasons:      nil,
+	}.WithAdditionalReasons(reasons...)
 }
 
 // DecisionDeny constructs a Deny decision with the given reason.
 func DecisionDeny(reasons ...string) Decision {
-	return Decision{decision: decisionDeny, reasons: nil}.WithAdditionalReasons(reasons...)
+	return Decision{
+		unconditionalDecision: decisionDeny,
+		// on purpose nil
+		conditionSet: nil,
+		authorizer:   nil,
+		reasons:      nil,
+	}.WithAdditionalReasons(reasons...)
 }
 
 // DecisionNoOpinion constructs a NoOpinion decision with the given reason.
 func DecisionNoOpinion(reasons ...string) Decision {
-	return Decision{decision: decisionNoOpinion, reasons: nil}.WithAdditionalReasons(reasons...)
+	return Decision{
+		unconditionalDecision: decisionNoOpinion,
+		// on purpose nil
+		conditionSet: nil,
+		authorizer:   nil,
+		reasons:      nil,
+	}.WithAdditionalReasons(reasons...)
 }
 
-// IsAllowed returns true if the decision is Allow.
-func (d Decision) IsAllowed() bool { return d.decision == decisionAllow }
+func DecisionConditional(conditionSet ConditionSet, authorizer Authorizer, attrs Attributes, reasons ...string) Decision {
+	if attrs == nil || attrs.GetConditionsMode() == ConditionsModeNone {
+		return conditionSet.FailClosedDecision().
+			WithAdditionalReasons("client does not support conditions, but authorizer tried to return a conditional response")
+	}
+	return Decision{
+		unconditionalDecision: 0,
+		conditionSet:          &conditionSet,
+		authorizer:            authorizer,
+		reasons:               nil,
+	}.WithAdditionalReasons(reasons...)
+}
 
-// IsDenied returns true if the decision is Deny.
-func (d Decision) IsDenied() bool { return d.decision == decisionDeny }
+// INVARIANT: Exactly one of IsAllowed, IsNoOpinion, IsConditional and IsDenied must
+// always be true.
+
+// IsAllowed returns true if the decision is Allow.
+func (d Decision) IsAllowed() bool {
+	return d.unconditionalDecision == decisionAllow
+}
 
 // IsNoOpinion returns true if the decision is NoOpinion.
-func (d Decision) IsNoOpinion() bool { return d.decision == decisionNoOpinion }
+func (d Decision) IsNoOpinion() bool {
+	return d.unconditionalDecision == decisionNoOpinion
+}
+
+func (d Decision) IsConditional() bool {
+	return d.conditionSet != nil
+}
+
+// IsDenied returns true if the decision is Deny.
+func (d Decision) IsDenied() bool {
+	// The decision is a Deny whenever none of the other modes apply
+	// NOTE: A Conditional decision is encoded as
+	// d.unconditionalDecision == 0 == decisionDeny && d.conditionSet != nil, so it
+	// is not enough to check d.unconditionalDecision == decisionDeny
+	// This is because the zero value of the struct must be a Deny
+	return !d.IsAllowed() && !d.IsNoOpinion() && !d.IsConditional()
+}
+
+func (d Decision) Evaluate(ctx context.Context, data ConditionData) (Decision, error) {
+	// evaluating a concrete decision is a no-op
+	if !d.IsConditional() {
+		return d, nil
+	}
+	// => d.conditionSet != nil
+	if d.authorizer == nil {
+		return d.conditionSet.FailClosedDecision().WithAdditionalReasons("an error occurred"), errors.New("the authorizer must be non-nil in authorizer.DecisionConditional()")
+	}
+	// TODO: shall we allow to return an error together with DecisionAllow? I guess, as we do for RBAC
+	return d.authorizer.EvaluateConditions(ctx, d.conditionSet, data)
+}
 
 // Reason returns the reason string associated with this decision.
 func (d Decision) Reason() string {
@@ -268,7 +335,19 @@ func (d Decision) Reason() string {
 // "do the two decisions yield the same final outcome (request allowed/denied), for any input?"
 // Note that this equality notion does not take reason into account.
 func (d Decision) Equal(other Decision) bool {
-	return d.decision == other.decision
+	if d.IsAllowed() && other.IsAllowed() {
+		return true
+	}
+	if d.IsDenied() && other.IsDenied() {
+		return true
+	}
+	if d.IsNoOpinion() && other.IsNoOpinion() {
+		return true
+	}
+	if d.IsConditional() && other.IsConditional() {
+		return d.conditionSet.Equal(other.conditionSet) && d.authorizer == other.authorizer
+	}
+	return false
 }
 
 // WithAdditionalReasons creates a new Decision with additional reasons
@@ -284,21 +363,24 @@ func (d Decision) WithAdditionalReasons(additionalReasons ...string) Decision {
 		}
 	}
 	return Decision{
-		decision: d.decision,
-		reasons:  append(d.reasons, nonEmptyReasons...),
+		unconditionalDecision: d.unconditionalDecision,
+		reasons:               append(d.reasons, nonEmptyReasons...),
 	}
 }
 
 // String returns a human-readable representation of the decision.
 func (d Decision) String() string {
-	switch d.decision {
-	case decisionDeny:
-		return "Deny"
-	case decisionAllow:
+	if d.IsAllowed() {
 		return "Allow"
-	case decisionNoOpinion:
-		return "NoOpinion"
-	default:
-		return fmt.Sprintf("Unknown (%d)", int(d.decision))
 	}
+	if d.IsDenied() {
+		return "Deny"
+	}
+	if d.IsNoOpinion() {
+		return "NoOpinion"
+	}
+	if d.IsConditional() {
+		return "Conditional"
+	}
+	return "Unknown" // should never happen, according to our invariant
 }

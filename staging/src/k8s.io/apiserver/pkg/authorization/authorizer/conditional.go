@@ -20,6 +20,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
+	"slices"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/validate/content"
@@ -100,14 +102,8 @@ type ConditionSet struct {
 	conditionType string
 
 	// conditions is the set of conditions to evaluate.
-	// Mutually exclusive with unconditionalDecision.
+	// TODO: implement this using a map from ID to Condition instead?
 	conditions []Condition
-
-	// unconditionalDecision captures an unconditional decision from an authorizer
-	// that is later in the chain than an authorizer that returned a conditional
-	// response.
-	// Mutually exclusive with conditions.
-	unconditionalDecision *Decision
 }
 
 // Type returns the condition type (format/encoding/language) of the conditions
@@ -118,34 +114,89 @@ func (c *ConditionSet) Type() string {
 
 // Conditions returns the conditions in this set. The returned slice must not be
 // modified.
-func (c *ConditionSet) Conditions() []Condition {
-	return c.conditions
+func (c *ConditionSet) Conditions() iter.Seq[Condition] {
+	return func(yield func(Condition) bool) {
+		for _, cond := range c.conditions {
+			if !yield(cond) {
+				return
+			}
+		}
+	}
 }
 
-// IsUnconditional returns true if this ConditionSet wraps an unconditional
-// decision from a later authorizer in the chain.
-func (c *ConditionSet) IsUnconditional() bool {
-	return c.unconditionalDecision != nil
+func (c *ConditionSet) DenyConditions() iter.Seq[Condition] {
+	return func(yield func(Condition) bool) {
+		for _, cond := range c.conditions {
+			if cond.Effect != ConditionEffectDeny {
+				continue
+			}
+			if !yield(cond) {
+				return
+			}
+		}
+	}
 }
 
-// UnconditionalDecision returns the unconditional decision, if this ConditionSet
-// wraps one. Returns nil if this is a regular condition set.
-func (c *ConditionSet) UnconditionalDecision() *Decision {
-	return c.unconditionalDecision
+func (c *ConditionSet) NoOpinionConditions() iter.Seq[Condition] {
+	return func(yield func(Condition) bool) {
+		for _, cond := range c.conditions {
+			if cond.Effect != ConditionEffectNoOpinion {
+				continue
+			}
+			if !yield(cond) {
+				return
+			}
+		}
+	}
+}
+
+func (c *ConditionSet) AllowConditions() iter.Seq[Condition] {
+	return func(yield func(Condition) bool) {
+		for _, cond := range c.conditions {
+			if cond.Effect != ConditionEffectAllow {
+				continue
+			}
+			if !yield(cond) {
+				return
+			}
+		}
+	}
+}
+
+func (c *ConditionSet) Equal(other *ConditionSet) bool {
+	if c == nil || other == nil {
+		// if both are nil => true
+		// if c nil, but other non-nil => false
+		// if c non-nil, but other nil => false
+		return (c == nil) == (other == nil)
+	}
+	// both non-nil
+	return false // TODO implement semantic equivalence
 }
 
 // CanBecomeAllowed returns true if this ConditionSet has at least one
 // effect=Allow condition, or wraps an unconditional Allow decision.
 func (c *ConditionSet) CanBecomeAllowed() bool {
-	if c.unconditionalDecision != nil {
-		return c.unconditionalDecision.IsAllowed()
-	}
 	for _, cond := range c.conditions {
 		if cond.Effect == ConditionEffectAllow {
 			return true
 		}
 	}
 	return false
+}
+
+// FailClosedDecision returns either a Deny or NoOpinion Decision to fail closed
+// whenever evaluating a ConditionSet fails. If the ConditionSet has one or
+// more Deny conditions, the Decision must be Deny, as that could have been the
+// answer if the evaluation had been successful. Otherwise, NoOpinion is returned.
+func (c *ConditionSet) FailClosedDecision() Decision {
+	hasDenyCondition := slices.ContainsFunc(c.conditions, func(cond Condition) bool {
+		return cond.Effect == ConditionEffectDeny
+	})
+	if hasDenyCondition {
+		return DecisionDeny()
+	}
+	return DecisionNoOpinion()
 }
 
 // NewConditionSet creates a new ConditionSet with the given condition type
@@ -183,15 +234,6 @@ func NewConditionSet(conditionType string, conditions []Condition) (*ConditionSe
 		conditionType: conditionType,
 		conditions:    conditionsCopy,
 	}, nil
-}
-
-// NewUnconditionalConditionSet creates a ConditionSet that wraps an unconditional
-// decision from an authorizer later in the chain. This is used when composing
-// conditional and unconditional responses in the authorization chain.
-func NewUnconditionalConditionSet(decision Decision) *ConditionSet {
-	return &ConditionSet{
-		unconditionalDecision: &decision,
-	}
 }
 
 // validateCondition validates a single Condition.
