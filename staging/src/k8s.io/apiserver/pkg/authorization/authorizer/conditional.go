@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/sets"
 )
 
@@ -272,6 +273,68 @@ func validateCondition(cond Condition, index int) error {
 // data in ConditionData is partial.
 type ConditionSetEvaluator interface {
 	EvaluateConditions(ctx context.Context, conditionSet *ConditionSet, data ConditionData) (Decision, error)
+}
+
+// EvaluateConditionSet evaluates the conditions in the set into a concrete Allow/Deny/NoOpinion Decision, given an
+// evaluation function with a given supported condition type.
+// This is a reference implementation that other conditional authorizers can use if convenient.
+func EvaluateConditionSet(conditionSet *ConditionSet, supportedConditionType string, eval func(string) (bool, error)) (Decision, error) {
+	if conditionSet == nil {
+		return DecisionNoOpinion(), nil
+	}
+
+	if conditionSet.Type() != supportedConditionType {
+		return conditionSet.FailClosedDecision(), fmt.Errorf("unsupported condition type: %q", conditionSet.Type())
+	}
+
+	for cond := range conditionSet.DenyConditions() {
+		applies, err := eval(cond.Condition)
+		if err != nil {
+			// TODO: should we leak the error to the user?
+			return DecisionDeny("an error occurred"), err
+		}
+		if applies {
+			reason := fmt.Sprintf("condition %q denied the request", cond.ID)
+			if len(cond.Description) != 0 {
+				reason += fmt.Sprintf(" with description %q", cond.Description)
+			}
+			return DecisionDeny(reason), nil
+		}
+	}
+
+	for cond := range conditionSet.NoOpinionConditions() {
+		applies, err := eval(cond.Condition)
+		if err != nil {
+			// TODO: should we leak the error to the user?
+			return DecisionNoOpinion("an error occurred"), err
+		}
+		if applies {
+			reason := fmt.Sprintf("condition %q evaluated to NoOpinion", cond.ID)
+			if len(cond.Description) != 0 {
+				reason += fmt.Sprintf(" with description %q", cond.Description)
+			}
+			return DecisionNoOpinion(reason), nil
+		}
+	}
+
+	var errlist []error
+	for cond := range conditionSet.AllowConditions() {
+		applies, err := eval(cond.Condition)
+		if err != nil {
+			// errors from Allow conditions don't affect the Decision, but
+			// are returned as the non-critical error in aggregate form
+			errlist = append(errlist, err)
+			continue
+		}
+		if applies {
+			reason := fmt.Sprintf("condition %q allowed the request", cond.ID)
+			if len(cond.Description) != 0 {
+				reason += fmt.Sprintf(" with description %q", cond.Description)
+			}
+			return DecisionAllow(reason), utilerrors.NewAggregate(errlist)
+		}
+	}
+	return DecisionNoOpinion("no conditions matched"), utilerrors.NewAggregate(errlist)
 }
 
 // BuiltinConditionSetEvaluator is a ConditionSetEvaluator that can evaluate
