@@ -28,6 +28,13 @@ import "k8s.io/apimachinery/pkg/runtime/schema/generated.proto";
 // Package-wide variables from generator "generated".
 option go_package = "k8s.io/api/authorization/v1";
 
+// ConditionalAuthorizationOptions contains options for requesting conditional authorization.
+message ConditionalAuthorizationOptions {
+  // conditionsMode specifies how conditions should be returned.
+  // +optional
+  optional string conditionsMode = 1;
+}
+
 // ExtraValue masks the value so protobuf can generate
 // +protobuf.nullable=true
 // +protobuf.options.(gogoproto.goproto_stringer)=false
@@ -227,6 +234,10 @@ message SelfSubjectAccessReviewSpec {
   // nonResourceAttributes describes information for a non-resource access request
   // +optional
   optional NonResourceAttributes nonResourceAttributes = 2;
+
+  // conditionalAuthorization contains options for requesting conditional authorization.
+  // +optional
+  optional ConditionalAuthorizationOptions conditionalAuthorization = 3;
 }
 
 // SelfSubjectRulesReview enumerates the set of actions the current user can perform within a namespace.
@@ -299,6 +310,10 @@ message SubjectAccessReviewSpec {
   // uid information about the requesting user.
   // +optional
   optional string uid = 6;
+
+  // conditionalAuthorization contains options for requesting conditional authorization.
+  // +optional
+  optional ConditionalAuthorizationOptions conditionalAuthorization = 7;
 }
 
 // SubjectAccessReviewStatus

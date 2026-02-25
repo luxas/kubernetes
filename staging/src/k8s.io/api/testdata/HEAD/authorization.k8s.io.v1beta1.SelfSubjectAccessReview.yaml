@@ -33,6 +33,8 @@ metadata:
   selfLink: selfLinkValue
   uid: uidValue
 spec:
+  conditionalAuthorization:
+    conditionsMode: conditionsModeValue
   nonResourceAttributes:
     path: pathValue
     verb: verbValue

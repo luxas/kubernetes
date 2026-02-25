@@ -168,6 +168,9 @@ type SubjectAccessReviewSpec struct {
 	// uid information about the requesting user.
 	// +optional
 	UID string `json:"uid,omitempty" protobuf:"bytes,6,opt,name=uid"`
+	// conditionalAuthorization contains options for requesting conditional authorization.
+	// +optional
+	ConditionalAuthorization *authorizationv1.ConditionalAuthorizationOptions `json:"conditionalAuthorization,omitempty" protobuf:"bytes,7,opt,name=conditionalAuthorization"`
 }
 
 // ExtraValue masks the value so protobuf can generate
@@ -188,6 +191,9 @@ type SelfSubjectAccessReviewSpec struct {
 	// nonResourceAttributes describes information for a non-resource access request
 	// +optional
 	NonResourceAttributes *NonResourceAttributes `json:"nonResourceAttributes,omitempty" protobuf:"bytes,2,opt,name=nonResourceAttributes"`
+	// conditionalAuthorization contains options for requesting conditional authorization.
+	// +optional
+	ConditionalAuthorization *authorizationv1.ConditionalAuthorizationOptions `json:"conditionalAuthorization,omitempty" protobuf:"bytes,3,opt,name=conditionalAuthorization"`
 }
 
 // SubjectAccessReviewStatus

@@ -80,6 +80,9 @@
     "nonResourceAttributes": {
       "path": "pathValue",
       "verb": "verbValue"
+    },
+    "conditionalAuthorization": {
+      "conditionsMode": "conditionsModeValue"
     }
   },
   "status": {

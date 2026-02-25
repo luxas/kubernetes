@@ -90,7 +90,10 @@
         "extraValue"
       ]
     },
-    "uid": "uidValue"
+    "uid": "uidValue",
+    "conditionalAuthorization": {
+      "conditionsMode": "conditionsModeValue"
+    }
   },
   "status": {
     "allowed": true,

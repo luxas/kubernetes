@@ -21,6 +21,8 @@ limitations under the License.
 
 package v1
 
+func (*ConditionalAuthorizationOptions) ProtoMessage() {}
+
 func (*ExtraValue) ProtoMessage() {}
 
 func (*FieldSelectorAttributes) ProtoMessage() {}

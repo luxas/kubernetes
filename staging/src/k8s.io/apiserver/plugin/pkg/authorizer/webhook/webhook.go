@@ -554,12 +554,13 @@ func v1beta1StatusToV1Status(in *authorizationv1beta1.SubjectAccessReviewStatus)
 
 func v1SpecToV1beta1Spec(in *authorizationv1.SubjectAccessReviewSpec) authorizationv1beta1.SubjectAccessReviewSpec {
 	return authorizationv1beta1.SubjectAccessReviewSpec{
-		ResourceAttributes:    v1ResourceAttributesToV1beta1ResourceAttributes(in.ResourceAttributes),
-		NonResourceAttributes: v1NonResourceAttributesToV1beta1NonResourceAttributes(in.NonResourceAttributes),
-		User:                  in.User,
-		Groups:                in.Groups,
-		Extra:                 v1ExtraToV1beta1Extra(in.Extra),
-		UID:                   in.UID,
+		ResourceAttributes:       v1ResourceAttributesToV1beta1ResourceAttributes(in.ResourceAttributes),
+		NonResourceAttributes:    v1NonResourceAttributesToV1beta1NonResourceAttributes(in.NonResourceAttributes),
+		User:                     in.User,
+		Groups:                   in.Groups,
+		Extra:                    v1ExtraToV1beta1Extra(in.Extra),
+		UID:                      in.UID,
+		ConditionalAuthorization: in.ConditionalAuthorization,
 	}
 }
 

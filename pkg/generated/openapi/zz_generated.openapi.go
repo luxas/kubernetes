@@ -329,6 +329,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		authenticationv1beta1.TokenReviewSpec{}.OpenAPIModelName():                                                      schema_k8sio_api_authentication_v1beta1_TokenReviewSpec(ref),
 		authenticationv1beta1.TokenReviewStatus{}.OpenAPIModelName():                                                    schema_k8sio_api_authentication_v1beta1_TokenReviewStatus(ref),
 		authenticationv1beta1.UserInfo{}.OpenAPIModelName():                                                             schema_k8sio_api_authentication_v1beta1_UserInfo(ref),
+		authorizationv1.ConditionalAuthorizationOptions{}.OpenAPIModelName():                                            schema_k8sio_api_authorization_v1_ConditionalAuthorizationOptions(ref),
 		authorizationv1.FieldSelectorAttributes{}.OpenAPIModelName():                                                    schema_k8sio_api_authorization_v1_FieldSelectorAttributes(ref),
 		authorizationv1.LabelSelectorAttributes{}.OpenAPIModelName():                                                    schema_k8sio_api_authorization_v1_LabelSelectorAttributes(ref),
 		authorizationv1.LocalSubjectAccessReview{}.OpenAPIModelName():                                                   schema_k8sio_api_authorization_v1_LocalSubjectAccessReview(ref),
@@ -12647,6 +12648,26 @@ func schema_k8sio_api_authentication_v1beta1_UserInfo(ref common.ReferenceCallba
 	}
 }
 
+func schema_k8sio_api_authorization_v1_ConditionalAuthorizationOptions(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "ConditionalAuthorizationOptions contains options for requesting conditional authorization.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"conditionsMode": {
+						SchemaProps: spec.SchemaProps{
+							Description: "conditionsMode specifies how conditions should be returned.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
 func schema_k8sio_api_authorization_v1_FieldSelectorAttributes(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
@@ -13101,11 +13122,17 @@ func schema_k8sio_api_authorization_v1_SelfSubjectAccessReviewSpec(ref common.Re
 							Ref:         ref(authorizationv1.NonResourceAttributes{}.OpenAPIModelName()),
 						},
 					},
+					"conditionalAuthorization": {
+						SchemaProps: spec.SchemaProps{
+							Description: "conditionalAuthorization contains options for requesting conditional authorization.",
+							Ref:         ref(authorizationv1.ConditionalAuthorizationOptions{}.OpenAPIModelName()),
+						},
+					},
 				},
 			},
 		},
 		Dependencies: []string{
-			authorizationv1.NonResourceAttributes{}.OpenAPIModelName(), authorizationv1.ResourceAttributes{}.OpenAPIModelName()},
+			authorizationv1.ConditionalAuthorizationOptions{}.OpenAPIModelName(), authorizationv1.NonResourceAttributes{}.OpenAPIModelName(), authorizationv1.ResourceAttributes{}.OpenAPIModelName()},
 	}
 }
 
@@ -13307,11 +13334,17 @@ func schema_k8sio_api_authorization_v1_SubjectAccessReviewSpec(ref common.Refere
 							Format:      "",
 						},
 					},
+					"conditionalAuthorization": {
+						SchemaProps: spec.SchemaProps{
+							Description: "conditionalAuthorization contains options for requesting conditional authorization.",
+							Ref:         ref(authorizationv1.ConditionalAuthorizationOptions{}.OpenAPIModelName()),
+						},
+					},
 				},
 			},
 		},
 		Dependencies: []string{
-			authorizationv1.NonResourceAttributes{}.OpenAPIModelName(), authorizationv1.ResourceAttributes{}.OpenAPIModelName()},
+			authorizationv1.ConditionalAuthorizationOptions{}.OpenAPIModelName(), authorizationv1.NonResourceAttributes{}.OpenAPIModelName(), authorizationv1.ResourceAttributes{}.OpenAPIModelName()},
 	}
 }
 
@@ -13799,11 +13832,17 @@ func schema_k8sio_api_authorization_v1beta1_SelfSubjectAccessReviewSpec(ref comm
 							Ref:         ref(authorizationv1beta1.NonResourceAttributes{}.OpenAPIModelName()),
 						},
 					},
+					"conditionalAuthorization": {
+						SchemaProps: spec.SchemaProps{
+							Description: "conditionalAuthorization contains options for requesting conditional authorization.",
+							Ref:         ref(authorizationv1.ConditionalAuthorizationOptions{}.OpenAPIModelName()),
+						},
+					},
 				},
 			},
 		},
 		Dependencies: []string{
-			authorizationv1beta1.NonResourceAttributes{}.OpenAPIModelName(), authorizationv1beta1.ResourceAttributes{}.OpenAPIModelName()},
+			authorizationv1.ConditionalAuthorizationOptions{}.OpenAPIModelName(), authorizationv1beta1.NonResourceAttributes{}.OpenAPIModelName(), authorizationv1beta1.ResourceAttributes{}.OpenAPIModelName()},
 	}
 }
 
@@ -14005,11 +14044,17 @@ func schema_k8sio_api_authorization_v1beta1_SubjectAccessReviewSpec(ref common.R
 							Format:      "",
 						},
 					},
+					"conditionalAuthorization": {
+						SchemaProps: spec.SchemaProps{
+							Description: "conditionalAuthorization contains options for requesting conditional authorization.",
+							Ref:         ref(authorizationv1.ConditionalAuthorizationOptions{}.OpenAPIModelName()),
+						},
+					},
 				},
 			},
 		},
 		Dependencies: []string{
-			authorizationv1beta1.NonResourceAttributes{}.OpenAPIModelName(), authorizationv1beta1.ResourceAttributes{}.OpenAPIModelName()},
+			authorizationv1.ConditionalAuthorizationOptions{}.OpenAPIModelName(), authorizationv1beta1.NonResourceAttributes{}.OpenAPIModelName(), authorizationv1beta1.ResourceAttributes{}.OpenAPIModelName()},
 	}
 }
 

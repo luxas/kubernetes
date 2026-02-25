@@ -157,6 +157,30 @@ type NonResourceAttributes struct {
 	Verb string
 }
 
+// ConditionsMode specifies how, if at all, the client wants conditions to be
+// returned by the authorizer. The default (empty string) means conditions are
+// not supported by the caller.
+type ConditionsMode string
+
+const (
+	// ConditionsModeNone indicates that the client does not support conditions.
+	ConditionsModeNone ConditionsMode = ""
+
+	// ConditionsModeHumanReadable indicates that the client wants a
+	// human-readable condition and description, if possible.
+	ConditionsModeHumanReadable ConditionsMode = "HumanReadable"
+
+	// ConditionsModeOptimized indicates that the client wants an
+	// optimized conditions encoding without description, if possible.
+	ConditionsModeOptimized ConditionsMode = "Optimized"
+)
+
+// ConditionalAuthorizationOptions contains options for requesting conditional authorization.
+type ConditionalAuthorizationOptions struct {
+	// ConditionsMode specifies how conditions should be returned.
+	ConditionsMode ConditionsMode
+}
+
 // SubjectAccessReviewSpec is a description of the access request.  Exactly one of ResourceAttributes
 // and NonResourceAttributes must be set
 type SubjectAccessReviewSpec struct {
@@ -175,6 +199,8 @@ type SubjectAccessReviewSpec struct {
 	Extra map[string]ExtraValue
 	// UID information about the requesting user.
 	UID string
+	// ConditionalAuthorization contains options for requesting conditional authorization.
+	ConditionalAuthorization *ConditionalAuthorizationOptions
 }
 
 // ExtraValue masks the value so protobuf can generate
@@ -188,6 +214,8 @@ type SelfSubjectAccessReviewSpec struct {
 	ResourceAttributes *ResourceAttributes
 	// NonResourceAttributes describes information for a non-resource access request
 	NonResourceAttributes *NonResourceAttributes
+	// ConditionalAuthorization contains options for requesting conditional authorization.
+	ConditionalAuthorization *ConditionalAuthorizationOptions
 }
 
 // SubjectAccessReviewStatus represents the current state of a SubjectAccessReview.

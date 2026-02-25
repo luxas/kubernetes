@@ -208,6 +208,10 @@ func AuthorizationAttributesFrom(spec authorizationapi.SubjectAccessReviewSpec) 
 		authorizationAttributes = NonResourceAttributesFrom(userToCheck, *spec.NonResourceAttributes)
 	}
 
+	if spec.ConditionalAuthorization != nil {
+		authorizationAttributes.ConditionsMode = authorizer.ConditionsMode(spec.ConditionalAuthorization.ConditionsMode)
+	}
+
 	return authorizationAttributes
 }
 

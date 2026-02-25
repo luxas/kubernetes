@@ -219,6 +219,11 @@ func (in *SelfSubjectAccessReviewSpec) DeepCopyInto(out *SelfSubjectAccessReview
 		*out = new(NonResourceAttributes)
 		**out = **in
 	}
+	if in.ConditionalAuthorization != nil {
+		in, out := &in.ConditionalAuthorization, &out.ConditionalAuthorization
+		*out = new(v1.ConditionalAuthorizationOptions)
+		**out = **in
+	}
 	return
 }
 
@@ -336,6 +341,11 @@ func (in *SubjectAccessReviewSpec) DeepCopyInto(out *SubjectAccessReviewSpec) {
 			}
 			(*out)[key] = outVal
 		}
+	}
+	if in.ConditionalAuthorization != nil {
+		in, out := &in.ConditionalAuthorization, &out.ConditionalAuthorization
+		*out = new(v1.ConditionalAuthorizationOptions)
+		**out = **in
 	}
 	return
 }

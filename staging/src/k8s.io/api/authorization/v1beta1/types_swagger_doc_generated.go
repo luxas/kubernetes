@@ -99,9 +99,10 @@ func (SelfSubjectAccessReview) SwaggerDoc() map[string]string {
 }
 
 var map_SelfSubjectAccessReviewSpec = map[string]string{
-	"":                      "SelfSubjectAccessReviewSpec is a description of the access request.  Exactly one of resourceAttributes and nonResourceAttributes must be set",
-	"resourceAttributes":    "resourceAttributes describes information for a resource access request",
-	"nonResourceAttributes": "nonResourceAttributes describes information for a non-resource access request",
+	"":                         "SelfSubjectAccessReviewSpec is a description of the access request.  Exactly one of resourceAttributes and nonResourceAttributes must be set",
+	"resourceAttributes":       "resourceAttributes describes information for a resource access request",
+	"nonResourceAttributes":    "nonResourceAttributes describes information for a non-resource access request",
+	"conditionalAuthorization": "conditionalAuthorization contains options for requesting conditional authorization.",
 }
 
 func (SelfSubjectAccessReviewSpec) SwaggerDoc() map[string]string {
@@ -140,13 +141,14 @@ func (SubjectAccessReview) SwaggerDoc() map[string]string {
 }
 
 var map_SubjectAccessReviewSpec = map[string]string{
-	"":                      "SubjectAccessReviewSpec is a description of the access request.  Exactly one of resourceAttributes and nonResourceAttributes must be set",
-	"resourceAttributes":    "resourceAttributes describes information for a resource access request",
-	"nonResourceAttributes": "nonResourceAttributes describes information for a non-resource access request",
-	"user":                  "user is the user you're testing for. If you specify \"User\" but not \"Group\", then is it interpreted as \"What if User were not a member of any groups",
-	"group":                 "group is the groups you're testing for.",
-	"extra":                 "extra corresponds to the user.Info.GetExtra() method from the authenticator.  Since that is input to the authorizer it needs a reflection here.",
-	"uid":                   "uid information about the requesting user.",
+	"":                         "SubjectAccessReviewSpec is a description of the access request.  Exactly one of resourceAttributes and nonResourceAttributes must be set",
+	"resourceAttributes":       "resourceAttributes describes information for a resource access request",
+	"nonResourceAttributes":    "nonResourceAttributes describes information for a non-resource access request",
+	"user":                     "user is the user you're testing for. If you specify \"User\" but not \"Group\", then is it interpreted as \"What if User were not a member of any groups",
+	"group":                    "group is the groups you're testing for.",
+	"extra":                    "extra corresponds to the user.Info.GetExtra() method from the authenticator.  Since that is input to the authorizer it needs a reflection here.",
+	"uid":                      "uid information about the requesting user.",
+	"conditionalAuthorization": "conditionalAuthorization contains options for requesting conditional authorization.",
 }
 
 func (SubjectAccessReviewSpec) SwaggerDoc() map[string]string {

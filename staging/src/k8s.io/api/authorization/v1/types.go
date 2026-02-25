@@ -190,6 +190,31 @@ type NonResourceAttributes struct {
 	Verb string `json:"verb,omitempty" protobuf:"bytes,2,opt,name=verb"`
 }
 
+// ConditionsMode specifies how, if at all, the client wants conditions to be
+// returned by the authorizer. The default (empty string) means conditions are
+// not supported by the caller.
+type ConditionsMode string
+
+const (
+	// ConditionsModeNone indicates that the client does not support conditions.
+	ConditionsModeNone ConditionsMode = ""
+
+	// ConditionsModeHumanReadable indicates that the client wants a
+	// human-readable condition and description, if possible.
+	ConditionsModeHumanReadable ConditionsMode = "HumanReadable"
+
+	// ConditionsModeOptimized indicates that the client wants an
+	// optimized conditions encoding without description, if possible.
+	ConditionsModeOptimized ConditionsMode = "Optimized"
+)
+
+// ConditionalAuthorizationOptions contains options for requesting conditional authorization.
+type ConditionalAuthorizationOptions struct {
+	// conditionsMode specifies how conditions should be returned.
+	// +optional
+	ConditionsMode ConditionsMode `json:"conditionsMode,omitempty" protobuf:"bytes,1,opt,name=conditionsMode"`
+}
+
 // SubjectAccessReviewSpec is a description of the access request.  Exactly one of resourceAttributes
 // and nonResourceAttributes must be set
 type SubjectAccessReviewSpec struct {
@@ -215,6 +240,9 @@ type SubjectAccessReviewSpec struct {
 	// uid information about the requesting user.
 	// +optional
 	UID string `json:"uid,omitempty" protobuf:"bytes,6,opt,name=uid"`
+	// conditionalAuthorization contains options for requesting conditional authorization.
+	// +optional
+	ConditionalAuthorization *ConditionalAuthorizationOptions `json:"conditionalAuthorization,omitempty" protobuf:"bytes,7,opt,name=conditionalAuthorization"`
 }
 
 // ExtraValue masks the value so protobuf can generate
@@ -235,6 +263,9 @@ type SelfSubjectAccessReviewSpec struct {
 	// nonResourceAttributes describes information for a non-resource access request
 	// +optional
 	NonResourceAttributes *NonResourceAttributes `json:"nonResourceAttributes,omitempty" protobuf:"bytes,2,opt,name=nonResourceAttributes"`
+	// conditionalAuthorization contains options for requesting conditional authorization.
+	// +optional
+	ConditionalAuthorization *ConditionalAuthorizationOptions `json:"conditionalAuthorization,omitempty" protobuf:"bytes,3,opt,name=conditionalAuthorization"`
 }
 
 // SubjectAccessReviewStatus

@@ -239,6 +239,11 @@ type BuiltinConditionSetEvaluator interface {
 // is now available for condition evaluation. This includes the request object,
 // the old object (for updates/deletes), the operation, and options.
 type ConditionData interface {
+	// WriteRequest
+	WriteRequest() WriteRequestConditionData
+}
+
+type WriteRequestConditionData interface {
 	// GetOperation returns the operation being performed (e.g. "CREATE", "UPDATE",
 	// "DELETE", "CONNECT").
 	GetOperation() string
