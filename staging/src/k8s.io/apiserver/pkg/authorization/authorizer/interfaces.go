@@ -18,7 +18,6 @@ package authorizer
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 
@@ -99,7 +98,7 @@ func (f AuthorizerFunc) Authorize(ctx context.Context, a Attributes) (Decision, 
 	return f(ctx, a)
 }
 
-func (f AuthorizerFunc) EvaluateConditions(ctx context.Context, conditionSet *ConditionSet, data ConditionData) (Decision, error) {
+func (f AuthorizerFunc) EvaluateConditions(ctx context.Context, decision Decision, data ConditionData) (Decision, error) {
 	return DecisionDeny(), ErrorConditionEvaluationNotSupported
 }
 
@@ -227,7 +226,8 @@ type Decision struct {
 	unconditionalDecision unconditionalDecision
 
 	conditionSet *ConditionSet
-	authorizer   Authorizer
+
+	decisionChain ConditionalDecisionChain
 
 	// each reasons element should be a non-empty string
 	reasons []string
@@ -238,9 +238,9 @@ func DecisionAllow(reasons ...string) Decision {
 	return Decision{
 		unconditionalDecision: decisionAllow,
 		// on purpose nil
-		conditionSet: nil,
-		authorizer:   nil,
-		reasons:      nil,
+		conditionSet:  nil,
+		decisionChain: nil,
+		reasons:       nil,
 	}.WithAdditionalReasons(reasons...)
 }
 
@@ -249,9 +249,9 @@ func DecisionDeny(reasons ...string) Decision {
 	return Decision{
 		unconditionalDecision: decisionDeny,
 		// on purpose nil
-		conditionSet: nil,
-		authorizer:   nil,
-		reasons:      nil,
+		conditionSet:  nil,
+		decisionChain: nil,
+		reasons:       nil,
 	}.WithAdditionalReasons(reasons...)
 }
 
@@ -260,13 +260,16 @@ func DecisionNoOpinion(reasons ...string) Decision {
 	return Decision{
 		unconditionalDecision: decisionNoOpinion,
 		// on purpose nil
-		conditionSet: nil,
-		authorizer:   nil,
-		reasons:      nil,
+		conditionSet:  nil,
+		decisionChain: nil,
+		reasons:       nil,
 	}.WithAdditionalReasons(reasons...)
 }
 
-func DecisionConditional(conditionSet ConditionSet, authorizer Authorizer, attrs Attributes, reasons ...string) Decision {
+// TODO: Should reason be encoded on the Decision struct in the SAR API?
+
+// TODO: How to build the Decision type from the serialized SAR when one needs to provide the authorizer?
+func DecisionConditional(conditionSet ConditionSet, attrs Attributes, reasons ...string) Decision {
 	if attrs == nil || attrs.GetConditionsMode() == ConditionsModeNone {
 		return conditionSet.FailClosedDecision().
 			WithAdditionalReasons("client does not support conditions, but authorizer tried to return a conditional response")
@@ -274,9 +277,84 @@ func DecisionConditional(conditionSet ConditionSet, authorizer Authorizer, attrs
 	return Decision{
 		unconditionalDecision: 0,
 		conditionSet:          &conditionSet,
-		authorizer:            authorizer,
+		decisionChain:         nil,
 		reasons:               nil,
 	}.WithAdditionalReasons(reasons...)
+}
+
+// ConditionalDecisionChain is an aggregate Decision type. Order of decisions matter.
+type ConditionalDecisionChain []NamedDecision
+
+func (chain ConditionalDecisionChain) CanBecomeAllowed() bool {
+	for _, subDecision := range chain {
+		if subDecision.Decision.IsDenied() {
+			return false
+		}
+		if subDecision.Decision.IsAllowed() {
+			return true
+		}
+		if subDecision.Decision.IsConditional() && subDecision.Decision.CanBecomeAllowed() {
+			return true
+		}
+		if subDecision.Decision.IsConditionalChain() && subDecision.Decision.CanBecomeAllowed() {
+			return true
+		}
+	}
+	return false
+}
+
+func (chain ConditionalDecisionChain) FailClosedDecision() Decision {
+	for _, subDecision := range chain {
+		if subDecision.Decision.FailClosedDecision().IsDenied() {
+			return DecisionDeny()
+		}
+	}
+	return DecisionNoOpinion()
+}
+
+/*func (chain ConditionalDecisionChain) ToDecision() Decision {
+	if len(chain) == 0 {
+		return DecisionNoOpinion()
+	}
+	if len(chain) == 1 {
+		return chain[0].Decision
+	}
+
+	// Filter out any NoOpinion responses
+	// If empty
+	return Decision{
+		unconditionalDecision: 0,
+		conditionSet:          nil,
+		authorizer:            nil,
+		decisionChain:         chain,
+		reasons:               nil,
+	}
+}*/
+
+func DecisionConditionalChain(namedDecisions ...NamedDecision) Decision {
+	if len(namedDecisions) == 0 {
+		return DecisionNoOpinion()
+	}
+	if len(namedDecisions) == 1 {
+		d := namedDecisions[0].Decision
+		if d.IsAllowed() || d.IsDenied() || d.IsNoOpinion() {
+			return d
+		}
+		// else, wrap the conditional response in a chain, so that the caller knows which
+		// authorizer authored the condition
+	}
+
+	return Decision{
+		unconditionalDecision: 0,
+		conditionSet:          nil,
+		decisionChain:         namedDecisions,
+		reasons:               nil,
+	}
+}
+
+type NamedDecision struct {
+	AuthorizerName string
+	Decision       Decision
 }
 
 // INVARIANT: Exactly one of IsAllowed, IsNoOpinion, IsConditional and IsDenied must
@@ -296,6 +374,26 @@ func (d Decision) IsConditional() bool {
 	return d.conditionSet != nil
 }
 
+func (d Decision) IsConditionalChain() bool {
+	return d.decisionChain != nil
+}
+
+func (d Decision) CanBecomeAllowed() bool {
+	if d.IsAllowed() {
+		return true
+	}
+	if d.IsDenied() || d.IsNoOpinion() {
+		return false
+	}
+	if d.IsConditional() {
+		return d.conditionSet.CanBecomeAllowed()
+	}
+	if d.IsConditionalChain() {
+		return d.decisionChain.CanBecomeAllowed()
+	}
+	return false
+}
+
 // IsDenied returns true if the decision is Deny.
 func (d Decision) IsDenied() bool {
 	// The decision is a Deny whenever none of the other modes apply
@@ -303,21 +401,51 @@ func (d Decision) IsDenied() bool {
 	// d.unconditionalDecision == 0 == decisionDeny && d.conditionSet != nil, so it
 	// is not enough to check d.unconditionalDecision == decisionDeny
 	// This is because the zero value of the struct must be a Deny
-	return !d.IsAllowed() && !d.IsNoOpinion() && !d.IsConditional()
+	return !d.IsAllowed() && !d.IsNoOpinion() && !d.IsConditional() && !d.IsConditionalChain()
 }
 
-func (d Decision) Evaluate(ctx context.Context, data ConditionData) (Decision, error) {
-	// evaluating a concrete decision is a no-op
-	if !d.IsConditional() {
-		return d, nil
+func (d Decision) FailClosedDecision() Decision {
+	if d.IsConditional() {
+		return d.conditionSet.FailClosedDecision()
 	}
-	// => d.conditionSet != nil
-	if d.authorizer == nil {
-		return d.conditionSet.FailClosedDecision().WithAdditionalReasons("an error occurred"), errors.New("the authorizer must be non-nil in authorizer.DecisionConditional()")
+	if d.IsConditionalChain() {
+		return d.conditionSet.FailClosedDecision()
 	}
-	// TODO: shall we allow to return an error together with DecisionAllow? I guess, as we do for RBAC
-	return d.authorizer.EvaluateConditions(ctx, d.conditionSet, data)
+	return DecisionNoOpinion()
 }
+
+/*func (d Decision) Evaluate(ctx context.Context, data ConditionData) (Decision, error) {
+	if d.IsConditional() {
+		if d.authorizer == nil {
+			return d.conditionSet.FailClosedDecision().WithAdditionalReasons("an error occurred"), errors.New("the authorizer must be non-nil in authorizer.DecisionConditional()")
+		}
+		// TODO: shall we allow to return an error together with DecisionAllow? I guess, as we do for RBAC
+		return d.authorizer.EvaluateConditions(ctx, d.conditionSet, data)
+	}
+
+	if d.IsConditionalChain() {
+		if d.authorizer == nil {
+			return d.decisionChain.FailClosedDecision().WithAdditionalReasons("an error occurred"), errors.New("the authorizer must be non-nil in authorizer.DecisionConditionalChain()")
+		}
+		// TODO: Make this recursive later, so that this can return conditional responses too
+		// For now, start with a simpler variant
+		for _, unevaluatedDecision := range d.decisionChain {
+			// Precondition: All previous loop invocations only produced NoOpinion decisions
+			evaluatedDecision, err := unevaluatedDecision.Decision.Evaluate(ctx, data)
+			if evaluatedDecision.IsAllowed() || evaluatedDecision.IsDenied() {
+				return evaluatedDecision, err
+			}
+			if unevaluatedDecision.Decision.IsNoOpinion() {
+				continue
+			}
+			// Unexpected conditional decision returned
+			return un
+		}
+	}
+
+	// evaluating a concrete decision is a no-op
+	return d, nil
+}*/
 
 // Reason returns the reason string associated with this decision.
 func (d Decision) Reason() string {
@@ -345,9 +473,30 @@ func (d Decision) Equal(other Decision) bool {
 		return true
 	}
 	if d.IsConditional() && other.IsConditional() {
-		return d.conditionSet.Equal(other.conditionSet) && d.authorizer == other.authorizer
+		return d.conditionSet.Equal(other.conditionSet)
+	}
+	if d.IsConditionalChain() && other.IsConditionalChain() {
+		if len(d.decisionChain) != len(other.decisionChain) {
+			return false
+		}
+		for i := range d.decisionChain {
+			if d.decisionChain[i].AuthorizerName != other.decisionChain[i].AuthorizerName {
+				return false
+			}
+			if !d.decisionChain[i].Decision.Equal(other.decisionChain[i].Decision) {
+				return false
+			}
+		}
 	}
 	return false
+}
+
+func (d Decision) ConditionSet() *ConditionSet {
+	return d.conditionSet
+}
+
+func (d Decision) ConditionalChain() ConditionalDecisionChain {
+	return d.decisionChain
 }
 
 // WithAdditionalReasons creates a new Decision with additional reasons
@@ -381,6 +530,9 @@ func (d Decision) String() string {
 	}
 	if d.IsConditional() {
 		return "Conditional"
+	}
+	if d.IsConditionalChain() {
+		return "ConditionalChain"
 	}
 	return "Unknown" // should never happen, according to our invariant
 }

@@ -42,6 +42,8 @@ func TestDecisionZeroValueIsDeny(t *testing.T) {
 
 // TODO: Check that the Decision can only return true for one of the Is.. methods
 
+var _ Authorizer = sampleAuthorizer{}
+
 type sampleAuthorizer struct{}
 
 func (a sampleAuthorizer) Authorize(ctx context.Context, attrs Attributes) (Decision, error) {
@@ -71,7 +73,7 @@ func (a sampleAuthorizer) Authorize(ctx context.Context, attrs Attributes) (Deci
 			// the authorizer is misbehaving here, it SHOULD check attrs.GetConditionsMode() and
 			// fail closed to NoOpinion or Deny whenever it would like to return a conditional decision,
 			// but the client does not support it. However, this check is also done in DecisionConditional here.
-			return DecisionConditional(*conditions, a, attrs), nil
+			return DecisionConditional(*conditions, attrs), nil
 		default:
 			return DecisionNoOpinion(), nil
 		}
@@ -101,7 +103,7 @@ func (a sampleAuthorizer) Authorize(ctx context.Context, attrs Attributes) (Deci
 			// the authorizer is misbehaving here, it SHOULD check attrs.GetConditionsMode() and
 			// fail closed to NoOpinion or Deny whenever it would like to return a conditional decision,
 			// but the client does not support it. However, this check is also done in DecisionConditional here.
-			return DecisionConditional(*conditions, a, attrs), nil
+			return DecisionConditional(*conditions, attrs), nil
 		default:
 			return DecisionNoOpinion(), nil
 		}
@@ -110,10 +112,16 @@ func (a sampleAuthorizer) Authorize(ctx context.Context, attrs Attributes) (Deci
 	}
 }
 
-func (a sampleAuthorizer) EvaluateConditions(ctx context.Context, conditionSet *ConditionSet, data ConditionData) (Decision, error) {
+func (a sampleAuthorizer) EvaluateConditions(ctx context.Context, d Decision, data ConditionData) (Decision, error) {
+	if d.IsAllowed() || d.IsDenied() || d.IsNoOpinion() {
+		return d, nil
+	}
+	if d.IsConditionalChain() {
+		return d.FailClosedDecision(), errors.New("conditionschain unsupported")
+	}
 	// TODO: improve this
 	if data.WriteRequest() == nil {
-		return conditionSet.FailClosedDecision(), errors.New("only supports conditions for write requests")
+		return d.FailClosedDecision(), errors.New("only supports conditions for write requests")
 	}
 
 	enforceObjects := []runtime.Object{
@@ -121,7 +129,7 @@ func (a sampleAuthorizer) EvaluateConditions(ctx context.Context, conditionSet *
 		data.WriteRequest().GetObject(),
 	}
 
-	return EvaluateConditionSet(conditionSet, "labelSelectorApplies", func(condition string) (bool, error) {
+	return EvaluateConditionSet(d.ConditionSet(), "labelSelectorApplies", func(condition string) (bool, error) {
 		// condition is of form: "label-selector-for-oldobject|label-selector-for-object"
 		// if label-selector-for-oldobject is empty, it means "true"
 		selectorStrs := strings.Split(condition, "|")
@@ -419,7 +427,7 @@ func TestSampleAuthorizer(t *testing.T) {
 							},
 						}
 
-						final, err := decision.Evaluate(ctx, data)
+						final, err := authz.EvaluateConditions(ctx, decision, data)
 						if err != nil {
 							t.Fatalf("Evaluate() returned unexpected error: %v", err)
 						}

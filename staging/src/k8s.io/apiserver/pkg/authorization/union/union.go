@@ -26,6 +26,9 @@ package union
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strconv"
 
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apiserver/pkg/authentication/user"
@@ -40,34 +43,107 @@ func New(authorizationHandlers ...authorizer.Authorizer) authorizer.Authorizer {
 	return unionAuthzHandler(authorizationHandlers)
 }
 
+// This means that we got a concrete Allow or Deny or a conditional Allow
+// Note that there may be conditional Denies before a concrete Allow, and
+// a conditional Allow before a concrete Deny.
+
 // Authorizes against a chain of authorizer.Authorizer objects and returns nil if successful and returns error if unsuccessful
 func (authzHandler unionAuthzHandler) Authorize(ctx context.Context, a authorizer.Attributes) (authorizer.Decision, error) {
 	var (
-		errlist    []error
-		reasonlist []string
+		errlist             []error
+		noOpinionReasonList []string
+		decisionChain       []authorizer.NamedDecision
 	)
 
-	for _, currAuthzHandler := range authzHandler {
+	for i, currAuthzHandler := range authzHandler {
+		// Precondition: All previously seen decisions were either NoOpinion or Conditional.
 		decision, err := currAuthzHandler.Authorize(ctx, a)
-		// Ignore previous errors/reasons from NoOpinion responses
-		if decision.IsAllowed() || decision.IsDenied() {
-			return decision, err
-		}
-		// If NoOpinion, save the reasons and errors, if any
+
 		if err != nil {
+			// TODO: Wrap the errors to be of the form "authenticator 'foo' returned error: %w"
 			errlist = append(errlist, err)
 		}
-		reason := decision.Reason()
-		if len(reason) != 0 {
-			reasonlist = append(reasonlist, reason)
+
+		if !decision.IsNoOpinion() {
+			decisionChain = append(decisionChain, authorizer.NamedDecision{
+				AuthorizerName: fmt.Sprintf("%d", i),
+				Decision:       decision,
+			})
+		} else { // decision.IsNoOpinion()
+			reason := decision.Reason()
+			if len(reason) != 0 {
+				noOpinionReasonList = append(noOpinionReasonList, reason)
+			}
+		}
+
+		// If we got a concrete Allow/Deny decision, no need to walk the chain further.
+		if decision.IsDenied() || decision.IsAllowed() {
+			// TODO: should we capture the reasons and errors from earlier conditional decisions?
+			return authorizer.DecisionConditionalChain(decisionChain...), utilerrors.NewAggregate(errlist)
 		}
 	}
 
-	return authorizer.DecisionNoOpinion(reasonlist...), utilerrors.NewAggregate(errlist)
+	if len(decisionChain) != 0 {
+		// We reached the end of the chain and found no concrete Allow/Deny decision,
+		// but at least one conditional decision. Return that here
+		return authorizer.DecisionConditionalChain(decisionChain...), utilerrors.NewAggregate(errlist)
+	}
+
+	// We reached the end of the chain and all of the decisions were NoOpinions.
+	return authorizer.DecisionNoOpinion(noOpinionReasonList...), utilerrors.NewAggregate(errlist)
 }
 
-func (authzHandler unionAuthzHandler) EvaluateConditions(ctx context.Context, conditionSet *authorizer.ConditionSet, data authorizer.ConditionData) (authorizer.Decision, error) {
-	return authorizer.DecisionDeny(), authorizer.ErrorConditionEvaluationNotSupported
+func (authzHandler unionAuthzHandler) EvaluateConditions(ctx context.Context, unevaluatedDecision authorizer.Decision, data authorizer.ConditionData) (authorizer.Decision, error) {
+	if unevaluatedDecision.IsAllowed() || unevaluatedDecision.IsDenied() || unevaluatedDecision.IsNoOpinion() {
+		return unevaluatedDecision, nil
+	}
+	// TODO: better separation between IsConditional and IsConditionalChain
+	if unevaluatedDecision.IsConditional() {
+		return unevaluatedDecision.FailClosedDecision(), errors.New("plain ConditionSet unsupported")
+	}
+
+	errlist := []error{}
+	for _, namedUnevaluatedSubDecision := range unevaluatedDecision.ConditionalChain() {
+		failClosedDecision := namedUnevaluatedSubDecision.Decision.FailClosedDecision()
+		i, err := strconv.Atoi(namedUnevaluatedSubDecision.AuthorizerName)
+		if err != nil {
+			if failClosedDecision.IsDenied() {
+				return failClosedDecision, fmt.Errorf("unrecognized authorizer %q", namedUnevaluatedSubDecision.AuthorizerName)
+			}
+			continue
+		}
+		if i < 0 || i >= len(authzHandler) {
+			if failClosedDecision.IsDenied() {
+				return failClosedDecision, fmt.Errorf("unrecognized authorizer %q", namedUnevaluatedSubDecision.AuthorizerName)
+			}
+			continue
+		}
+		conditionsAuthorizer := authzHandler[i]
+		evalResult, err := conditionsAuthorizer.EvaluateConditions(ctx, namedUnevaluatedSubDecision.Decision, data)
+		if evalResult.IsAllowed() || evalResult.IsDenied() {
+			return evalResult, err
+		}
+
+		if err != nil {
+			errlist = append(errlist, err)
+		}
+
+		if evalResult.IsNoOpinion() {
+			continue
+		}
+
+		// We do not yet support evaluating conditional to conditional
+		err = errors.New("unsupported to evaluate conditional to conditional")
+		if err != nil {
+			errlist = append(errlist, err)
+		}
+		if failClosedDecision.IsDenied() {
+			return failClosedDecision, err
+		}
+	}
+	// Everything evaluated to NoOpinion
+	// TODO: Aggregate the reasons here too?
+	return authorizer.DecisionNoOpinion(), utilerrors.NewAggregate(errlist)
 }
 
 // unionAuthzRulesHandler authorizer against a chain of authorizer.RuleResolver

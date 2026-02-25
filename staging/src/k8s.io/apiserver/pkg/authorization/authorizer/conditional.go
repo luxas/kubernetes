@@ -272,7 +272,7 @@ func validateCondition(cond Condition, index int) error {
 // The resulting Decision may be concrete (Allow/Deny/NoOpinion), or again conditional, if the
 // data in ConditionData is partial.
 type ConditionSetEvaluator interface {
-	EvaluateConditions(ctx context.Context, conditionSet *ConditionSet, data ConditionData) (Decision, error)
+	EvaluateConditions(ctx context.Context, decision Decision, data ConditionData) (Decision, error)
 }
 
 // EvaluateConditionSet evaluates the conditions in the set into a concrete Allow/Deny/NoOpinion Decision, given an
