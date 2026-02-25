@@ -37,6 +37,10 @@ func (a *mockAuthorizer) Authorize(ctx context.Context, attrs authorizer.Attribu
 	return a.decision, a.err
 }
 
+func (a *mockAuthorizer) EvaluateConditions(ctx context.Context, conditionSet *authorizer.ConditionSet, data authorizer.ConditionData) (authorizer.Decision, error) {
+	return authorizer.DecisionDeny(), authorizer.ErrorConditionEvaluationNotSupported
+}
+
 func TestEnsureAuthorizedForVerb(t *testing.T) {
 	tests := []struct {
 		name          string

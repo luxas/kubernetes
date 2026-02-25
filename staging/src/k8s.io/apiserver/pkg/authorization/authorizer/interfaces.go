@@ -86,6 +86,8 @@ type Attributes interface {
 // an error together with any decision. It is then up to the caller to decide
 // whether that error is critical or not.
 type Authorizer interface {
+	ConditionSetEvaluator
+
 	Authorize(ctx context.Context, a Attributes) (Decision, error)
 }
 
@@ -94,6 +96,10 @@ type AuthorizerFunc func(ctx context.Context, a Attributes) (Decision, error)
 
 func (f AuthorizerFunc) Authorize(ctx context.Context, a Attributes) (Decision, error) {
 	return f(ctx, a)
+}
+
+func (f AuthorizerFunc) EvaluateConditions(ctx context.Context, conditionSet *ConditionSet, data ConditionData) (Decision, error) {
+	return DecisionDeny(), ErrorConditionEvaluationNotSupported
 }
 
 // RuleResolver provides a mechanism for resolving the list of rules that apply to a given user within a namespace.

@@ -66,6 +66,10 @@ func (authzHandler unionAuthzHandler) Authorize(ctx context.Context, a authorize
 	return authorizer.DecisionNoOpinion(reasonlist...), utilerrors.NewAggregate(errlist)
 }
 
+func (authzHandler unionAuthzHandler) EvaluateConditions(ctx context.Context, conditionSet *authorizer.ConditionSet, data authorizer.ConditionData) (authorizer.Decision, error) {
+	return authorizer.DecisionDeny(), authorizer.ErrorConditionEvaluationNotSupported
+}
+
 // unionAuthzRulesHandler authorizer against a chain of authorizer.RuleResolver
 type unionAuthzRulesHandler []authorizer.RuleResolver
 

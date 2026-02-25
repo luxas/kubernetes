@@ -47,6 +47,10 @@ func (sarAuthorizer) Authorize(ctx context.Context, a authorizer.Attributes) (au
 	return authorizer.DecisionAllow("you're not dave"), nil
 }
 
+func (sarAuthorizer) EvaluateConditions(ctx context.Context, conditionSet *authorizer.ConditionSet, data authorizer.ConditionData) (authorizer.Decision, error) {
+	return authorizer.DecisionDeny(), authorizer.ErrorConditionEvaluationNotSupported
+}
+
 func alwaysAlice(req *http.Request) (*authenticator.Response, bool, error) {
 	return &authenticator.Response{
 		User: &user.DefaultInfo{

@@ -319,6 +319,10 @@ func (f *fakeAuth) Authorize(ctx context.Context, a authorizer.Attributes) (auth
 	return f.authorizeFunc(a)
 }
 
+func (f *fakeAuth) EvaluateConditions(ctx context.Context, conditionSet *authorizer.ConditionSet, data authorizer.ConditionData) (authorizer.Decision, error) {
+	return authorizer.DecisionDeny(), authorizer.ErrorConditionEvaluationNotSupported
+}
+
 type serverTestFramework struct {
 	serverUnderTest *Server
 	fakeKubelet     *fakeKubelet

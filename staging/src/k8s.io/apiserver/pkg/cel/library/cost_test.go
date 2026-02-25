@@ -1514,3 +1514,7 @@ type alwaysAllowAuthorizer struct{}
 func (f alwaysAllowAuthorizer) Authorize(ctx context.Context, a authorizer.Attributes) (authorizer.Decision, error) {
 	return authorizer.DecisionAllow(""), nil
 }
+
+func (f alwaysAllowAuthorizer) EvaluateConditions(ctx context.Context, conditionSet *authorizer.ConditionSet, data authorizer.ConditionData) (authorizer.Decision, error) {
+	return authorizer.DecisionDeny(), authorizer.ErrorConditionEvaluationNotSupported
+}

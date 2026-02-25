@@ -37,6 +37,10 @@ func (mock *mockAuthzHandler) Authorize(ctx context.Context, a authorizer.Attrib
 	return mock.decision, mock.err
 }
 
+func (mock *mockAuthzHandler) EvaluateConditions(ctx context.Context, conditionSet *authorizer.ConditionSet, data authorizer.ConditionData) (authorizer.Decision, error) {
+	return authorizer.DecisionDeny(), authorizer.ErrorConditionEvaluationNotSupported
+}
+
 func TestAuthorizationSecondPasses(t *testing.T) {
 	handler1 := &mockAuthzHandler{decision: authorizer.DecisionNoOpinion("")}
 	handler2 := &mockAuthzHandler{decision: authorizer.DecisionAllow("")}

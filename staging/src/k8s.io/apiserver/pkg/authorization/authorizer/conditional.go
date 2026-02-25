@@ -18,13 +18,20 @@ package authorizer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/validate/content"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
 )
+
+// ErrorConditionEvaluationNotSupported is returned by authorizer implementations
+// that do not support condition evaluation.
+var ErrorConditionEvaluationNotSupported = errors.New("condition evaluation not supported")
 
 // Maximum limits for conditions and condition sets.
 const (
@@ -238,9 +245,17 @@ type BuiltinConditionSetEvaluator interface {
 // ConditionData provides the data that was unknown at authorization time but
 // is now available for condition evaluation. This includes the request object,
 // the old object (for updates/deletes), the operation, and options.
+// All top-level getters are mutually exclusive with each other.
 type ConditionData interface {
-	// WriteRequest
+	// WriteRequest provides data for a condition that is targeting a normal write request
+	// (verbs=create, update, patch, delete, deletecollection or a connect request).
+	// Evaluating a ConditionSet against WriteRequest must return a concrete decision (Allow/Deny/NoOpinion).
 	WriteRequest() WriteRequestConditionData
+
+	// ImpersonationRequest provides data known at the time of impersonation. Evaluating a condition
+	// against the data of ImpersonationRequest can result in a concrete decision (Allow/Deny/NoOpinion)
+	// or another conditional decision, with conditions written against WriteRequest.
+	ImpersonationRequest() ImpersonationRequestConditionData
 }
 
 type WriteRequestConditionData interface {
@@ -258,4 +273,50 @@ type WriteRequestConditionData interface {
 	// GetOldObject returns the existing object. Only populated for UPDATE and
 	// DELETE requests.
 	GetOldObject() runtime.Object
+}
+
+type ImpersonationRequestConditionData interface {
+	// GetVerb returns the kube verb associated with API requests (this includes get, list, watch, create, update, patch, delete, deletecollection, and proxy),
+	// or the lowercased HTTP verb associated with non-API requests (this includes get, put, post, patch, and delete)
+	GetVerb() string
+
+	// When IsReadOnly() == true, the request has no side effects, other than
+	// caching, logging, and other incidentals.
+	IsReadOnly() bool
+
+	// The namespace of the object, if a request is for a REST object.
+	GetNamespace() string
+
+	// The kind of object, if a request is for a REST object.
+	GetResource() string
+
+	// GetSubresource returns the subresource being requested, if present
+	GetSubresource() string
+
+	// GetName returns the name of the object as parsed off the request.  This will not be present for all request types, but
+	// will be present for: get, update, delete
+	GetName() string
+
+	// The group of the resource, if a request is for a REST object.
+	GetAPIGroup() string
+
+	// GetAPIVersion returns the version of the group requested, if a request is for a REST object.
+	GetAPIVersion() string
+
+	// IsResourceRequest returns true for requests to API resources, like /api/v1/nodes,
+	// and false for non-resource endpoints like /api, /healthz
+	IsResourceRequest() bool
+
+	// GetPath returns the path of the request
+	GetPath() string
+
+	// ParseFieldSelector is lazy, thread-safe, and stores the parsed result and error.
+	// It returns an error if the field selector cannot be parsed.
+	// The returned requirements must be treated as readonly and not modified.
+	GetFieldSelector() (fields.Requirements, error)
+
+	// ParseLabelSelector is lazy, thread-safe, and stores the parsed result and error.
+	// It returns an error if the label selector cannot be parsed.
+	// The returned requirements must be treated as readonly and not modified.
+	GetLabelSelector() (labels.Requirements, error)
 }

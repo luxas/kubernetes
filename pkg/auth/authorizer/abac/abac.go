@@ -225,6 +225,10 @@ func resourceMatches(p abac.Policy, a authorizer.Attributes) bool {
 	return false
 }
 
+func (pl PolicyList) EvaluateConditions(ctx context.Context, conditionSet *authorizer.ConditionSet, data authorizer.ConditionData) (authorizer.Decision, error) {
+	return authorizer.DecisionDeny(), authorizer.ErrorConditionEvaluationNotSupported
+}
+
 // Authorize implements authorizer.Authorize
 func (pl PolicyList) Authorize(ctx context.Context, a authorizer.Attributes) (authorizer.Decision, error) {
 	for _, p := range pl {
