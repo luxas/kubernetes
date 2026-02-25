@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(make:*)",
+      "Bash(tail:*)",
+      "Bash(head:*)",
+      "Bash(hack/test-changed.sh:*)"
+    ]
+  },
+  "env": {
+    "TMPDIR": "/Users/luxas/upbound/kubernetes/.cache/tmp",
+    "GOCACHE": "/Users/luxas/upbound/kubernetes/.cache/go-build",
+    "GOPATH": "/Users/luxas/upbound/kubernetes/.cache/gopath"
+  }
+}

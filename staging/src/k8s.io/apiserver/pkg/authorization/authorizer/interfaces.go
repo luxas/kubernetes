@@ -75,6 +75,10 @@ type Attributes interface {
 	// It returns an error if the label selector cannot be parsed.
 	// The returned requirements must be treated as readonly and not modified.
 	GetLabelSelector() (labels.Requirements, error)
+
+	// GetConditionsMode returns the conditions mode that the caller has requested.
+	// If the caller does not support conditions, this returns ConditionsModeNone (empty string).
+	GetConditionsMode() ConditionsMode
 }
 
 // Authorizer makes an authorization decision based on information gained by making
@@ -103,6 +107,24 @@ type RequestAttributesGetter interface {
 	GetRequestAttributes(user.Info, *http.Request) Attributes
 }
 
+// ConditionsMode specifies how, if at all, the client wants conditions to be
+// returned by the authorizer. The default (empty string) means conditions are
+// not supported by the caller.
+type ConditionsMode string
+
+const (
+	// ConditionsModeNone indicates that the client does not support conditions.
+	ConditionsModeNone ConditionsMode = ""
+
+	// ConditionsModeHumanReadable indicates that the client wants a
+	// human-readable condition and description, if possible.
+	ConditionsModeHumanReadable ConditionsMode = "HumanReadable"
+
+	// ConditionsModeOptimized indicates that the client wants an
+	// optimized conditions encoding without description, if possible.
+	ConditionsModeOptimized ConditionsMode = "Optimized"
+)
+
 // AttributesRecord implements Attributes interface.
 type AttributesRecord struct {
 	User            user.Info
@@ -120,6 +142,9 @@ type AttributesRecord struct {
 	FieldSelectorParsingErr   error
 	LabelSelectorRequirements labels.Requirements
 	LabelSelectorParsingErr   error
+
+	// ConditionsMode indicates how conditions should be returned. Defaults to ConditionsModeNone.
+	ConditionsMode ConditionsMode
 }
 
 func (a AttributesRecord) GetUser() user.Info {
@@ -172,6 +197,10 @@ func (a AttributesRecord) GetFieldSelector() (fields.Requirements, error) {
 
 func (a AttributesRecord) GetLabelSelector() (labels.Requirements, error) {
 	return a.LabelSelectorRequirements, a.LabelSelectorParsingErr
+}
+
+func (a AttributesRecord) GetConditionsMode() ConditionsMode {
+	return a.ConditionsMode
 }
 
 // decision is the internal enum type backing Decision.

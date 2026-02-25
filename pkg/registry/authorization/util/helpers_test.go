@@ -85,6 +85,10 @@ func TestResourceAttributesFrom(t *testing.T) {
 		"ResourceRequest",
 		"Path",
 		"Verb",
+
+		// Fields not mapped from SubjectAccessReview (used internally)
+		// TODO: Fix this when we add ConditionsMode to SAR
+		//"ConditionsMode",
 	)
 	reflect.TypeOf(authorizer.AttributesRecord{}).FieldByNameFunc(func(name string) bool {
 		if !knownAttributesRecordFieldNames.Has(name) {
