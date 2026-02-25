@@ -126,3 +126,4 @@ zz_generated_*_test.go
 vendordiff.patch
 
 .cache
+plans/last-test-run.txt
