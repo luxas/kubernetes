@@ -807,7 +807,7 @@ func (impersonateAuthorizer) Authorize(ctx context.Context, a authorizer.Attribu
 	return authorizer.DecisionNoOpinion("I can't allow that.  Go ask alice."), nil
 }
 
-func (impersonateAuthorizer) EvaluateConditions(ctx context.Context, conditionSet *authorizer.ConditionSet, data authorizer.ConditionData) (authorizer.Decision, error) {
+func (impersonateAuthorizer) EvaluateConditions(ctx context.Context, decision authorizer.Decision, data authorizer.ConditionData) (authorizer.Decision, error) {
 	return authorizer.DecisionDeny(), authorizer.ErrorConditionEvaluationNotSupported
 }
 
@@ -1496,7 +1496,7 @@ func (a *trackingAuthorizer) Authorize(ctx context.Context, attributes authorize
 	return authorizer.DecisionAllow(""), nil
 }
 
-func (a *trackingAuthorizer) EvaluateConditions(ctx context.Context, conditionSet *authorizer.ConditionSet, data authorizer.ConditionData) (authorizer.Decision, error) {
+func (a *trackingAuthorizer) EvaluateConditions(ctx context.Context, decision authorizer.Decision, data authorizer.ConditionData) (authorizer.Decision, error) {
 	return authorizer.DecisionDeny(), authorizer.ErrorConditionEvaluationNotSupported
 }
 

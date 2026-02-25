@@ -106,7 +106,7 @@ func (r *NodeAuthorizer) RulesFor(ctx context.Context, user user.Info, namespace
 	return nil, nil, false, nil
 }
 
-func (r *NodeAuthorizer) EvaluateConditions(ctx context.Context, conditionSet *authorizer.ConditionSet, data authorizer.ConditionData) (authorizer.Decision, error) {
+func (r *NodeAuthorizer) EvaluateConditions(ctx context.Context, decision authorizer.Decision, data authorizer.ConditionData) (authorizer.Decision, error) {
 	return authorizer.DecisionDeny(), authorizer.ErrorConditionEvaluationNotSupported
 }
 

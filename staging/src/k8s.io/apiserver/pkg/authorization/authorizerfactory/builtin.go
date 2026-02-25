@@ -33,7 +33,7 @@ func (alwaysAllowAuthorizer) Authorize(ctx context.Context, a authorizer.Attribu
 	return authorizer.DecisionAllow(""), nil
 }
 
-func (alwaysAllowAuthorizer) EvaluateConditions(ctx context.Context, conditionSet *authorizer.ConditionSet, data authorizer.ConditionData) (authorizer.Decision, error) {
+func (alwaysAllowAuthorizer) EvaluateConditions(ctx context.Context, decision authorizer.Decision, data authorizer.ConditionData) (authorizer.Decision, error) {
 	return authorizer.DecisionDeny(), authorizer.ErrorConditionEvaluationNotSupported
 }
 
@@ -65,7 +65,7 @@ func (alwaysDenyAuthorizer) Authorize(ctx context.Context, a authorizer.Attribut
 	return authorizer.DecisionNoOpinion("Everything is forbidden."), nil
 }
 
-func (alwaysDenyAuthorizer) EvaluateConditions(ctx context.Context, conditionSet *authorizer.ConditionSet, data authorizer.ConditionData) (authorizer.Decision, error) {
+func (alwaysDenyAuthorizer) EvaluateConditions(ctx context.Context, decision authorizer.Decision, data authorizer.ConditionData) (authorizer.Decision, error) {
 	return authorizer.DecisionDeny(), authorizer.ErrorConditionEvaluationNotSupported
 }
 
@@ -95,7 +95,7 @@ func (r *privilegedGroupAuthorizer) Authorize(ctx context.Context, attr authoriz
 	return authorizer.DecisionNoOpinion(""), nil
 }
 
-func (r *privilegedGroupAuthorizer) EvaluateConditions(ctx context.Context, conditionSet *authorizer.ConditionSet, data authorizer.ConditionData) (authorizer.Decision, error) {
+func (r *privilegedGroupAuthorizer) EvaluateConditions(ctx context.Context, decision authorizer.Decision, data authorizer.ConditionData) (authorizer.Decision, error) {
 	return authorizer.DecisionDeny(), authorizer.ErrorConditionEvaluationNotSupported
 }
 

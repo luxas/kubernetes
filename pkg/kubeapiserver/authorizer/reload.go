@@ -79,7 +79,7 @@ func (r *reloadableAuthorizerResolver) Authorize(ctx context.Context, a authoriz
 	return r.current.Load().authorizer.Authorize(ctx, a)
 }
 
-func (r *reloadableAuthorizerResolver) EvaluateConditions(ctx context.Context, conditionSet *authorizer.ConditionSet, data authorizer.ConditionData) (authorizer.Decision, error) {
+func (r *reloadableAuthorizerResolver) EvaluateConditions(ctx context.Context, decision authorizer.Decision, data authorizer.ConditionData) (authorizer.Decision, error) {
 	return authorizer.DecisionDeny(), authorizer.ErrorConditionEvaluationNotSupported
 }
 

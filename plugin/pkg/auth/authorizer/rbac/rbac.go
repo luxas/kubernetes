@@ -126,7 +126,7 @@ func (r *RBACAuthorizer) Authorize(ctx context.Context, requestAttributes author
 	return authorizer.DecisionNoOpinion(reason), nil
 }
 
-func (r *RBACAuthorizer) EvaluateConditions(ctx context.Context, conditionSet *authorizer.ConditionSet, data authorizer.ConditionData) (authorizer.Decision, error) {
+func (r *RBACAuthorizer) EvaluateConditions(ctx context.Context, decision authorizer.Decision, data authorizer.ConditionData) (authorizer.Decision, error) {
 	return authorizer.DecisionDeny(), authorizer.ErrorConditionEvaluationNotSupported
 }
 

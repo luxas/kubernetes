@@ -154,6 +154,6 @@ func (ca *cachingAuthorizer) Authorize(ctx context.Context, a authorizer.Attribu
 	return authorized, err
 }
 
-func (ca *cachingAuthorizer) EvaluateConditions(ctx context.Context, conditionSet *authorizer.ConditionSet, data authorizer.ConditionData) (authorizer.Decision, error) {
+func (ca *cachingAuthorizer) EvaluateConditions(ctx context.Context, decision authorizer.Decision, data authorizer.ConditionData) (authorizer.Decision, error) {
 	return authorizer.DecisionDeny(), authorizer.ErrorConditionEvaluationNotSupported
 }

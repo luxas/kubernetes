@@ -152,7 +152,7 @@ func (t *TestAuthorizer) Authorize(ctx context.Context, a authorizer.Attributes)
 	return authorizer.DecisionNoOpinion(""), nil
 }
 
-func (t *TestAuthorizer) EvaluateConditions(ctx context.Context, conditionSet *authorizer.ConditionSet, data authorizer.ConditionData) (authorizer.Decision, error) {
+func (t *TestAuthorizer) EvaluateConditions(ctx context.Context, decision authorizer.Decision, data authorizer.ConditionData) (authorizer.Decision, error) {
 	return authorizer.DecisionDeny(), authorizer.ErrorConditionEvaluationNotSupported
 }
 

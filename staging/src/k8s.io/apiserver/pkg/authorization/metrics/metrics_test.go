@@ -95,6 +95,6 @@ func (d *dummyAuthorizer) Authorize(ctx context.Context, attrs authorizer.Attrib
 	return d.decision, d.err
 }
 
-func (d *dummyAuthorizer) EvaluateConditions(ctx context.Context, conditionSet *authorizer.ConditionSet, data authorizer.ConditionData) (authorizer.Decision, error) {
+func (d *dummyAuthorizer) EvaluateConditions(ctx context.Context, decision authorizer.Decision, data authorizer.ConditionData) (authorizer.Decision, error) {
 	return authorizer.DecisionDeny(), authorizer.ErrorConditionEvaluationNotSupported
 }
