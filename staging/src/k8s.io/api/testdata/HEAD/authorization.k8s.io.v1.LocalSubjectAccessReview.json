@@ -104,8 +104,6 @@
       {
         "allowed": true,
         "denied": true,
-        "failureMode": "failureModeValue",
-        "authorizerName": "authorizerNameValue",
         "conditionsType": "conditionsTypeValue",
         "conditions": [
           {
