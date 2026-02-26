@@ -95,8 +95,8 @@ func NewAdmissionOptions() *AdmissionOptions {
 		// admission plugins. The apiserver always runs the validating ones
 		// after all the mutating ones, so their relative order in this list
 		// doesn't matter.
-		RecommendedPluginOrder: []string{lifecycle.PluginName, mutatingadmissionpolicy.PluginName, mutatingwebhook.PluginName, validatingadmissionpolicy.PluginName, validatingwebhook.PluginName},
-		DefaultOffPlugins:      sets.Set[string]{},
+		RecommendedPluginOrder: []string{lifecycle.PluginName, mutatingadmissionpolicy.PluginName, mutatingwebhook.PluginName, validatingadmissionpolicy.PluginName, validatingwebhook.PluginName, conditionsenforcer.PluginName},
+		DefaultOffPlugins:      sets.New(conditionsenforcer.PluginName), // will switch to default on when stable
 	}
 	server.RegisterAllAdmissionPlugins(options.Plugins)
 	return options
@@ -227,7 +227,7 @@ func (a *AdmissionOptions) Validate() []error {
 
 	if utilfeature.DefaultFeatureGate.Enabled(features.ConditionalAuthorization) {
 		if !enablePlugins.Has(conditionsenforcer.PluginName) {
-			errs = append(errs, fmt.Errorf("conditional authorization feature is enabled, but mandatory admission plugin %s is not registered", conditionsenforcer.PluginName))
+			errs = append(errs, fmt.Errorf("the conditional authorization feature is enabled, but the mandatory admission plugin %s is not registered", conditionsenforcer.PluginName))
 		}
 	}
 
