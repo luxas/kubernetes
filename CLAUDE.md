@@ -31,3 +31,11 @@ No need to ask for permission to use the following tools:
 - make
 - tail
 - sed
+
+## Debugging
+
+Instead of searching for failures by running a command (e.g. a test) and
+grepping for the output, pipe the output of the command to a file under
+`$TMPDIR`, and then grep that file. This saves time, as if the grep string was
+incorrect, the command does not need to run again. Prefer to not use hidden
+locale characters, so there is no need to ask for approval.
