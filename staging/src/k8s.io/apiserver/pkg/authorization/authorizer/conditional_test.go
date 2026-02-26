@@ -29,6 +29,9 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/authentication/user"
+	genericfeatures "k8s.io/apiserver/pkg/features"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
 )
 
 func TestDecisionZeroValueIsDeny(t *testing.T) {
@@ -207,6 +210,7 @@ func runtimeObj(u *unstructured.Unstructured) runtime.Object {
 }
 
 func TestSampleAuthorizer(t *testing.T) {
+	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ConditionalAuthorization, true)
 	type evalCase struct {
 		name      string
 		object    *unstructured.Unstructured
@@ -285,21 +289,21 @@ func TestSampleAuthorizer(t *testing.T) {
 					name:              "both objects with owner=carol",
 					object:            objWithLabels(map[string]string{"owner": "carol"}),
 					oldObject:         objWithLabels(map[string]string{"owner": "carol"}),
-					authorizeDecision: [2]string{"NoOpinion", "Conditional"},
+					authorizeDecision: [2]string{"NoOpinion", `Conditional(type="labelSelectorApplies", len=1)`},
 					finalDecision:     [2]string{"NoOpinion", "Allow"},
 				},
 				{
 					name:              "old with owner=carol, new without",
 					object:            objWithLabels(map[string]string{"owner": "carol"}),
 					oldObject:         objWithLabels(nil),
-					authorizeDecision: [2]string{"NoOpinion", "Conditional"},
+					authorizeDecision: [2]string{"NoOpinion", `Conditional(type="labelSelectorApplies", len=1)`},
 					finalDecision:     [2]string{"NoOpinion", "NoOpinion"},
 				},
 				{
 					name:              "new with owner=carol, old with owner=alice",
 					object:            objWithLabels(map[string]string{"owner": "alice"}),
 					oldObject:         objWithLabels(map[string]string{"owner": "carol"}),
-					authorizeDecision: [2]string{"NoOpinion", "Conditional"},
+					authorizeDecision: [2]string{"NoOpinion", `Conditional(type="labelSelectorApplies", len=1)`},
 					finalDecision:     [2]string{"NoOpinion", "NoOpinion"},
 				},
 			},
@@ -337,28 +341,28 @@ func TestSampleAuthorizer(t *testing.T) {
 					name:              "both objects with supersecret",
 					object:            objWithLabels(map[string]string{"supersecret": "yes"}),
 					oldObject:         objWithLabels(map[string]string{"supersecret": "yes"}),
-					authorizeDecision: [2]string{"Deny", "Conditional"},
+					authorizeDecision: [2]string{"Deny", `Conditional(type="labelSelectorApplies", len=2)`},
 					finalDecision:     [2]string{"Deny", "Deny"},
 				},
 				{
 					name:              "new with supersecret old without",
 					object:            objWithLabels(map[string]string{"supersecret": "yes"}),
 					oldObject:         objWithLabels(nil),
-					authorizeDecision: [2]string{"Deny", "Conditional"},
+					authorizeDecision: [2]string{"Deny", `Conditional(type="labelSelectorApplies", len=2)`},
 					finalDecision:     [2]string{"Deny", "Deny"},
 				},
 				{
 					name:              "new without old with supersecret",
 					object:            objWithLabels(nil),
 					oldObject:         objWithLabels(map[string]string{"supersecret": "yes"}),
-					authorizeDecision: [2]string{"Deny", "Conditional"},
+					authorizeDecision: [2]string{"Deny", `Conditional(type="labelSelectorApplies", len=2)`},
 					finalDecision:     [2]string{"Deny", "Deny"},
 				},
 				{
 					name:              "both without supersecret",
 					object:            objWithLabels(map[string]string{"safe": "true"}),
 					oldObject:         objWithLabels(map[string]string{"safe": "true"}),
-					authorizeDecision: [2]string{"Deny", "Conditional"},
+					authorizeDecision: [2]string{"Deny", `Conditional(type="labelSelectorApplies", len=2)`},
 					finalDecision:     [2]string{"Deny", "NoOpinion"},
 				},
 			},

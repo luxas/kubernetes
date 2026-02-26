@@ -27,6 +27,9 @@ import (
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
+	genericfeatures "k8s.io/apiserver/pkg/features"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
 )
 
 type mockAuthzHandler struct {
@@ -271,6 +274,7 @@ func (a *evalTestAuthz) EvaluateConditions(ctx context.Context, decision authori
 //		union2 = [authz1, authz2]
 //	    union3 = [authz4]
 func TestUnionEvaluateConditions(t *testing.T) {
+	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ConditionalAuthorization, true)
 	noOpinion := func() authorizer.Authorizer {
 		return &evalTestAuthz{decision: authorizer.DecisionNoOpinion()}
 	}

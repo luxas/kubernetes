@@ -29,6 +29,8 @@ import (
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apiserver/pkg/authentication/user"
+	genericfeatures "k8s.io/apiserver/pkg/features"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 )
 
 // Attributes is an interface used by an Authorizer to get information about a request
@@ -279,10 +281,10 @@ func DecisionConditional(attrs Attributes, conditionType string, conditionsIter 
 	conditionSet := map[string]Condition{}
 	seenIDs := sets.New[string]()
 	errlist := []error{}
-	decisionOnError := DecisionNoOpinion()
+	failClosedError := DecisionNoOpinion()
 	for id, condition := range conditionsIter {
 		if condition.Effect == ConditionEffectDeny {
-			decisionOnError = DecisionDeny()
+			failClosedError = DecisionDeny()
 		}
 		if seenIDs.Has(id) {
 			errlist = append(errlist, fmt.Errorf("duplicate condition ID %q", id))
@@ -299,12 +301,17 @@ func DecisionConditional(attrs Attributes, conditionType string, conditionsIter 
 		}
 	}
 
+	// Do not allow constructing Conditional decisions when the feature gate is off
+	if !utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
+		return failClosedError, fmt.Errorf("cannot construct conditional decision: the ConditionalAuthorization feature gate is disabled")
+	}
+
 	// check errors before len(conditionSet) == 0, as some errors might have made the map be empty
 	// although there were items in the iterator
 	if err := utilerrors.NewAggregate(errlist); err != nil {
 		// the error is returned first here, not in the loop, to make sure we saw all conditions,
 		// and fail closed with deny if there were any deny conditions
-		return decisionOnError, err
+		return failClosedError, err
 	}
 
 	// an empty conditionset always evaluates to NoOpinion
@@ -314,12 +321,12 @@ func DecisionConditional(attrs Attributes, conditionType string, conditionsIter 
 	}
 
 	if errs := content.IsLabelKey(conditionType); len(errs) > 0 {
-		return decisionOnError, fmt.Errorf("invalid condition type %q: %s", conditionType, strings.Join(errs, "; "))
+		return failClosedError, fmt.Errorf("invalid condition type %q: %s", conditionType, strings.Join(errs, "; "))
 	}
 
 	// Protect against authorizers that forget to fail closed for clients that aren't conditions-aware
 	if attrs == nil || attrs.GetConditionsMode() == ConditionsModeNone {
-		return decisionOnError.
+		return failClosedError.
 			WithAdditionalReasons("client does not support conditions, but authorizer tried to return a conditional response"), nil
 	}
 
@@ -413,11 +420,6 @@ func allItems(decisions []Decision, pred func(d Decision) bool) bool {
 		}
 	}
 	return true
-}
-
-type NamedDecision struct {
-	AuthorizerName string
-	Decision       Decision
 }
 
 // INVARIANT: Exactly one of IsAllowed, IsNoOpinion, IsConditional and IsDenied must

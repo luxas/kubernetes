@@ -88,7 +88,7 @@ type Condition struct {
 }
 
 // ConditionSet represents a conditional response from an authorizer.
-// It must be constructed through NewConditionSet or NewUnconditionalConditionSet.
+// It must be constructed through DecisionConditional.
 type ConditionSet struct {
 	// conditionType is the format/encoding/language of the conditions in this set.
 	// Any type starting with `k8s.io/` is reserved for Kubernetes condition types.
