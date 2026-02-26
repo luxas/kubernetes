@@ -373,25 +373,6 @@ func (chain ConditionalDecisionChain) HasConcreteResponse() bool {
 	return false
 }
 
-/*func (chain ConditionalDecisionChain) ToDecision() Decision {
-	if len(chain) == 0 {
-		return DecisionNoOpinion()
-	}
-	if len(chain) == 1 {
-		return chain[0].Decision
-	}
-
-	// Filter out any NoOpinion responses
-	// If empty
-	return Decision{
-		unconditionalDecision: 0,
-		conditionSet:          nil,
-		authorizer:            nil,
-		decisionChain:         chain,
-		reasons:               nil,
-	}
-}*/
-
 func DecisionConditionalChain(decisions ...Decision) Decision {
 	if len(decisions) == 0 {
 		return DecisionNoOpinion()
@@ -505,39 +486,6 @@ func (d Decision) FailClosedDecision() Decision {
 	}
 	return DecisionNoOpinion()
 }
-
-/*func (d Decision) Evaluate(ctx context.Context, data ConditionData) (Decision, error) {
-	if d.IsConditional() {
-		if d.authorizer == nil {
-			return d.conditionSet.FailClosedDecision().WithAdditionalReasons("an error occurred"), errors.New("the authorizer must be non-nil in authorizer.DecisionConditional()")
-		}
-		// TODO: shall we allow to return an error together with DecisionAllow? I guess, as we do for RBAC
-		return d.authorizer.EvaluateConditions(ctx, d.conditionSet, data)
-	}
-
-	if d.IsConditionalChain() {
-		if d.authorizer == nil {
-			return d.decisionChain.FailClosedDecision().WithAdditionalReasons("an error occurred"), errors.New("the authorizer must be non-nil in authorizer.DecisionConditionalChain()")
-		}
-		// TODO: Make this recursive later, so that this can return conditional responses too
-		// For now, start with a simpler variant
-		for _, unevaluatedDecision := range d.decisionChain {
-			// Precondition: All previous loop invocations only produced NoOpinion decisions
-			evaluatedDecision, err := unevaluatedDecision.Decision.Evaluate(ctx, data)
-			if evaluatedDecision.IsAllowed() || evaluatedDecision.IsDenied() {
-				return evaluatedDecision, err
-			}
-			if unevaluatedDecision.Decision.IsNoOpinion() {
-				continue
-			}
-			// Unexpected conditional decision returned
-			return un
-		}
-	}
-
-	// evaluating a concrete decision is a no-op
-	return d, nil
-}*/
 
 // Reason returns the reason string associated with this decision.
 func (d Decision) Reason() string {

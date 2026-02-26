@@ -195,40 +195,6 @@ func (c *ConditionSet) FailClosedDecision() Decision {
 	return DecisionNoOpinion()
 }
 
-// NewConditionSet creates a new ConditionSet with the given condition type
-// and conditions. It validates all conditions and returns an error if any
-// validation fails.
-func NewConditionSet(conditionType string, conditionsIter iter.Seq2[string, Condition]) (*ConditionSet, error) {
-	if errs := content.IsLabelKey(conditionType); len(errs) > 0 {
-		return nil, fmt.Errorf("invalid condition type %q: %s", conditionType, strings.Join(errs, "; "))
-	}
-
-	conditionSet := map[string]Condition{}
-	seenIDs := sets.New[string]()
-	for id, condition := range conditionsIter {
-		if seenIDs.Has(id) {
-			return nil, fmt.Errorf("duplicate condition ID %q", id)
-		}
-		if err := validateCondition(id, condition); err != nil {
-			return nil, err
-		}
-		conditionSet[id] = condition
-		// stop directly when having seen too many conditions
-		if len(conditionSet) > MaxConditionsPerSet {
-			return nil, fmt.Errorf("too many conditions: %d exceeds maximum of %d", len(conditionSet), MaxConditionsPerSet)
-		}
-	}
-
-	if len(conditionSet) == 0 {
-		return nil, fmt.Errorf("conditions must not be empty")
-	}
-
-	return &ConditionSet{
-		conditionType: conditionType,
-		conditions:    conditionSet,
-	}, nil
-}
-
 // validateCondition validates a single Condition.
 func validateCondition(id string, cond Condition) error {
 	// Validate ID as a label key.

@@ -499,8 +499,8 @@ func TestEvaluateConditionSet(t *testing.T) {
 			name: "deny condition matches",
 			conditionSet: &ConditionSet{
 				conditionType: "test",
-				conditions: []Condition{
-					{ID: "deny-cond", Condition: "x", Effect: ConditionEffectDeny, Description: "access denied"},
+				conditions: map[string]Condition{
+					"deny-cond": {Condition: "x", Effect: ConditionEffectDeny, Description: "access denied"},
 				},
 			},
 			supportedType: "test",
@@ -512,8 +512,8 @@ func TestEvaluateConditionSet(t *testing.T) {
 			name: "deny condition does not match",
 			conditionSet: &ConditionSet{
 				conditionType: "test",
-				conditions: []Condition{
-					{ID: "deny-cond", Condition: "x", Effect: ConditionEffectDeny},
+				conditions: map[string]Condition{
+					"deny-cond": {Condition: "x", Effect: ConditionEffectDeny},
 				},
 			},
 			supportedType: "test",
@@ -525,8 +525,8 @@ func TestEvaluateConditionSet(t *testing.T) {
 			name: "deny condition eval error",
 			conditionSet: &ConditionSet{
 				conditionType: "test",
-				conditions: []Condition{
-					{ID: "deny-cond", Condition: "x", Effect: ConditionEffectDeny},
+				conditions: map[string]Condition{
+					"deny-cond": {Condition: "x", Effect: ConditionEffectDeny},
 				},
 			},
 			supportedType: "test",
@@ -539,9 +539,9 @@ func TestEvaluateConditionSet(t *testing.T) {
 			name: "first deny no match second deny matches",
 			conditionSet: &ConditionSet{
 				conditionType: "test",
-				conditions: []Condition{
-					{ID: "deny-no", Condition: "no-match", Effect: ConditionEffectDeny},
-					{ID: "deny-yes", Condition: "match", Effect: ConditionEffectDeny},
+				conditions: map[string]Condition{
+					"deny-no":  {Condition: "no-match", Effect: ConditionEffectDeny},
+					"deny-yes": {Condition: "match", Effect: ConditionEffectDeny},
 				},
 			},
 			supportedType: "test",
@@ -557,8 +557,8 @@ func TestEvaluateConditionSet(t *testing.T) {
 			name: "noopinion condition matches",
 			conditionSet: &ConditionSet{
 				conditionType: "test",
-				conditions: []Condition{
-					{ID: "nop-cond", Condition: "x", Effect: ConditionEffectNoOpinion, Description: "not relevant"},
+				conditions: map[string]Condition{
+					"nop-cond": {Condition: "x", Effect: ConditionEffectNoOpinion, Description: "not relevant"},
 				},
 			},
 			supportedType: "test",
@@ -570,8 +570,8 @@ func TestEvaluateConditionSet(t *testing.T) {
 			name: "noopinion condition does not match",
 			conditionSet: &ConditionSet{
 				conditionType: "test",
-				conditions: []Condition{
-					{ID: "nop-cond", Condition: "x", Effect: ConditionEffectNoOpinion},
+				conditions: map[string]Condition{
+					"nop-cond": {Condition: "x", Effect: ConditionEffectNoOpinion},
 				},
 			},
 			supportedType: "test",
@@ -583,8 +583,8 @@ func TestEvaluateConditionSet(t *testing.T) {
 			name: "noopinion condition eval error",
 			conditionSet: &ConditionSet{
 				conditionType: "test",
-				conditions: []Condition{
-					{ID: "nop-cond", Condition: "x", Effect: ConditionEffectNoOpinion},
+				conditions: map[string]Condition{
+					"nop-cond": {Condition: "x", Effect: ConditionEffectNoOpinion},
 				},
 			},
 			supportedType: "test",
@@ -597,9 +597,9 @@ func TestEvaluateConditionSet(t *testing.T) {
 			name: "first noopinion no match second noopinion matches",
 			conditionSet: &ConditionSet{
 				conditionType: "test",
-				conditions: []Condition{
-					{ID: "nop-no", Condition: "no-match", Effect: ConditionEffectNoOpinion},
-					{ID: "nop-yes", Condition: "match", Effect: ConditionEffectNoOpinion},
+				conditions: map[string]Condition{
+					"nop-no":  {Condition: "no-match", Effect: ConditionEffectNoOpinion},
+					"nop-yes": {Condition: "match", Effect: ConditionEffectNoOpinion},
 				},
 			},
 			supportedType: "test",
@@ -615,8 +615,8 @@ func TestEvaluateConditionSet(t *testing.T) {
 			name: "allow condition matches",
 			conditionSet: &ConditionSet{
 				conditionType: "test",
-				conditions: []Condition{
-					{ID: "allow-cond", Condition: "x", Effect: ConditionEffectAllow, Description: "access granted"},
+				conditions: map[string]Condition{
+					"allow-cond": {Condition: "x", Effect: ConditionEffectAllow, Description: "access granted"},
 				},
 			},
 			supportedType: "test",
@@ -628,8 +628,8 @@ func TestEvaluateConditionSet(t *testing.T) {
 			name: "allow condition does not match",
 			conditionSet: &ConditionSet{
 				conditionType: "test",
-				conditions: []Condition{
-					{ID: "allow-cond", Condition: "x", Effect: ConditionEffectAllow},
+				conditions: map[string]Condition{
+					"allow-cond": {Condition: "x", Effect: ConditionEffectAllow},
 				},
 			},
 			supportedType: "test",
@@ -638,11 +638,11 @@ func TestEvaluateConditionSet(t *testing.T) {
 			wantReason:    "no conditions matched",
 		},
 		{
-			name: "allow condition eval error no other allows",
+			name: "allow condition eval error",
 			conditionSet: &ConditionSet{
 				conditionType: "test",
-				conditions: []Condition{
-					{ID: "allow-cond", Condition: "x", Effect: ConditionEffectAllow},
+				conditions: map[string]Condition{
+					"allow-cond": {Condition: "x", Effect: ConditionEffectAllow},
 				},
 			},
 			supportedType: "test",
@@ -655,9 +655,9 @@ func TestEvaluateConditionSet(t *testing.T) {
 			name: "allow first errors second matches",
 			conditionSet: &ConditionSet{
 				conditionType: "test",
-				conditions: []Condition{
-					{ID: "allow-err", Condition: "error-cond", Effect: ConditionEffectAllow},
-					{ID: "allow-ok", Condition: "match-cond", Effect: ConditionEffectAllow},
+				conditions: map[string]Condition{
+					"allow-err": {Condition: "error-cond", Effect: ConditionEffectAllow},
+					"allow-ok":  {Condition: "match-cond", Effect: ConditionEffectAllow},
 				},
 			},
 			supportedType: "test",
@@ -677,9 +677,9 @@ func TestEvaluateConditionSet(t *testing.T) {
 			name: "deny takes precedence over allow",
 			conditionSet: &ConditionSet{
 				conditionType: "test",
-				conditions: []Condition{
-					{ID: "allow-cond", Condition: "x", Effect: ConditionEffectAllow},
-					{ID: "deny-cond", Condition: "x", Effect: ConditionEffectDeny},
+				conditions: map[string]Condition{
+					"allow-cond": {Condition: "x", Effect: ConditionEffectAllow},
+					"deny-cond":  {Condition: "x", Effect: ConditionEffectDeny},
 				},
 			},
 			supportedType: "test",
@@ -691,10 +691,10 @@ func TestEvaluateConditionSet(t *testing.T) {
 			name: "deny takes precedence over noopinion and allow",
 			conditionSet: &ConditionSet{
 				conditionType: "test",
-				conditions: []Condition{
-					{ID: "allow-cond", Condition: "x", Effect: ConditionEffectAllow},
-					{ID: "nop-cond", Condition: "x", Effect: ConditionEffectNoOpinion},
-					{ID: "deny-cond", Condition: "x", Effect: ConditionEffectDeny},
+				conditions: map[string]Condition{
+					"allow-cond": {Condition: "x", Effect: ConditionEffectAllow},
+					"nop-cond":   {Condition: "x", Effect: ConditionEffectNoOpinion},
+					"deny-cond":  {Condition: "x", Effect: ConditionEffectDeny},
 				},
 			},
 			supportedType: "test",
@@ -706,9 +706,9 @@ func TestEvaluateConditionSet(t *testing.T) {
 			name: "noopinion takes precedence over allow",
 			conditionSet: &ConditionSet{
 				conditionType: "test",
-				conditions: []Condition{
-					{ID: "allow-cond", Condition: "x", Effect: ConditionEffectAllow},
-					{ID: "nop-cond", Condition: "x", Effect: ConditionEffectNoOpinion},
+				conditions: map[string]Condition{
+					"allow-cond": {Condition: "x", Effect: ConditionEffectAllow},
+					"nop-cond":   {Condition: "x", Effect: ConditionEffectNoOpinion},
 				},
 			},
 			supportedType: "test",
@@ -722,10 +722,10 @@ func TestEvaluateConditionSet(t *testing.T) {
 			name: "deny no match, noopinion matches, allow matches",
 			conditionSet: &ConditionSet{
 				conditionType: "test",
-				conditions: []Condition{
-					{ID: "deny-cond", Condition: "deny-check", Effect: ConditionEffectDeny},
-					{ID: "nop-cond", Condition: "nop-check", Effect: ConditionEffectNoOpinion},
-					{ID: "allow-cond", Condition: "allow-check", Effect: ConditionEffectAllow},
+				conditions: map[string]Condition{
+					"deny-cond":  {Condition: "deny-check", Effect: ConditionEffectDeny},
+					"nop-cond":   {Condition: "nop-check", Effect: ConditionEffectNoOpinion},
+					"allow-cond": {Condition: "allow-check", Effect: ConditionEffectAllow},
 				},
 			},
 			supportedType: "test",
@@ -739,10 +739,10 @@ func TestEvaluateConditionSet(t *testing.T) {
 			name: "only allow matches",
 			conditionSet: &ConditionSet{
 				conditionType: "test",
-				conditions: []Condition{
-					{ID: "deny-cond", Condition: "deny-check", Effect: ConditionEffectDeny},
-					{ID: "nop-cond", Condition: "nop-check", Effect: ConditionEffectNoOpinion},
-					{ID: "allow-cond", Condition: "allow-check", Effect: ConditionEffectAllow},
+				conditions: map[string]Condition{
+					"deny-cond":  {Condition: "deny-check", Effect: ConditionEffectDeny},
+					"nop-cond":   {Condition: "nop-check", Effect: ConditionEffectNoOpinion},
+					"allow-cond": {Condition: "allow-check", Effect: ConditionEffectAllow},
 				},
 			},
 			supportedType: "test",
@@ -756,10 +756,10 @@ func TestEvaluateConditionSet(t *testing.T) {
 			name: "no conditions match across all effects",
 			conditionSet: &ConditionSet{
 				conditionType: "test",
-				conditions: []Condition{
-					{ID: "deny-cond", Condition: "x", Effect: ConditionEffectDeny},
-					{ID: "nop-cond", Condition: "x", Effect: ConditionEffectNoOpinion},
-					{ID: "allow-cond", Condition: "x", Effect: ConditionEffectAllow},
+				conditions: map[string]Condition{
+					"deny-cond":  {Condition: "x", Effect: ConditionEffectDeny},
+					"nop-cond":   {Condition: "x", Effect: ConditionEffectNoOpinion},
+					"allow-cond": {Condition: "x", Effect: ConditionEffectAllow},
 				},
 			},
 			supportedType: "test",
