@@ -54,6 +54,7 @@ import (
 	"k8s.io/apiserver/pkg/endpoints/discovery"
 	discoveryendpoint "k8s.io/apiserver/pkg/endpoints/discovery/aggregated"
 	"k8s.io/apiserver/pkg/endpoints/filterlatency"
+	"k8s.io/apiserver/pkg/endpoints/filters"
 	genericapifilters "k8s.io/apiserver/pkg/endpoints/filters"
 	"k8s.io/apiserver/pkg/endpoints/filters/impersonation"
 	apiopenapi "k8s.io/apiserver/pkg/endpoints/openapi"
@@ -387,6 +388,9 @@ type AuthorizationInfo struct {
 	// Authorizer determines whether the subject is allowed to make the request based only
 	// on the RequestURI
 	Authorizer authorizer.Authorizer
+
+	// ConditionalAuthorizationRequestClassifier is a function that returns true if a request with the given attributes supports conditional authorization
+	ConditionalAuthorizationRequestClassifier filters.ConditionalAuthorizationRequestClassifier
 }
 
 func init() {
@@ -1025,30 +1029,16 @@ func BuildHandlerChainWithStorageVersionPrecondition(apiHandler http.Handler, c 
 	return DefaultBuildHandlerChain(handler, c)
 }
 
-var admissionVerbs = sets.New("create", "update", "patch", "delete", "deletecollection")
-
 func DefaultBuildHandlerChain(apiHandler http.Handler, c *Config) http.Handler {
 	handler := apiHandler
 
-	conditionalAuthzClassifier := func(attrs authorizer.Attributes) bool {
-		// Make sure there is exactly one GVR matched
-		if len(attrs.GetResource()) == 0 || attrs.GetResource() == "*" {
-			return false
-		}
-		if attrs.GetAPIGroup() == "*" {
-			return false
-		}
-		if len(attrs.GetAPIVersion()) == 0 || attrs.GetAPIVersion() == "*" {
-			return false
-		}
-		// TODO: Aggregated API server requests
-		// TODO: Connect requests
-		// TODO: Resources that (somehow) skip admission
-		return admissionVerbs.Has(attrs.GetVerb())
+	handler = filterlatency.TrackCompleted(handler)
+	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
+		handler = genericapifilters.WithAuthorizationAndConditionsSupport(handler, c.Authorization.Authorizer, c.Serializer, c.Authorization.ConditionalAuthorizationRequestClassifier)
+	} else {
+		handler = genericapifilters.WithAuthorization(handler, c.Authorization.Authorizer, c.Serializer)
 	}
 
-	handler = filterlatency.TrackCompleted(handler)
-	handler = genericapifilters.WithAuthorizationAndConditionsSupport(handler, c.Authorization.Authorizer, c.Serializer, conditionalAuthzClassifier)
 	handler = filterlatency.TrackStarted(handler, c.TracerProvider, "authorization")
 
 	if c.FlowControl != nil {
