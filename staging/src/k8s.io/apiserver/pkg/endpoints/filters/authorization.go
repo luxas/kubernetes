@@ -99,7 +99,7 @@ func withAuthorization(handler http.Handler, a authorizer.Authorizer, s runtime.
 			// should be let through here.
 			// TODO: How do we know what types skip admission (such as SAR)?
 			if conditionalAuthzClassifier != nil && conditionalAuthzClassifier(attributes) {
-				ctx = request.WithConditionallyAuthorizedDecision(ctx, authorized)
+				ctx = request.WithConditionallyAuthorizedDecision(ctx, a, authorized)
 				req = req.WithContext(ctx)
 				audit.AddAuditAnnotations(ctx,
 					decisionAnnotationKey, decisionConditionalAllow,

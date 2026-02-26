@@ -81,13 +81,21 @@ func UserFrom(ctx context.Context) (user.Info, bool) {
 	return user, ok
 }
 
+type authorizerDecisionTuple struct {
+	authorizer authorizer.Authorizer
+	decision   authorizer.Decision
+}
+
 // WithConditionallyAllowedDecision returns a copy of parent in which the conditionally allowed authorization decision is set
-func WithConditionallyAuthorizedDecision(parent context.Context, enforcer authorizer.Decision) context.Context {
-	return WithValue(parent, conditionallyAuthorizedDecisionKey, enforcer)
+func WithConditionallyAuthorizedDecision(parent context.Context, authorizer authorizer.Authorizer, decision authorizer.Decision) context.Context {
+	return WithValue(parent, conditionallyAuthorizedDecisionKey, authorizerDecisionTuple{
+		authorizer: authorizer,
+		decision:   decision,
+	})
 }
 
 // ConditionalAuthorizationContextFrom returns the conditional authorization enforcer associated with the ctx
-func ConditionallyAuthorizedDecisionFrom(ctx context.Context) (authorizer.Decision, bool) {
-	decision, ok := ctx.Value(conditionallyAuthorizedDecisionKey).(authorizer.Decision)
-	return decision, ok
+func ConditionallyAuthorizedDecisionFrom(ctx context.Context) (authorizer.Authorizer, authorizer.Decision, bool) {
+	tuple, ok := ctx.Value(conditionallyAuthorizedDecisionKey).(authorizerDecisionTuple)
+	return tuple.authorizer, tuple.decision, ok
 }
