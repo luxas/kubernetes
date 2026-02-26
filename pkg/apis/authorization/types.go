@@ -181,6 +181,56 @@ type ConditionalAuthorizationOptions struct {
 	ConditionsMode ConditionsMode
 }
 
+// SubjectAccessReviewConditionEffect specifies how a condition evaluating to
+// true should be treated.
+type SubjectAccessReviewConditionEffect string
+
+const (
+	// SubjectAccessReviewConditionEffectAllow means that if this condition
+	// evaluates to true, the ConditionSet evaluates to Allow, unless any
+	// Deny/NoOpinion condition also evaluates to true.
+	SubjectAccessReviewConditionEffectAllow SubjectAccessReviewConditionEffect = "Allow"
+
+	// SubjectAccessReviewConditionEffectDeny means that if this condition
+	// evaluates to true, the ConditionSet necessarily evaluates to Deny.
+	SubjectAccessReviewConditionEffectDeny SubjectAccessReviewConditionEffect = "Deny"
+
+	// SubjectAccessReviewConditionEffectNoOpinion means that if this condition
+	// evaluates to true, the given authorizer's ConditionSet cannot evaluate
+	// to Allow anymore.
+	SubjectAccessReviewConditionEffectNoOpinion SubjectAccessReviewConditionEffect = "NoOpinion"
+)
+
+// SubjectAccessReviewCondition represents a single condition to be evaluated
+// against admission attributes.
+type SubjectAccessReviewCondition struct {
+	// ID uniquely identifies this condition within the scope of the authorizer.
+	ID string
+	// Effect specifies how the condition evaluating to "true" should be treated.
+	Effect SubjectAccessReviewConditionEffect
+	// Condition is an opaque string that represents the condition to be evaluated.
+	Condition string
+	// Description is an optional human-friendly description.
+	Description string
+}
+
+// SubjectAccessReviewAuthorizationDecision represents one authorizer's decision in
+// the condition set chain.
+type SubjectAccessReviewAuthorizationDecision struct {
+	// Allowed specifies whether this element is unconditionally allowed.
+	Allowed bool
+	// Denied specifies whether this element is unconditionally denied.
+	Denied bool
+	// ConditionsType describes the type of all conditions in the Conditions slice.
+	ConditionsType string
+	// Conditions is an unordered set of conditions to evaluate.
+	Conditions []SubjectAccessReviewCondition
+	// ConditionalDecisionChain is a nested chain for composite authorizers.
+	ConditionalDecisionChain []SubjectAccessReviewAuthorizationDecision
+	// Reason indicates why a request was allowed or denied by this authorizer.
+	Reason string
+}
+
 // SubjectAccessReviewSpec is a description of the access request.  Exactly one of ResourceAttributes
 // and NonResourceAttributes must be set
 type SubjectAccessReviewSpec struct {
@@ -233,6 +283,10 @@ type SubjectAccessReviewStatus struct {
 	// It is entirely possible to get an error and be able to continue determine authorization status in spite of it.
 	// For instance, RBAC can be missing a role, but enough roles are still present and bound to reason about the request.
 	EvaluationError string
+	// ConditionalDecisionChain is an ordered list of condition sets, where every item
+	// of the list represents one authorizer's Decision response.
+	// When conditionalDecisionChain is non-null, Allowed and Denied must be false.
+	ConditionalDecisionChain []SubjectAccessReviewAuthorizationDecision
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
