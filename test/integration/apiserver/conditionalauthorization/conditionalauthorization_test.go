@@ -27,6 +27,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/google/cel-go/cel"
+
 	authorizationv1 "k8s.io/api/authorization/v1"
 	authorizationv1alpha1 "k8s.io/api/authorization/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
@@ -299,6 +301,347 @@ users:
 			},
 			expectAllowed: true,
 		},
+
+		// CEL-based conditional authorization tests.
+		// These test that CEL expressions flow through the SAR → Decision → ACR
+		// pipeline and the webhook can evaluate them against the actual request objects.
+		{
+			name: "cel allow by name pattern",
+			user: "cel-name-user",
+			webhookBehavior: func(ws *webhookServerHandler) {
+				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
+					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+						{
+							ConditionsType: "webhook",
+							Conditions: []authorizationv1.SubjectAccessReviewCondition{
+								{
+									ID:          "allow-safe-prefix",
+									Effect:      authorizationv1.SubjectAccessReviewConditionEffectAllow,
+									Condition:   `object.metadata.name.startsWith("safe-")`,
+									Description: "only allow configmaps with safe- prefix",
+								},
+							},
+						},
+					}
+				}
+				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
+					allowed, denied := celEvaluateConditions(ws.t, acr)
+					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
+						Allowed: allowed,
+						Denied:  denied,
+					}
+				}
+			},
+			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
+				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{Name: "safe-configmap"},
+				}, metav1.CreateOptions{})
+				return err
+			},
+			expectAllowed:             true,
+			expectAllowedWhenDisabled: boolPtr(false),
+		},
+		{
+			name: "cel deny by name pattern mismatch",
+			user: "cel-name-deny-user",
+			webhookBehavior: func(ws *webhookServerHandler) {
+				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
+					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+						{
+							ConditionsType: "webhook",
+							Conditions: []authorizationv1.SubjectAccessReviewCondition{
+								{
+									ID:          "allow-safe-prefix",
+									Effect:      authorizationv1.SubjectAccessReviewConditionEffectAllow,
+									Condition:   `object.metadata.name.startsWith("safe-")`,
+									Description: "only allow configmaps with safe- prefix",
+								},
+							},
+						},
+					}
+				}
+				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
+					allowed, denied := celEvaluateConditions(ws.t, acr)
+					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
+						Allowed: allowed,
+						Denied:  denied,
+					}
+				}
+			},
+			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
+				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{Name: "unsafe-configmap"},
+				}, metav1.CreateOptions{})
+				return err
+			},
+			expectAllowed: false,
+		},
+		{
+			name: "cel deny by label overrides allow",
+			user: "cel-label-deny-user",
+			webhookBehavior: func(ws *webhookServerHandler) {
+				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
+					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+						{
+							ConditionsType: "webhook",
+							Conditions: []authorizationv1.SubjectAccessReviewCondition{
+								{
+									ID:          "allow-all",
+									Effect:      authorizationv1.SubjectAccessReviewConditionEffectAllow,
+									Condition:   "true",
+									Description: "base allow",
+								},
+								{
+									ID:     "deny-restricted-label",
+									Effect: authorizationv1.SubjectAccessReviewConditionEffectDeny,
+									Condition: `has(object.metadata.labels) && ` +
+										`has(object.metadata.labels.restricted) && ` +
+										`object.metadata.labels.restricted == "true"`,
+									Description: "deny restricted labels",
+								},
+							},
+						},
+					}
+				}
+				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
+					allowed, denied := celEvaluateConditions(ws.t, acr)
+					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
+						Allowed: allowed,
+						Denied:  denied,
+					}
+				}
+			},
+			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
+				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:   "cel-restricted-cm",
+						Labels: map[string]string{"restricted": "true"},
+					},
+				}, metav1.CreateOptions{})
+				return err
+			},
+			expectAllowed: false,
+		},
+		{
+			name: "cel allow by data content",
+			user: "cel-data-user",
+			webhookBehavior: func(ws *webhookServerHandler) {
+				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
+					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+						{
+							ConditionsType: "webhook",
+							Conditions: []authorizationv1.SubjectAccessReviewCondition{
+								{
+									ID:     "allow-approved-data",
+									Effect: authorizationv1.SubjectAccessReviewConditionEffectAllow,
+									Condition: `has(object.data) && ` +
+										`has(object.data.approved) && ` +
+										`object.data.approved == "yes"`,
+									Description: "only allow configmaps with approved=yes in data",
+								},
+							},
+						},
+					}
+				}
+				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
+					allowed, denied := celEvaluateConditions(ws.t, acr)
+					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
+						Allowed: allowed,
+						Denied:  denied,
+					}
+				}
+			},
+			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
+				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{Name: "cel-approved-cm"},
+					Data:       map[string]string{"approved": "yes"},
+				}, metav1.CreateOptions{})
+				return err
+			},
+			expectAllowed:             true,
+			expectAllowedWhenDisabled: boolPtr(false),
+		},
+		{
+			name: "cel deny by data content missing",
+			user: "cel-data-deny-user",
+			webhookBehavior: func(ws *webhookServerHandler) {
+				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
+					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+						{
+							ConditionsType: "webhook",
+							Conditions: []authorizationv1.SubjectAccessReviewCondition{
+								{
+									ID:     "allow-approved-data",
+									Effect: authorizationv1.SubjectAccessReviewConditionEffectAllow,
+									Condition: `has(object.data) && ` +
+										`has(object.data.approved) && ` +
+										`object.data.approved == "yes"`,
+									Description: "only allow configmaps with approved=yes in data",
+								},
+							},
+						},
+					}
+				}
+				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
+					allowed, denied := celEvaluateConditions(ws.t, acr)
+					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
+						Allowed: allowed,
+						Denied:  denied,
+					}
+				}
+			},
+			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
+				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{Name: "cel-unapproved-cm"},
+					Data:       map[string]string{"approved": "no"},
+				}, metav1.CreateOptions{})
+				return err
+			},
+			expectAllowed: false,
+		},
+		{
+			name: "cel operation-aware deny update",
+			user: "cel-op-user",
+			webhookBehavior: func(ws *webhookServerHandler) {
+				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
+					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+						{
+							ConditionsType: "webhook",
+							Conditions: []authorizationv1.SubjectAccessReviewCondition{
+								{
+									ID:          "allow-creates",
+									Effect:      authorizationv1.SubjectAccessReviewConditionEffectAllow,
+									Condition:   `request.operation == "CREATE"`,
+									Description: "allow create operations",
+								},
+								{
+									ID:          "deny-updates",
+									Effect:      authorizationv1.SubjectAccessReviewConditionEffectDeny,
+									Condition:   `request.operation == "UPDATE"`,
+									Description: "deny update operations",
+								},
+							},
+						},
+					}
+				}
+				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
+					allowed, denied := celEvaluateConditions(ws.t, acr)
+					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
+						Allowed: allowed,
+						Denied:  denied,
+					}
+				}
+			},
+			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
+				// Create should succeed (CEL allows CREATE)
+				cm, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{Name: "cel-op-cm"},
+					Data:       map[string]string{"key": "value"},
+				}, metav1.CreateOptions{})
+				if err != nil {
+					return fmt.Errorf("create should have succeeded: %w", err)
+				}
+				// Update should be denied (CEL denies UPDATE)
+				cm.Data["key"] = "new-value"
+				_, err = client.CoreV1().ConfigMaps("test-ns").Update(context.TODO(), cm, metav1.UpdateOptions{})
+				return err
+			},
+			expectAllowed:             false,
+			expectAllowedWhenDisabled: boolPtr(false),
+		},
+		{
+			name: "cel deny overrides allow and noopinion",
+			user: "cel-priority-user",
+			webhookBehavior: func(ws *webhookServerHandler) {
+				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
+					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+						{
+							ConditionsType: "webhook",
+							Conditions: []authorizationv1.SubjectAccessReviewCondition{
+								{
+									ID:          "allow-all",
+									Effect:      authorizationv1.SubjectAccessReviewConditionEffectAllow,
+									Condition:   "true",
+									Description: "allow everything",
+								},
+								{
+									ID:          "noop-all",
+									Effect:      authorizationv1.SubjectAccessReviewConditionEffectNoOpinion,
+									Condition:   "true",
+									Description: "no opinion on everything",
+								},
+								{
+									ID:          "deny-all",
+									Effect:      authorizationv1.SubjectAccessReviewConditionEffectDeny,
+									Condition:   "true",
+									Description: "deny everything",
+								},
+							},
+						},
+					}
+				}
+				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
+					allowed, denied := celEvaluateConditions(ws.t, acr)
+					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
+						Allowed: allowed,
+						Denied:  denied,
+					}
+				}
+			},
+			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
+				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{Name: "cel-priority-cm"},
+				}, metav1.CreateOptions{})
+				return err
+			},
+			expectAllowed: false,
+		},
+		{
+			name: "cel noopinion overrides allow",
+			user: "cel-noop-vs-allow-user",
+			webhookBehavior: func(ws *webhookServerHandler) {
+				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
+					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+						{
+							ConditionsType: "webhook",
+							Conditions: []authorizationv1.SubjectAccessReviewCondition{
+								{
+									ID:          "allow-all",
+									Effect:      authorizationv1.SubjectAccessReviewConditionEffectAllow,
+									Condition:   "true",
+									Description: "allow everything",
+								},
+								{
+									ID:     "noop-on-pending-review",
+									Effect: authorizationv1.SubjectAccessReviewConditionEffectNoOpinion,
+									Condition: `has(object.metadata.labels) && ` +
+										`has(object.metadata.labels.review) && ` +
+										`object.metadata.labels.review == "pending"`,
+									Description: "no opinion when review=pending label is present",
+								},
+							},
+						},
+					}
+				}
+				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
+					allowed, denied := celEvaluateConditions(ws.t, acr)
+					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
+						Allowed: allowed,
+						Denied:  denied,
+					}
+				}
+			},
+			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
+				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:   "cel-noop-cm",
+						Labels: map[string]string{"review": "pending"},
+					},
+				}, metav1.CreateOptions{})
+				return err
+			},
+			expectAllowed: false,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -459,4 +802,105 @@ func safeResourceAttr(sar *authorizationv1.SubjectAccessReview, fn func(*authori
 		return fn(sar.Spec.ResourceAttributes)
 	}
 	return "<non-resource>"
+}
+
+// celEvaluateConditions evaluates CEL conditions from an ACR request against
+// the objects in the write request. It follows the condition precedence:
+// Deny > NoOpinion > Allow (matching EvaluateConditionSet semantics).
+// Returns (allowed, denied).
+func celEvaluateConditions(t *testing.T, acr *authorizationv1alpha1.AuthorizationConditionsReview) (bool, bool) {
+	t.Helper()
+
+	env, err := cel.NewEnv(
+		cel.Variable("object", cel.DynType),
+		cel.Variable("oldObject", cel.DynType),
+		cel.Variable("request", cel.DynType),
+	)
+	if err != nil {
+		t.Fatalf("failed to create CEL env: %v", err)
+	}
+
+	// Deserialize object and oldObject from RawExtension JSON
+	var objectMap map[string]any
+	if len(acr.Request.WriteRequest.Object.Raw) > 0 {
+		if err := json.Unmarshal(acr.Request.WriteRequest.Object.Raw, &objectMap); err != nil {
+			t.Fatalf("failed to unmarshal object: %v", err)
+		}
+	}
+
+	var oldObjectMap map[string]any
+	if len(acr.Request.WriteRequest.OldObject.Raw) > 0 {
+		if err := json.Unmarshal(acr.Request.WriteRequest.OldObject.Raw, &oldObjectMap); err != nil {
+			t.Fatalf("failed to unmarshal oldObject: %v", err)
+		}
+	}
+
+	requestMap := map[string]any{
+		"operation": string(acr.Request.WriteRequest.Operation),
+		"namespace": acr.Request.WriteRequest.Namespace,
+		"name":      acr.Request.WriteRequest.Name,
+	}
+
+	vars := map[string]any{
+		"object":    objectMap,
+		"oldObject": oldObjectMap,
+		"request":   requestMap,
+	}
+
+	conditions := acr.Request.Decision.Conditions
+
+	// Phase 1: Deny conditions
+	for _, cond := range conditions {
+		if cond.Effect != authorizationv1.SubjectAccessReviewConditionEffectDeny {
+			continue
+		}
+		if evalCEL(t, env, cond.Condition, vars) {
+			return false, true
+		}
+	}
+
+	// Phase 2: NoOpinion conditions
+	for _, cond := range conditions {
+		if cond.Effect != authorizationv1.SubjectAccessReviewConditionEffectNoOpinion {
+			continue
+		}
+		if evalCEL(t, env, cond.Condition, vars) {
+			return false, false
+		}
+	}
+
+	// Phase 3: Allow conditions
+	for _, cond := range conditions {
+		if cond.Effect != authorizationv1.SubjectAccessReviewConditionEffectAllow {
+			continue
+		}
+		if evalCEL(t, env, cond.Condition, vars) {
+			return true, false
+		}
+	}
+
+	// Default: NoOpinion
+	return false, false
+}
+
+// evalCEL compiles and evaluates a single CEL expression, returning true/false.
+func evalCEL(t *testing.T, env *cel.Env, expr string, vars map[string]any) bool {
+	t.Helper()
+	ast, issues := env.Compile(expr)
+	if issues != nil && issues.Err() != nil {
+		t.Fatalf("CEL compile error for %q: %v", expr, issues.Err())
+	}
+	prg, err := env.Program(ast)
+	if err != nil {
+		t.Fatalf("CEL program error for %q: %v", expr, err)
+	}
+	out, _, err := prg.Eval(vars)
+	if err != nil {
+		t.Fatalf("CEL eval error for %q: %v", expr, err)
+	}
+	result, ok := out.Value().(bool)
+	if !ok {
+		t.Fatalf("CEL expression %q did not return bool, got %T", expr, out.Value())
+	}
+	return result
 }
