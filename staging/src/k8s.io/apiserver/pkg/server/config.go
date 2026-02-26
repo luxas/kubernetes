@@ -1025,11 +1025,30 @@ func BuildHandlerChainWithStorageVersionPrecondition(apiHandler http.Handler, c 
 	return DefaultBuildHandlerChain(handler, c)
 }
 
+var admissionVerbs = sets.New("create", "update", "patch", "delete", "deletecollection")
+
 func DefaultBuildHandlerChain(apiHandler http.Handler, c *Config) http.Handler {
 	handler := apiHandler
 
+	conditionalAuthzClassifier := func(attrs authorizer.Attributes) bool {
+		// Make sure there is exactly one GVR matched
+		if len(attrs.GetResource()) == 0 || attrs.GetResource() == "*" {
+			return false
+		}
+		if attrs.GetAPIGroup() == "*" {
+			return false
+		}
+		if len(attrs.GetAPIVersion()) == 0 || attrs.GetAPIVersion() == "*" {
+			return false
+		}
+		// TODO: Aggregated API server requests
+		// TODO: Connect requests
+		// TODO: Resources that (somehow) skip admission
+		return admissionVerbs.Has(attrs.GetVerb())
+	}
+
 	handler = filterlatency.TrackCompleted(handler)
-	handler = genericapifilters.WithAuthorization(handler, c.Authorization.Authorizer, c.Serializer)
+	handler = genericapifilters.WithAuthorizationAndConditionsSupport(handler, c.Authorization.Authorizer, c.Serializer, conditionalAuthzClassifier)
 	handler = filterlatency.TrackStarted(handler, c.TracerProvider, "authorization")
 
 	if c.FlowControl != nil {

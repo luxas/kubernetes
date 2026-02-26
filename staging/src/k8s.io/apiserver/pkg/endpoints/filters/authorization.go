@@ -58,6 +58,12 @@ func WithAuthorization(hhandler http.Handler, auth authorizer.Authorizer, s runt
 	return withAuthorization(hhandler, auth, s, recordAuthorizationMetrics, nil)
 }
 
+// WithAuthorizationAndConditionsSupport passes all authorized requests on to handler, and returns a forbidden error otherwise.
+// If conditionalAuthzClassifier returns true, it also allows conditionally authorized requests through.
+func WithAuthorizationAndConditionsSupport(hhandler http.Handler, auth authorizer.Authorizer, s runtime.NegotiatedSerializer, conditionalAuthzClassifier ConditionalAuthorizationRequestClassifier) http.Handler {
+	return withAuthorization(hhandler, auth, s, recordAuthorizationMetrics, conditionalAuthzClassifier)
+}
+
 func withAuthorization(handler http.Handler, a authorizer.Authorizer, s runtime.NegotiatedSerializer, metrics recordAuthorizationMetricsFunc, conditionalAuthzClassifier ConditionalAuthorizationRequestClassifier) http.Handler {
 	if a == nil {
 		klog.Warning("Authorization is disabled")
@@ -146,6 +152,10 @@ func GetAuthorizerAttributes(ctx context.Context) (authorizer.Attributes, error)
 	attribs.Subresource = requestInfo.Subresource
 	attribs.Namespace = requestInfo.Namespace
 	attribs.Name = requestInfo.Name
+
+	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
+		attribs.ConditionsMode = authorizer.ConditionsModeOptimized
+	}
 
 	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.AuthorizeWithSelectors) {
 		// parsing here makes it easy to keep the AttributesRecord type value-only and avoids any mutex copies when

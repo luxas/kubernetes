@@ -36,6 +36,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/util/cache"
 	utilnet "k8s.io/apimachinery/pkg/util/net"
@@ -214,6 +215,13 @@ func (w *WebhookAuthorizer) Authorize(ctx context.Context, attr authorizer.Attri
 			Verb: attr.GetVerb(),
 		}
 	}
+
+	if conditionsMode := attr.GetConditionsMode(); conditionsMode != "" {
+		r.Spec.ConditionalAuthorization = &authorizationv1.ConditionalAuthorizationOptions{
+			ConditionsMode: authorizationv1.ConditionsMode(conditionsMode),
+		}
+	}
+
 	// Process Match Conditions before calling the webhook
 	matches, err := w.match(ctx, r)
 	// If at least one matchCondition evaluates to an error (but none are FALSE):
@@ -567,7 +575,9 @@ func buildAuthorizationConditionsClient(config *rest.Config, retryBackoff wait.B
 	if err := localScheme.SetVersionPriority(groupVersions...); err != nil {
 		return nil, err
 	}
-	gw, err := webhook.NewGenericWebhook(localScheme, scheme.Codecs, config, groupVersions, retryBackoff)
+	// TODO: Maybe register to scheme.Codecs too?
+	localCodecs := serializer.NewCodecFactory(localScheme)
+	gw, err := webhook.NewGenericWebhook(localScheme, localCodecs, config, groupVersions, retryBackoff)
 	if err != nil {
 		return nil, err
 	}

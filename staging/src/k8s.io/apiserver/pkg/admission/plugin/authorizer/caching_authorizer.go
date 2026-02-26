@@ -155,5 +155,5 @@ func (ca *cachingAuthorizer) Authorize(ctx context.Context, a authorizer.Attribu
 }
 
 func (ca *cachingAuthorizer) EvaluateConditions(ctx context.Context, decision authorizer.Decision, data authorizer.ConditionData) (authorizer.Decision, error) {
-	return authorizer.DecisionDeny(), authorizer.ErrorConditionEvaluationNotSupported
+	return ca.authorizer.EvaluateConditions(ctx, decision, data)
 }
