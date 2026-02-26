@@ -342,6 +342,8 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		authorizationv1.SelfSubjectRulesReview{}.OpenAPIModelName():                                                     schema_k8sio_api_authorization_v1_SelfSubjectRulesReview(ref),
 		authorizationv1.SelfSubjectRulesReviewSpec{}.OpenAPIModelName():                                                 schema_k8sio_api_authorization_v1_SelfSubjectRulesReviewSpec(ref),
 		authorizationv1.SubjectAccessReview{}.OpenAPIModelName():                                                        schema_k8sio_api_authorization_v1_SubjectAccessReview(ref),
+		authorizationv1.SubjectAccessReviewAuthorizationDecision{}.OpenAPIModelName():                                   schema_k8sio_api_authorization_v1_SubjectAccessReviewAuthorizationDecision(ref),
+		authorizationv1.SubjectAccessReviewCondition{}.OpenAPIModelName():                                               schema_k8sio_api_authorization_v1_SubjectAccessReviewCondition(ref),
 		authorizationv1.SubjectAccessReviewSpec{}.OpenAPIModelName():                                                    schema_k8sio_api_authorization_v1_SubjectAccessReviewSpec(ref),
 		authorizationv1.SubjectAccessReviewStatus{}.OpenAPIModelName():                                                  schema_k8sio_api_authorization_v1_SubjectAccessReviewStatus(ref),
 		authorizationv1.SubjectRulesReviewStatus{}.OpenAPIModelName():                                                   schema_k8sio_api_authorization_v1_SubjectRulesReviewStatus(ref),
@@ -13258,6 +13260,135 @@ func schema_k8sio_api_authorization_v1_SubjectAccessReview(ref common.ReferenceC
 	}
 }
 
+func schema_k8sio_api_authorization_v1_SubjectAccessReviewAuthorizationDecision(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "SubjectAccessReviewAuthorizationDecision represents one authorizer's decision in the authorizer chain. It models a single authorization decision, which must be as follows: Exactly one of the following groups of fields must be set: - allowed (unconditional allow) - denied (unconditional deny) - conditionsType + conditions (conditional decision) - conditionalDecisionChain (composite/nested decisions)",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"allowed": {
+						SchemaProps: spec.SchemaProps{
+							Description: "allowed specifies whether this element is unconditionally allowed. Mutually exclusive with denied, conditions, and conditionalDecisionChain.",
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
+					"denied": {
+						SchemaProps: spec.SchemaProps{
+							Description: "denied specifies whether this element is unconditionally denied. Mutually exclusive with allowed, conditions, and conditionalDecisionChain.",
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
+					"conditionsType": {
+						SchemaProps: spec.SchemaProps{
+							Description: "conditionsType describes the type (format/encoding/language) of all conditions in the conditions slice. It does not apply to nested conditions in conditionalDecisionChain. Mutually exclusive with allowed, denied, and conditionalDecisionChain.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"conditions": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-map-keys": []interface{}{
+									"id",
+								},
+								"x-kubernetes-list-type": "map",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "conditions is an unordered set of conditions that should be evaluated against admission attributes, to determine whether this authorizer allows the request. Mutually exclusive with allowed, denied, and conditionalDecisionChain.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(authorizationv1.SubjectAccessReviewCondition{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+					"conditionalDecisionChain": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "conditionalDecisionChain is an ordered list of Decisions from a chain of authorizers. At least one of the Decisions is known to be Conditional, that is, have non-null Conditions. When evaluating the conditions, the first condition set must be evaluated as a whole first, and only if that condition set evaluates to NoOpinion, can the subsequent condition sets be evaluated.\n\nMutually exclusive with allowed, denied and conditions.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(authorizationv1.SubjectAccessReviewAuthorizationDecision{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+					"reason": {
+						SchemaProps: spec.SchemaProps{
+							Description: "reason is optional. It indicates why a request was allowed or denied by this authorizer.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			authorizationv1.SubjectAccessReviewAuthorizationDecision{}.OpenAPIModelName(), authorizationv1.SubjectAccessReviewCondition{}.OpenAPIModelName()},
+	}
+}
+
+func schema_k8sio_api_authorization_v1_SubjectAccessReviewCondition(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "SubjectAccessReviewCondition represents a single condition to be evaluated against admission attributes.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"id": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ID uniquely identifies this condition within the scope of the authorizer that authored it. Validated as a Kubernetes label key.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"effect": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Effect specifies how the condition evaluating to \"true\" should be treated.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"condition": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Condition is an opaque string that represents the condition to be evaluated. It is a pure, deterministic function from condition data to a Boolean.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"description": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Description is an optional human-friendly description that can be shown as an error message or for debugging.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+				Required: []string{"id", "effect", "condition"},
+			},
+		},
+	}
+}
+
 func schema_k8sio_api_authorization_v1_SubjectAccessReviewSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
@@ -13384,10 +13515,31 @@ func schema_k8sio_api_authorization_v1_SubjectAccessReviewStatus(ref common.Refe
 							Format:      "",
 						},
 					},
+					"conditionalDecisionChain": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "conditionalDecisionChain is an ordered list of Decisions from a chain of authorizers. At least one of the Decisions is known to be Conditional, that is, have non-null Conditions. When evaluating the conditions, the first condition set must be evaluated as a whole first, and only if that condition set evaluates to NoOpinion, can the subsequent condition sets be evaluated.\n\nWhen conditionalDecisionChain is non-null, allowed and denied must be false.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(authorizationv1.SubjectAccessReviewAuthorizationDecision{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
 				},
 				Required: []string{"allowed"},
 			},
 		},
+		Dependencies: []string{
+			authorizationv1.SubjectAccessReviewAuthorizationDecision{}.OpenAPIModelName()},
 	}
 }
 
@@ -14094,10 +14246,31 @@ func schema_k8sio_api_authorization_v1beta1_SubjectAccessReviewStatus(ref common
 							Format:      "",
 						},
 					},
+					"conditionalDecisionChain": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "conditionalDecisionChain is an ordered list of Decisions from a chain of authorizers. At least one of the Decisions is known to be Conditional, that is, have non-null Conditions. When evaluating the conditions, the first condition set must be evaluated as a whole first, and only if that condition set evaluates to NoOpinion, can the subsequent condition sets be evaluated.\n\nWhen conditionalDecisionChain is non-null, allowed and denied must be false.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(authorizationv1.SubjectAccessReviewAuthorizationDecision{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
 				},
 				Required: []string{"allowed"},
 			},
 		},
+		Dependencies: []string{
+			authorizationv1.SubjectAccessReviewAuthorizationDecision{}.OpenAPIModelName()},
 	}
 }
 

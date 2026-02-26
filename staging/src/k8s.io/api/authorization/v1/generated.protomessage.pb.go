@@ -49,6 +49,10 @@ func (*SelfSubjectRulesReviewSpec) ProtoMessage() {}
 
 func (*SubjectAccessReview) ProtoMessage() {}
 
+func (*SubjectAccessReviewAuthorizationDecision) ProtoMessage() {}
+
+func (*SubjectAccessReviewCondition) ProtoMessage() {}
+
 func (*SubjectAccessReviewSpec) ProtoMessage() {}
 
 func (*SubjectAccessReviewStatus) ProtoMessage() {}

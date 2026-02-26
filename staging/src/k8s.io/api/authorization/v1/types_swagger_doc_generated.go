@@ -169,6 +169,32 @@ func (SubjectAccessReview) SwaggerDoc() map[string]string {
 	return map_SubjectAccessReview
 }
 
+var map_SubjectAccessReviewAuthorizationDecision = map[string]string{
+	"":                         "SubjectAccessReviewAuthorizationDecision represents one authorizer's decision in the authorizer chain. It models a single authorization decision, which must be as follows: Exactly one of the following groups of fields must be set: - allowed (unconditional allow) - denied (unconditional deny) - conditionsType + conditions (conditional decision) - conditionalDecisionChain (composite/nested decisions)",
+	"allowed":                  "allowed specifies whether this element is unconditionally allowed. Mutually exclusive with denied, conditions, and conditionalDecisionChain.",
+	"denied":                   "denied specifies whether this element is unconditionally denied. Mutually exclusive with allowed, conditions, and conditionalDecisionChain.",
+	"conditionsType":           "conditionsType describes the type (format/encoding/language) of all conditions in the conditions slice. It does not apply to nested conditions in conditionalDecisionChain. Mutually exclusive with allowed, denied, and conditionalDecisionChain.",
+	"conditions":               "conditions is an unordered set of conditions that should be evaluated against admission attributes, to determine whether this authorizer allows the request. Mutually exclusive with allowed, denied, and conditionalDecisionChain.",
+	"conditionalDecisionChain": "conditionalDecisionChain is an ordered list of Decisions from a chain of authorizers. At least one of the Decisions is known to be Conditional, that is, have non-null Conditions. When evaluating the conditions, the first condition set must be evaluated as a whole first, and only if that condition set evaluates to NoOpinion, can the subsequent condition sets be evaluated.\n\nMutually exclusive with allowed, denied and conditions.",
+	"reason":                   "reason is optional. It indicates why a request was allowed or denied by this authorizer.",
+}
+
+func (SubjectAccessReviewAuthorizationDecision) SwaggerDoc() map[string]string {
+	return map_SubjectAccessReviewAuthorizationDecision
+}
+
+var map_SubjectAccessReviewCondition = map[string]string{
+	"":            "SubjectAccessReviewCondition represents a single condition to be evaluated against admission attributes.",
+	"id":          "ID uniquely identifies this condition within the scope of the authorizer that authored it. Validated as a Kubernetes label key.",
+	"effect":      "Effect specifies how the condition evaluating to \"true\" should be treated.",
+	"condition":   "Condition is an opaque string that represents the condition to be evaluated. It is a pure, deterministic function from condition data to a Boolean.",
+	"description": "Description is an optional human-friendly description that can be shown as an error message or for debugging.",
+}
+
+func (SubjectAccessReviewCondition) SwaggerDoc() map[string]string {
+	return map_SubjectAccessReviewCondition
+}
+
 var map_SubjectAccessReviewSpec = map[string]string{
 	"":                         "SubjectAccessReviewSpec is a description of the access request.  Exactly one of resourceAttributes and nonResourceAttributes must be set",
 	"resourceAttributes":       "resourceAttributes describes information for a resource access request",
@@ -185,11 +211,12 @@ func (SubjectAccessReviewSpec) SwaggerDoc() map[string]string {
 }
 
 var map_SubjectAccessReviewStatus = map[string]string{
-	"":                "SubjectAccessReviewStatus",
-	"allowed":         "allowed is required. True if the action would be allowed, false otherwise.",
-	"denied":          "denied is optional. True if the action would be denied, otherwise false. If both allowed is false and denied is false, then the authorizer has no opinion on whether to authorize the action. Denied may not be true if Allowed is true.",
-	"reason":          "reason is optional.  It indicates why a request was allowed or denied.",
-	"evaluationError": "evaluationError is an indication that some error occurred during the authorization check. It is entirely possible to get an error and be able to continue determine authorization status in spite of it. For instance, RBAC can be missing a role, but enough roles are still present and bound to reason about the request.",
+	"":                         "SubjectAccessReviewStatus",
+	"allowed":                  "allowed is required. True if the action would be allowed, false otherwise.",
+	"denied":                   "denied is optional. True if the action would be denied, otherwise false. If both allowed is false and denied is false, then the authorizer has no opinion on whether to authorize the action. Denied may not be true if Allowed is true.",
+	"reason":                   "reason is optional.  It indicates why a request was allowed or denied.",
+	"evaluationError":          "evaluationError is an indication that some error occurred during the authorization check. It is entirely possible to get an error and be able to continue determine authorization status in spite of it. For instance, RBAC can be missing a role, but enough roles are still present and bound to reason about the request.",
+	"conditionalDecisionChain": "conditionalDecisionChain is an ordered list of Decisions from a chain of authorizers. At least one of the Decisions is known to be Conditional, that is, have non-null Conditions. When evaluating the conditions, the first condition set must be evaluated as a whole first, and only if that condition set evaluates to NoOpinion, can the subsequent condition sets be evaluated.\n\nWhen conditionalDecisionChain is non-null, allowed and denied must be false.",
 }
 
 func (SubjectAccessReviewStatus) SwaggerDoc() map[string]string {

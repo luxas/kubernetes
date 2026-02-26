@@ -156,11 +156,12 @@ func (SubjectAccessReviewSpec) SwaggerDoc() map[string]string {
 }
 
 var map_SubjectAccessReviewStatus = map[string]string{
-	"":                "SubjectAccessReviewStatus",
-	"allowed":         "allowed is required. True if the action would be allowed, false otherwise.",
-	"denied":          "denied is optional. True if the action would be denied, otherwise false. If both allowed is false and denied is false, then the authorizer has no opinion on whether to authorize the action. Denied may not be true if Allowed is true.",
-	"reason":          "reason is optional.  It indicates why a request was allowed or denied.",
-	"evaluationError": "evaluationError is an indication that some error occurred during the authorization check. It is entirely possible to get an error and be able to continue determine authorization status in spite of it. For instance, RBAC can be missing a role, but enough roles are still present and bound to reason about the request.",
+	"":                         "SubjectAccessReviewStatus",
+	"allowed":                  "allowed is required. True if the action would be allowed, false otherwise.",
+	"denied":                   "denied is optional. True if the action would be denied, otherwise false. If both allowed is false and denied is false, then the authorizer has no opinion on whether to authorize the action. Denied may not be true if Allowed is true.",
+	"reason":                   "reason is optional.  It indicates why a request was allowed or denied.",
+	"evaluationError":          "evaluationError is an indication that some error occurred during the authorization check. It is entirely possible to get an error and be able to continue determine authorization status in spite of it. For instance, RBAC can be missing a role, but enough roles are still present and bound to reason about the request.",
+	"conditionalDecisionChain": "conditionalDecisionChain is an ordered list of Decisions from a chain of authorizers. At least one of the Decisions is known to be Conditional, that is, have non-null Conditions. When evaluating the conditions, the first condition set must be evaluated as a whole first, and only if that condition set evaluates to NoOpinion, can the subsequent condition sets be evaluated.\n\nWhen conditionalDecisionChain is non-null, allowed and denied must be false.",
 }
 
 func (SubjectAccessReviewStatus) SwaggerDoc() map[string]string {

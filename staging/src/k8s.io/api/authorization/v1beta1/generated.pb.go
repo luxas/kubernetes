@@ -733,6 +733,20 @@ func (m *SubjectAccessReviewStatus) MarshalToSizedBuffer(dAtA []byte) (int, erro
 	_ = i
 	var l int
 	_ = l
+	if len(m.ConditionalDecisionChain) > 0 {
+		for iNdEx := len(m.ConditionalDecisionChain) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.ConditionalDecisionChain[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintGenerated(dAtA, i, uint64(size))
+			}
+			i--
+			dAtA[i] = 0x2a
+		}
+	}
 	i--
 	if m.Denied {
 		dAtA[i] = 1
@@ -1094,6 +1108,12 @@ func (m *SubjectAccessReviewStatus) Size() (n int) {
 	l = len(m.EvaluationError)
 	n += 1 + l + sovGenerated(uint64(l))
 	n += 2
+	if len(m.ConditionalDecisionChain) > 0 {
+		for _, e := range m.ConditionalDecisionChain {
+			l = e.Size()
+			n += 1 + l + sovGenerated(uint64(l))
+		}
+	}
 	return n
 }
 
@@ -1280,11 +1300,17 @@ func (this *SubjectAccessReviewStatus) String() string {
 	if this == nil {
 		return "nil"
 	}
+	repeatedStringForConditionalDecisionChain := "[]SubjectAccessReviewAuthorizationDecision{"
+	for _, f := range this.ConditionalDecisionChain {
+		repeatedStringForConditionalDecisionChain += fmt.Sprintf("%v", f) + ","
+	}
+	repeatedStringForConditionalDecisionChain += "}"
 	s := strings.Join([]string{`&SubjectAccessReviewStatus{`,
 		`Allowed:` + fmt.Sprintf("%v", this.Allowed) + `,`,
 		`Reason:` + fmt.Sprintf("%v", this.Reason) + `,`,
 		`EvaluationError:` + fmt.Sprintf("%v", this.EvaluationError) + `,`,
 		`Denied:` + fmt.Sprintf("%v", this.Denied) + `,`,
+		`ConditionalDecisionChain:` + repeatedStringForConditionalDecisionChain + `,`,
 		`}`,
 	}, "")
 	return s
@@ -3506,6 +3532,40 @@ func (m *SubjectAccessReviewStatus) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.Denied = bool(v != 0)
+		case 5:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ConditionalDecisionChain", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGenerated
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthGenerated
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthGenerated
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.ConditionalDecisionChain = append(m.ConditionalDecisionChain, v11.SubjectAccessReviewAuthorizationDecision{})
+			if err := m.ConditionalDecisionChain[len(m.ConditionalDecisionChain)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipGenerated(dAtA[iNdEx:])

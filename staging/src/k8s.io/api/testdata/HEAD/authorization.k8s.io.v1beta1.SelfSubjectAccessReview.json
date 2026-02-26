@@ -89,6 +89,24 @@
     "allowed": true,
     "denied": true,
     "reason": "reasonValue",
-    "evaluationError": "evaluationErrorValue"
+    "evaluationError": "evaluationErrorValue",
+    "conditionalDecisionChain": [
+      {
+        "allowed": true,
+        "denied": true,
+        "failureMode": "failureModeValue",
+        "authorizerName": "authorizerNameValue",
+        "conditionsType": "conditionsTypeValue",
+        "conditions": [
+          {
+            "id": "idValue",
+            "effect": "effectValue",
+            "condition": "conditionValue",
+            "description": "descriptionValue"
+          }
+        ],
+        "reason": "reasonValue"
+      }
+    ]
   }
 }

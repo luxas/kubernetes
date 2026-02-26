@@ -87,6 +87,16 @@ func (in SubjectAccessReview) OpenAPIModelName() string {
 }
 
 // OpenAPIModelName returns the OpenAPI model name for this type.
+func (in SubjectAccessReviewAuthorizationDecision) OpenAPIModelName() string {
+	return "io.k8s.api.authorization.v1.SubjectAccessReviewAuthorizationDecision"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
+func (in SubjectAccessReviewCondition) OpenAPIModelName() string {
+	return "io.k8s.api.authorization.v1.SubjectAccessReviewCondition"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
 func (in SubjectAccessReviewSpec) OpenAPIModelName() string {
 	return "io.k8s.api.authorization.v1.SubjectAccessReviewSpec"
 }

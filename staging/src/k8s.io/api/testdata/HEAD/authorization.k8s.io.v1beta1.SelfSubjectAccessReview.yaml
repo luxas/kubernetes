@@ -62,6 +62,18 @@ spec:
     version: versionValue
 status:
   allowed: true
+  conditionalDecisionChain:
+  - allowed: true
+    authorizerName: authorizerNameValue
+    conditions:
+    - condition: conditionValue
+      description: descriptionValue
+      effect: effectValue
+      id: idValue
+    conditionsType: conditionsTypeValue
+    denied: true
+    failureMode: failureModeValue
+    reason: reasonValue
   denied: true
   evaluationError: evaluationErrorValue
   reason: reasonValue

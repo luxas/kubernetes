@@ -486,6 +486,7 @@ func autoConvert_v1beta1_SubjectAccessReviewStatus_To_authorization_SubjectAcces
 	out.Denied = in.Denied
 	out.Reason = in.Reason
 	out.EvaluationError = in.EvaluationError
+	out.ConditionalDecisionChain = *(*[]authorization.SubjectAccessReviewAuthorizationDecision)(unsafe.Pointer(&in.ConditionalDecisionChain))
 	return nil
 }
 
@@ -499,6 +500,7 @@ func autoConvert_authorization_SubjectAccessReviewStatus_To_v1beta1_SubjectAcces
 	out.Denied = in.Denied
 	out.Reason = in.Reason
 	out.EvaluationError = in.EvaluationError
+	out.ConditionalDecisionChain = *(*[]v1.SubjectAccessReviewAuthorizationDecision)(unsafe.Pointer(&in.ConditionalDecisionChain))
 	return nil
 }
 

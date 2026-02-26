@@ -60,6 +60,12 @@ func (m *SelfSubjectRulesReviewSpec) Reset() { *m = SelfSubjectRulesReviewSpec{}
 
 func (m *SubjectAccessReview) Reset() { *m = SubjectAccessReview{} }
 
+func (m *SubjectAccessReviewAuthorizationDecision) Reset() {
+	*m = SubjectAccessReviewAuthorizationDecision{}
+}
+
+func (m *SubjectAccessReviewCondition) Reset() { *m = SubjectAccessReviewCondition{} }
+
 func (m *SubjectAccessReviewSpec) Reset() { *m = SubjectAccessReviewSpec{} }
 
 func (m *SubjectAccessReviewStatus) Reset() { *m = SubjectAccessReviewStatus{} }
@@ -724,6 +730,126 @@ func (m *SubjectAccessReview) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
+func (m *SubjectAccessReviewAuthorizationDecision) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *SubjectAccessReviewAuthorizationDecision) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *SubjectAccessReviewAuthorizationDecision) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	i -= len(m.Reason)
+	copy(dAtA[i:], m.Reason)
+	i = encodeVarintGenerated(dAtA, i, uint64(len(m.Reason)))
+	i--
+	dAtA[i] = 0x32
+	if len(m.ConditionalDecisionChain) > 0 {
+		for iNdEx := len(m.ConditionalDecisionChain) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.ConditionalDecisionChain[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintGenerated(dAtA, i, uint64(size))
+			}
+			i--
+			dAtA[i] = 0x2a
+		}
+	}
+	if len(m.Conditions) > 0 {
+		for iNdEx := len(m.Conditions) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.Conditions[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintGenerated(dAtA, i, uint64(size))
+			}
+			i--
+			dAtA[i] = 0x22
+		}
+	}
+	i -= len(m.ConditionsType)
+	copy(dAtA[i:], m.ConditionsType)
+	i = encodeVarintGenerated(dAtA, i, uint64(len(m.ConditionsType)))
+	i--
+	dAtA[i] = 0x1a
+	i--
+	if m.Denied {
+		dAtA[i] = 1
+	} else {
+		dAtA[i] = 0
+	}
+	i--
+	dAtA[i] = 0x10
+	i--
+	if m.Allowed {
+		dAtA[i] = 1
+	} else {
+		dAtA[i] = 0
+	}
+	i--
+	dAtA[i] = 0x8
+	return len(dAtA) - i, nil
+}
+
+func (m *SubjectAccessReviewCondition) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *SubjectAccessReviewCondition) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *SubjectAccessReviewCondition) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	i -= len(m.Description)
+	copy(dAtA[i:], m.Description)
+	i = encodeVarintGenerated(dAtA, i, uint64(len(m.Description)))
+	i--
+	dAtA[i] = 0x22
+	i -= len(m.Condition)
+	copy(dAtA[i:], m.Condition)
+	i = encodeVarintGenerated(dAtA, i, uint64(len(m.Condition)))
+	i--
+	dAtA[i] = 0x1a
+	i -= len(m.Effect)
+	copy(dAtA[i:], m.Effect)
+	i = encodeVarintGenerated(dAtA, i, uint64(len(m.Effect)))
+	i--
+	dAtA[i] = 0x12
+	i -= len(m.ID)
+	copy(dAtA[i:], m.ID)
+	i = encodeVarintGenerated(dAtA, i, uint64(len(m.ID)))
+	i--
+	dAtA[i] = 0xa
+	return len(dAtA) - i, nil
+}
+
 func (m *SubjectAccessReviewSpec) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
@@ -851,6 +977,20 @@ func (m *SubjectAccessReviewStatus) MarshalToSizedBuffer(dAtA []byte) (int, erro
 	_ = i
 	var l int
 	_ = l
+	if len(m.ConditionalDecisionChain) > 0 {
+		for iNdEx := len(m.ConditionalDecisionChain) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.ConditionalDecisionChain[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintGenerated(dAtA, i, uint64(size))
+			}
+			i--
+			dAtA[i] = 0x2a
+		}
+	}
 	i--
 	if m.Denied {
 		dAtA[i] = 1
@@ -1205,6 +1345,50 @@ func (m *SubjectAccessReview) Size() (n int) {
 	return n
 }
 
+func (m *SubjectAccessReviewAuthorizationDecision) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	n += 2
+	n += 2
+	l = len(m.ConditionsType)
+	n += 1 + l + sovGenerated(uint64(l))
+	if len(m.Conditions) > 0 {
+		for _, e := range m.Conditions {
+			l = e.Size()
+			n += 1 + l + sovGenerated(uint64(l))
+		}
+	}
+	if len(m.ConditionalDecisionChain) > 0 {
+		for _, e := range m.ConditionalDecisionChain {
+			l = e.Size()
+			n += 1 + l + sovGenerated(uint64(l))
+		}
+	}
+	l = len(m.Reason)
+	n += 1 + l + sovGenerated(uint64(l))
+	return n
+}
+
+func (m *SubjectAccessReviewCondition) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.ID)
+	n += 1 + l + sovGenerated(uint64(l))
+	l = len(m.Effect)
+	n += 1 + l + sovGenerated(uint64(l))
+	l = len(m.Condition)
+	n += 1 + l + sovGenerated(uint64(l))
+	l = len(m.Description)
+	n += 1 + l + sovGenerated(uint64(l))
+	return n
+}
+
 func (m *SubjectAccessReviewSpec) Size() (n int) {
 	if m == nil {
 		return 0
@@ -1257,6 +1441,12 @@ func (m *SubjectAccessReviewStatus) Size() (n int) {
 	l = len(m.EvaluationError)
 	n += 1 + l + sovGenerated(uint64(l))
 	n += 2
+	if len(m.ConditionalDecisionChain) > 0 {
+		for _, e := range m.ConditionalDecisionChain {
+			l = e.Size()
+			n += 1 + l + sovGenerated(uint64(l))
+		}
+	}
 	return n
 }
 
@@ -1455,6 +1645,44 @@ func (this *SubjectAccessReview) String() string {
 	}, "")
 	return s
 }
+func (this *SubjectAccessReviewAuthorizationDecision) String() string {
+	if this == nil {
+		return "nil"
+	}
+	repeatedStringForConditions := "[]SubjectAccessReviewCondition{"
+	for _, f := range this.Conditions {
+		repeatedStringForConditions += strings.Replace(strings.Replace(f.String(), "SubjectAccessReviewCondition", "SubjectAccessReviewCondition", 1), `&`, ``, 1) + ","
+	}
+	repeatedStringForConditions += "}"
+	repeatedStringForConditionalDecisionChain := "[]SubjectAccessReviewAuthorizationDecision{"
+	for _, f := range this.ConditionalDecisionChain {
+		repeatedStringForConditionalDecisionChain += strings.Replace(strings.Replace(f.String(), "SubjectAccessReviewAuthorizationDecision", "SubjectAccessReviewAuthorizationDecision", 1), `&`, ``, 1) + ","
+	}
+	repeatedStringForConditionalDecisionChain += "}"
+	s := strings.Join([]string{`&SubjectAccessReviewAuthorizationDecision{`,
+		`Allowed:` + fmt.Sprintf("%v", this.Allowed) + `,`,
+		`Denied:` + fmt.Sprintf("%v", this.Denied) + `,`,
+		`ConditionsType:` + fmt.Sprintf("%v", this.ConditionsType) + `,`,
+		`Conditions:` + repeatedStringForConditions + `,`,
+		`ConditionalDecisionChain:` + repeatedStringForConditionalDecisionChain + `,`,
+		`Reason:` + fmt.Sprintf("%v", this.Reason) + `,`,
+		`}`,
+	}, "")
+	return s
+}
+func (this *SubjectAccessReviewCondition) String() string {
+	if this == nil {
+		return "nil"
+	}
+	s := strings.Join([]string{`&SubjectAccessReviewCondition{`,
+		`ID:` + fmt.Sprintf("%v", this.ID) + `,`,
+		`Effect:` + fmt.Sprintf("%v", this.Effect) + `,`,
+		`Condition:` + fmt.Sprintf("%v", this.Condition) + `,`,
+		`Description:` + fmt.Sprintf("%v", this.Description) + `,`,
+		`}`,
+	}, "")
+	return s
+}
 func (this *SubjectAccessReviewSpec) String() string {
 	if this == nil {
 		return "nil"
@@ -1485,11 +1713,17 @@ func (this *SubjectAccessReviewStatus) String() string {
 	if this == nil {
 		return "nil"
 	}
+	repeatedStringForConditionalDecisionChain := "[]SubjectAccessReviewAuthorizationDecision{"
+	for _, f := range this.ConditionalDecisionChain {
+		repeatedStringForConditionalDecisionChain += strings.Replace(strings.Replace(f.String(), "SubjectAccessReviewAuthorizationDecision", "SubjectAccessReviewAuthorizationDecision", 1), `&`, ``, 1) + ","
+	}
+	repeatedStringForConditionalDecisionChain += "}"
 	s := strings.Join([]string{`&SubjectAccessReviewStatus{`,
 		`Allowed:` + fmt.Sprintf("%v", this.Allowed) + `,`,
 		`Reason:` + fmt.Sprintf("%v", this.Reason) + `,`,
 		`EvaluationError:` + fmt.Sprintf("%v", this.EvaluationError) + `,`,
 		`Denied:` + fmt.Sprintf("%v", this.Denied) + `,`,
+		`ConditionalDecisionChain:` + repeatedStringForConditionalDecisionChain + `,`,
 		`}`,
 	}, "")
 	return s
@@ -3509,6 +3743,406 @@ func (m *SubjectAccessReview) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
+func (m *SubjectAccessReviewAuthorizationDecision) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowGenerated
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: SubjectAccessReviewAuthorizationDecision: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: SubjectAccessReviewAuthorizationDecision: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Allowed", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGenerated
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.Allowed = bool(v != 0)
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Denied", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGenerated
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.Denied = bool(v != 0)
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ConditionsType", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGenerated
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthGenerated
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthGenerated
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.ConditionsType = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Conditions", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGenerated
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthGenerated
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthGenerated
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Conditions = append(m.Conditions, SubjectAccessReviewCondition{})
+			if err := m.Conditions[len(m.Conditions)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 5:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ConditionalDecisionChain", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGenerated
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthGenerated
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthGenerated
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.ConditionalDecisionChain = append(m.ConditionalDecisionChain, SubjectAccessReviewAuthorizationDecision{})
+			if err := m.ConditionalDecisionChain[len(m.ConditionalDecisionChain)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 6:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Reason", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGenerated
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthGenerated
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthGenerated
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Reason = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipGenerated(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthGenerated
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *SubjectAccessReviewCondition) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowGenerated
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: SubjectAccessReviewCondition: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: SubjectAccessReviewCondition: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ID", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGenerated
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthGenerated
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthGenerated
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.ID = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Effect", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGenerated
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthGenerated
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthGenerated
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Effect = SubjectAccessReviewConditionEffect(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Condition", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGenerated
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthGenerated
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthGenerated
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Condition = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Description", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGenerated
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthGenerated
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthGenerated
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Description = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipGenerated(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthGenerated
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
 func (m *SubjectAccessReviewSpec) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
@@ -4025,6 +4659,40 @@ func (m *SubjectAccessReviewStatus) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.Denied = bool(v != 0)
+		case 5:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ConditionalDecisionChain", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGenerated
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthGenerated
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthGenerated
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.ConditionalDecisionChain = append(m.ConditionalDecisionChain, SubjectAccessReviewAuthorizationDecision{})
+			if err := m.ConditionalDecisionChain[len(m.ConditionalDecisionChain)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipGenerated(dAtA[iNdEx:])
