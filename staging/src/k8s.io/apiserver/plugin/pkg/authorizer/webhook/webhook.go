@@ -87,9 +87,20 @@ type WebhookAuthorizer struct {
 	name                          string
 }
 
-// NewFromInterface creates a WebhookAuthorizer using the given subjectAccessReview client
-func NewFromInterface(subjectAccessReview authorizationv1client.AuthorizationV1Interface, authorizedTTL, unauthorizedTTL time.Duration, retryBackoff wait.Backoff, decisionOnError authorizer.Decision, metrics metrics.AuthorizerMetrics, compiler authorizationcel.Compiler) (*WebhookAuthorizer, error) {
-	return newWithBackoff(&subjectAccessReviewV1Client{subjectAccessReview.RESTClient()}, authorizedTTL, unauthorizedTTL, retryBackoff, decisionOnError, nil, metrics, compiler, "", nil) // TODO: fixme
+// NewFromInterface creates a WebhookAuthorizer using the given subjectAccessReview client.
+// If conditionsWebhookConfig is non-nil, an AuthorizationConditionsReview client will be
+// built from it to support conditional authorization evaluation.
+func NewFromInterface(subjectAccessReview authorizationv1client.AuthorizationV1Interface, authorizedTTL, unauthorizedTTL time.Duration, retryBackoff wait.Backoff, decisionOnError authorizer.Decision, metrics metrics.AuthorizerMetrics, compiler authorizationcel.Compiler, conditionsWebhookConfig *rest.Config) (*WebhookAuthorizer, error) {
+	// TODO: make this more real
+	var acrClient *authorizationConditionsClient
+	if conditionsWebhookConfig != nil {
+		var err error
+		acrClient, err = buildAuthorizationConditionsClient(conditionsWebhookConfig, retryBackoff)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return newWithBackoff(&subjectAccessReviewV1Client{subjectAccessReview.RESTClient()}, authorizedTTL, unauthorizedTTL, retryBackoff, decisionOnError, nil, metrics, compiler, "", acrClient)
 }
 
 // New creates a new WebhookAuthorizer from the provided kubeconfig file.
@@ -308,12 +319,13 @@ func (w *WebhookAuthorizer) Authorize(ctx context.Context, attr authorizer.Attri
 	case r.Status.Allowed:
 		return authorizer.DecisionAllow(r.Status.Reason), nil
 	case len(r.Status.ConditionalDecisionChain) != 0 && utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization):
-		if len(r.Status.ConditionalDecisionChain) > 1 {
-			// TODO
-			return authorizer.DecisionNoOpinion(), fmt.Errorf("webhook authorizer does not support multiple conditions chains")
+		// TODO(luxas): This encoding is a bit awkward of special-casing the case of one conditional response only, instead of keeping it top-level
+		if len(r.Status.ConditionalDecisionChain) == 1 {
+			return deserializeDecision(attr, r.Status.ConditionalDecisionChain[0])
 		}
-		gotDecision := r.Status.ConditionalDecisionChain[0]
-		return authorizer.DecisionConditional(attr, gotDecision.ConditionsType, toAuthorizerConditions(gotDecision.Conditions))
+		return deserializeDecision(attr, authorizationv1.SubjectAccessReviewAuthorizationDecision{
+			ConditionalDecisionChain: r.Status.ConditionalDecisionChain,
+		})
 	default:
 		return authorizer.DecisionNoOpinion(r.Status.Reason), nil
 	}
@@ -323,9 +335,6 @@ func (w *WebhookAuthorizer) Authorize(ctx context.Context, attr authorizer.Attri
 func (w *WebhookAuthorizer) EvaluateConditions(ctx context.Context, decision authorizer.Decision, data authorizer.ConditionData) (authorizer.Decision, error) {
 	if decision.IsAllowed() || decision.IsDenied() || decision.IsNoOpinion() {
 		return decision, nil
-	}
-	if decision.IsConditionalChain() {
-		return authorizer.DecisionDeny(), fmt.Errorf("not yet supported")
 	}
 
 	var writeRequest authorizationv1alpha1.AuthorizationConditionsWriteRequest
@@ -346,7 +355,7 @@ func (w *WebhookAuthorizer) EvaluateConditions(ctx context.Context, decision aut
 	}
 	r := &authorizationv1alpha1.AuthorizationConditionsReview{
 		Request: &authorizationv1alpha1.AuthorizationConditionsRequest{
-			Decision:     fromAuthorizerConditions(decision.ConditionSet()),
+			Decision:     serializeDecision(decision),
 			WriteRequest: writeRequest, // TODO: should be a pointer
 		},
 	}
@@ -400,7 +409,63 @@ func toAuthorizerConditions(v1ConditionList []authorizationv1.SubjectAccessRevie
 	}
 }
 
-func fromAuthorizerConditions(conditionSet *authorizer.ConditionSet) authorizationv1.SubjectAccessReviewAuthorizationDecision {
+func deserializeDecision(attrs authorizer.Attributes, serializedDecision authorizationv1.SubjectAccessReviewAuthorizationDecision) (authorizer.Decision, error) {
+	if serializedDecision.Denied && serializedDecision.Allowed {
+		return authorizer.DecisionDeny(serializedDecision.Reason), fmt.Errorf("webhook subject access review returned both allow and deny response")
+	}
+
+	hasConditionSet := len(serializedDecision.Conditions) != 0
+	hasDecisionChain := len(serializedDecision.ConditionalDecisionChain) != 0
+
+	// check all newly-introduced mutual exclusion possibilities
+	// this function is only ever called when the conditional authorization feature gate is enabled
+	if serializedDecision.Denied && hasConditionSet {
+		return authorizer.DecisionDeny(), fmt.Errorf("webhook subject access review: mutually exclusive Denied and Conditions are both specified")
+	}
+	if serializedDecision.Denied && hasDecisionChain {
+		return authorizer.DecisionDeny(), fmt.Errorf("webhook subject access review: mutually exclusive Denied and ConditionalDecisionChain are both specified")
+	}
+	if serializedDecision.Allowed && hasConditionSet {
+		return authorizer.DecisionDeny(), fmt.Errorf("webhook subject access review: mutually exclusive Allowed and Conditions are both specified")
+	}
+	if serializedDecision.Allowed && hasDecisionChain {
+		return authorizer.DecisionDeny(), fmt.Errorf("webhook subject access review: mutually exclusive Allowed and ConditionalDecisionChain are both specified")
+	}
+	if hasConditionSet && hasDecisionChain {
+		return authorizer.DecisionDeny(), fmt.Errorf("webhook subject access review: mutually exclusive Conditions and ConditionalDecisionChain are both specified")
+	}
+
+	if serializedDecision.Denied {
+		return authorizer.DecisionDeny(serializedDecision.Reason), nil
+	}
+
+	if serializedDecision.Allowed {
+		return authorizer.DecisionAllow(serializedDecision.Reason), nil
+	}
+
+	if hasConditionSet {
+		return authorizer.DecisionConditional(attrs, serializedDecision.ConditionsType, toAuthorizerConditions(serializedDecision.Conditions))
+	}
+
+	if hasDecisionChain {
+		subDecisions := make([]authorizer.Decision, 0, len(serializedDecision.ConditionalDecisionChain))
+		for _, serializedSubDecision := range serializedDecision.ConditionalDecisionChain {
+			subDecision, err := deserializeDecision(attrs, serializedSubDecision)
+			if err != nil {
+				return authorizer.DecisionDeny(), err
+			}
+			subDecisions = append(subDecisions, subDecision)
+		}
+		return authorizer.DecisionConditionalChain(subDecisions...), nil
+	}
+
+	return authorizer.DecisionNoOpinion(serializedDecision.Reason), nil
+}
+
+func conditionSetToInternalAPIDecision(conditionSet *authorizer.ConditionSet) authorizationv1.SubjectAccessReviewAuthorizationDecision {
+	if conditionSet == nil {
+		return authorizationv1.SubjectAccessReviewAuthorizationDecision{} // NoOpinion
+	}
 	conds := []authorizationv1.SubjectAccessReviewCondition{}
 	for id, condition := range conditionSet.Conditions() {
 		conds = append(conds, authorizationv1.SubjectAccessReviewCondition{
@@ -415,6 +480,33 @@ func fromAuthorizerConditions(conditionSet *authorizer.ConditionSet) authorizati
 		Conditions:     conds,
 		ConditionsType: conditionSet.Type(),
 	}
+}
+
+func serializeDecision(decision authorizer.Decision) authorizationv1.SubjectAccessReviewAuthorizationDecision {
+	if decision.IsAllowed() {
+		return authorizationv1.SubjectAccessReviewAuthorizationDecision{Allowed: true, Reason: decision.Reason()}
+	}
+	if decision.IsDenied() {
+		return authorizationv1.SubjectAccessReviewAuthorizationDecision{Denied: true, Reason: decision.Reason()}
+	}
+
+	if decision.IsConditional() {
+		d := conditionSetToInternalAPIDecision(decision.ConditionSet())
+		d.Reason = decision.Reason()
+		return d
+	}
+	if decision.IsConditionalChain() {
+		subDecisions := make([]authorizationv1.SubjectAccessReviewAuthorizationDecision, 0, len(decision.ConditionalChain()))
+		for _, subDecision := range decision.ConditionalChain() {
+			subDecisions = append(subDecisions, serializeDecision(subDecision))
+		}
+		return authorizationv1.SubjectAccessReviewAuthorizationDecision{
+			ConditionalDecisionChain: subDecisions,
+			Reason:                   decision.Reason(),
+		}
+	}
+	// no opinion
+	return authorizationv1.SubjectAccessReviewAuthorizationDecision{Reason: decision.Reason()}
 }
 
 func resourceAttributesFrom(attr authorizer.Attributes) *authorizationv1.ResourceAttributes {
@@ -554,6 +646,7 @@ func convertToSARExtra(extra map[string][]string) map[string]authorizationv1.Ext
 	return ret
 }
 
+// TODO: unused?
 func convertToAuthenticationExtra(extra map[string][]string) map[string]authenticationv1.ExtraValue {
 	if extra == nil {
 		return nil
