@@ -18,6 +18,8 @@ package rest
 
 import (
 	authorizationv1 "k8s.io/api/authorization/v1"
+	authorizationv1alpha1 "k8s.io/api/authorization/v1alpha1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	"k8s.io/apiserver/pkg/registry/generic"
 	"k8s.io/apiserver/pkg/registry/rest"
@@ -25,6 +27,7 @@ import (
 	serverstorage "k8s.io/apiserver/pkg/server/storage"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	"k8s.io/kubernetes/pkg/apis/authorization"
+	"k8s.io/kubernetes/pkg/registry/authorization/authorizationconditionsreview"
 	"k8s.io/kubernetes/pkg/registry/authorization/localsubjectaccessreview"
 	"k8s.io/kubernetes/pkg/registry/authorization/selfsubjectaccessreview"
 	"k8s.io/kubernetes/pkg/registry/authorization/selfsubjectrulesreview"
@@ -34,6 +37,7 @@ import (
 type RESTStorageProvider struct {
 	Authorizer   authorizer.Authorizer
 	RuleResolver authorizer.RuleResolver
+	Serializer   runtime.Serializer
 }
 
 func (p RESTStorageProvider) NewRESTStorage(apiResourceConfigSource serverstorage.APIResourceConfigSource, restOptionsGetter generic.RESTOptionsGetter) (genericapiserver.APIGroupInfo, error) {
@@ -73,6 +77,11 @@ func (p RESTStorageProvider) v1Storage(apiResourceConfigSource serverstorage.API
 	// selfsubjectrulesreviews
 	if resource := "selfsubjectrulesreviews"; apiResourceConfigSource.ResourceEnabled(authorizationv1.SchemeGroupVersion.WithResource(resource)) {
 		storage[resource] = selfsubjectrulesreview.NewREST(p.RuleResolver)
+	}
+
+	// authorizationconditionsreviews
+	if resource := "authorizationconditionsreviews"; apiResourceConfigSource.ResourceEnabled(authorizationv1alpha1.SchemeGroupVersion.WithResource(resource)) {
+		storage[resource] = authorizationconditionsreview.NewREST(p.Serializer)
 	}
 
 	return storage
