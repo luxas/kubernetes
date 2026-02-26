@@ -238,7 +238,7 @@ Reuse the existing CEL compilation and evaluation infrastructure from `staging/s
 
 **Action — complete the implementation:**
 1. Set `ConditionsMode` in the SAR spec when calling the webhook (only when the feature gate is enabled and the caller indicated support)
-2. Parse `status.conditionSetChain` from the webhook response
+2. Parse `status.conditionalDecisionChain` from the webhook response
 3. Convert the API types to internal `ConditionSet` objects
 4. Return the appropriate `DecisionConditional*` via `NewConditionalDecision`
 5. Cache conditional responses along with their conditions (same TTL semantics)
@@ -297,11 +297,11 @@ type ConditionalAuthorizationConfiguration struct {
 ```go
 type SubjectAccessReviewStatus struct {
     // existing fields...
-    ConditionSetChain []SubjectAccessReviewConditionSet `json:"conditionSetChain,omitempty"`
+    ConditionalDecisionChain []SubjectAccessReviewAuthorizationDecision `json:"conditionalDecisionChain,omitempty"`
 }
 ```
 
-Add the `SubjectAccessReviewConditionSet`, `SubjectAccessReviewCondition`, `SubjectAccessReviewConditionEffect` types as specified in the KEP.
+Add the `SubjectAccessReviewAuthorizationDecision`, `SubjectAccessReviewCondition`, `SubjectAccessReviewConditionEffect` types as specified in the KEP.
 
 **Files:**
 - `staging/src/k8s.io/api/authorization/v1/types.go`
@@ -315,7 +315,7 @@ Add the `SubjectAccessReviewConditionSet`, `SubjectAccessReviewCondition`, `Subj
 1. Check if `spec.conditionalAuthorization.mode` is set
 2. If so, set `ConditionsMode` on the authorization `Attributes`
 3. Call `AuthorizeWithConditionalSupport` instead of plain `Authorize`
-4. If the result is conditional, populate `status.conditionSetChain` using `conditionsEnforcer.OrderedConditionSets()`
+4. If the result is conditional, populate `status.conditionalDecisionChain` using `conditionsEnforcer.OrderedConditionSets()`
 5. Set `status.allowed=false` and `status.denied=false` for conditional responses
 
 **Files:**
@@ -335,7 +335,7 @@ type AuthorizationConditionsReview struct {
 }
 ```
 
-With `Request` containing `ConditionSetChain` + object/metadata fields, and `Response` containing `Allowed`, `Denied`, `Reason`, `EvaluationError`, and optionally `ConditionSetChain` for re-evaluation.
+With `Request` containing `ConditionalDecisionChain` + object/metadata fields, and `Response` containing `Allowed`, `Denied`, `Reason`, `EvaluationError`, and optionally `ConditionalDecisionChain` for re-evaluation.
 
 **Implementation:**
 - This API is not stored in etcd; it's a virtual resource like SubjectAccessReview
