@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"iter"
-	"slices"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/validate/content"
@@ -75,13 +74,6 @@ const reservedConditionIDPrefix = "k8s.io/"
 // Condition represents a single condition to be evaluated against ConditionData.
 // A condition is a pure, deterministic function from ConditionData to a Boolean.
 type Condition struct {
-	// ID uniquely identifies the condition within the scope of the authorizer
-	// that authored the condition. Validated as a Kubernetes label key, i.e.
-	// (<DNS1123 subdomain>/)[-A-Za-z0-9_.]{1,63}.
-	// IDs with the 'k8s.io/' prefix are reserved for Kubernetes.
-	// TODO: Maybe don't have the ID here, but just in the map key?
-	ID string
-
 	// Condition is an opaque string that represents the condition to be evaluated.
 	// It is a pure, deterministic function from ConditionData to a Boolean.
 	// Might or might not be human-readable. Maximum MaxConditionBytes bytes.
@@ -104,8 +96,11 @@ type ConditionSet struct {
 	conditionType string
 
 	// conditions is the set of conditions to evaluate.
-	// TODO: implement this using a map from ID to Condition instead?
-	conditions []Condition
+	// The string ID uniquely identifies the condition within the scope of the authorizer
+	// that authored the condition. Validated as a Kubernetes label key, i.e.
+	// (<DNS1123 subdomain>/)[-A-Za-z0-9_.]{1,63}.
+	// IDs with the 'k8s.io/' prefix are reserved for Kubernetes.
+	conditions map[string]Condition
 }
 
 // Type returns the condition type (format/encoding/language) of the conditions
@@ -116,49 +111,49 @@ func (c *ConditionSet) Type() string {
 
 // Conditions returns the conditions in this set. The returned slice must not be
 // modified.
-func (c *ConditionSet) Conditions() iter.Seq[Condition] {
-	return func(yield func(Condition) bool) {
-		for _, cond := range c.conditions {
-			if !yield(cond) {
+func (c *ConditionSet) Conditions() iter.Seq2[string, Condition] {
+	return func(yield func(string, Condition) bool) {
+		for id, cond := range c.conditions {
+			if !yield(id, cond) {
 				return
 			}
 		}
 	}
 }
 
-func (c *ConditionSet) DenyConditions() iter.Seq[Condition] {
-	return func(yield func(Condition) bool) {
-		for _, cond := range c.conditions {
+func (c *ConditionSet) DenyConditions() iter.Seq2[string, Condition] {
+	return func(yield func(string, Condition) bool) {
+		for id, cond := range c.conditions {
 			if cond.Effect != ConditionEffectDeny {
 				continue
 			}
-			if !yield(cond) {
+			if !yield(id, cond) {
 				return
 			}
 		}
 	}
 }
 
-func (c *ConditionSet) NoOpinionConditions() iter.Seq[Condition] {
-	return func(yield func(Condition) bool) {
-		for _, cond := range c.conditions {
+func (c *ConditionSet) NoOpinionConditions() iter.Seq2[string, Condition] {
+	return func(yield func(string, Condition) bool) {
+		for id, cond := range c.conditions {
 			if cond.Effect != ConditionEffectNoOpinion {
 				continue
 			}
-			if !yield(cond) {
+			if !yield(id, cond) {
 				return
 			}
 		}
 	}
 }
 
-func (c *ConditionSet) AllowConditions() iter.Seq[Condition] {
-	return func(yield func(Condition) bool) {
-		for _, cond := range c.conditions {
+func (c *ConditionSet) AllowConditions() iter.Seq2[string, Condition] {
+	return func(yield func(string, Condition) bool) {
+		for id, cond := range c.conditions {
 			if cond.Effect != ConditionEffectAllow {
 				continue
 			}
-			if !yield(cond) {
+			if !yield(id, cond) {
 				return
 			}
 		}
@@ -192,11 +187,10 @@ func (c *ConditionSet) CanBecomeAllowed() bool {
 // more Deny conditions, the Decision must be Deny, as that could have been the
 // answer if the evaluation had been successful. Otherwise, NoOpinion is returned.
 func (c *ConditionSet) FailClosedDecision() Decision {
-	hasDenyCondition := slices.ContainsFunc(c.conditions, func(cond Condition) bool {
-		return cond.Effect == ConditionEffectDeny
-	})
-	if hasDenyCondition {
-		return DecisionDeny()
+	for _, cond := range c.conditions {
+		if cond.Effect == ConditionEffectDeny {
+			return DecisionDeny()
+		}
 	}
 	return DecisionNoOpinion()
 }
@@ -204,58 +198,55 @@ func (c *ConditionSet) FailClosedDecision() Decision {
 // NewConditionSet creates a new ConditionSet with the given condition type
 // and conditions. It validates all conditions and returns an error if any
 // validation fails.
-func NewConditionSet(conditionType string, conditions []Condition) (*ConditionSet, error) {
+func NewConditionSet(conditionType string, conditionsIter iter.Seq2[string, Condition]) (*ConditionSet, error) {
 	if errs := content.IsLabelKey(conditionType); len(errs) > 0 {
 		return nil, fmt.Errorf("invalid condition type %q: %s", conditionType, strings.Join(errs, "; "))
 	}
 
-	if len(conditions) == 0 {
+	conditionSet := map[string]Condition{}
+	seenIDs := sets.New[string]()
+	for id, condition := range conditionsIter {
+		if seenIDs.Has(id) {
+			return nil, fmt.Errorf("duplicate condition ID %q", id)
+		}
+		if err := validateCondition(id, condition); err != nil {
+			return nil, err
+		}
+		conditionSet[id] = condition
+		// stop directly when having seen too many conditions
+		if len(conditionSet) > MaxConditionsPerSet {
+			return nil, fmt.Errorf("too many conditions: %d exceeds maximum of %d", len(conditionSet), MaxConditionsPerSet)
+		}
+	}
+
+	if len(conditionSet) == 0 {
 		return nil, fmt.Errorf("conditions must not be empty")
 	}
 
-	if len(conditions) > MaxConditionsPerSet {
-		return nil, fmt.Errorf("too many conditions: %d exceeds maximum of %d", len(conditions), MaxConditionsPerSet)
-	}
-
-	seenIDs := make(map[string]struct{}, len(conditions))
-	for i, cond := range conditions {
-		if err := validateCondition(cond, i); err != nil {
-			return nil, err
-		}
-		if _, ok := seenIDs[cond.ID]; ok {
-			return nil, fmt.Errorf("duplicate condition ID %q at index %d", cond.ID, i)
-		}
-		seenIDs[cond.ID] = struct{}{}
-	}
-
-	// Make a defensive copy of the conditions slice.
-	conditionsCopy := make([]Condition, len(conditions))
-	copy(conditionsCopy, conditions)
-
 	return &ConditionSet{
 		conditionType: conditionType,
-		conditions:    conditionsCopy,
+		conditions:    conditionSet,
 	}, nil
 }
 
 // validateCondition validates a single Condition.
-func validateCondition(cond Condition, index int) error {
+func validateCondition(id string, cond Condition) error {
 	// Validate ID as a label key.
-	if errs := content.IsLabelKey(cond.ID); len(errs) > 0 {
-		return fmt.Errorf("invalid condition ID %q at index %d: %s", cond.ID, index, strings.Join(errs, "; "))
+	if errs := content.IsLabelKey(id); len(errs) > 0 {
+		return fmt.Errorf("invalid condition ID %q: %s", id, strings.Join(errs, "; "))
 	}
 
 	// Reject reserved k8s.io/ prefix.
-	if strings.HasPrefix(cond.ID, reservedConditionIDPrefix) {
-		return fmt.Errorf("condition ID %q at index %d uses reserved prefix %q", cond.ID, index, reservedConditionIDPrefix)
+	if strings.HasPrefix(id, reservedConditionIDPrefix) {
+		return fmt.Errorf("condition ID %q uses reserved prefix %q", id, reservedConditionIDPrefix)
 	}
 
 	// Validate Condition string length.
 	if len(cond.Condition) == 0 {
-		return fmt.Errorf("condition at index %d has empty Condition string", index)
+		return fmt.Errorf("condition %q has empty Condition string", id)
 	}
 	if len(cond.Condition) > MaxConditionBytes {
-		return fmt.Errorf("condition %q at index %d exceeds maximum length of %d bytes (%d bytes)", cond.ID, index, MaxConditionBytes, len(cond.Condition))
+		return fmt.Errorf("condition %q exceeds maximum length of %d bytes (%d bytes)", id, MaxConditionBytes, len(cond.Condition))
 	}
 
 	// Validate Effect.
@@ -263,7 +254,7 @@ func validateCondition(cond Condition, index int) error {
 	case ConditionEffectAllow, ConditionEffectDeny, ConditionEffectNoOpinion:
 		// valid
 	default:
-		return fmt.Errorf("condition %q at index %d has invalid effect %q", cond.ID, index, cond.Effect)
+		return fmt.Errorf("condition %q has invalid effect %q", id, cond.Effect)
 	}
 
 	return nil
@@ -288,14 +279,14 @@ func EvaluateConditionSet(conditionSet *ConditionSet, supportedConditionType str
 		return conditionSet.FailClosedDecision(), fmt.Errorf("unsupported condition type: %q", conditionSet.Type())
 	}
 
-	for cond := range conditionSet.DenyConditions() {
+	for id, cond := range conditionSet.DenyConditions() {
 		applies, err := eval(cond.Condition)
 		if err != nil {
 			// TODO: should we leak the error to the user?
 			return DecisionDeny("an error occurred"), err
 		}
 		if applies {
-			reason := fmt.Sprintf("condition %q denied the request", cond.ID)
+			reason := fmt.Sprintf("condition %q denied the request", id)
 			if len(cond.Description) != 0 {
 				reason += fmt.Sprintf(" with description %q", cond.Description)
 			}
@@ -303,14 +294,14 @@ func EvaluateConditionSet(conditionSet *ConditionSet, supportedConditionType str
 		}
 	}
 
-	for cond := range conditionSet.NoOpinionConditions() {
+	for id, cond := range conditionSet.NoOpinionConditions() {
 		applies, err := eval(cond.Condition)
 		if err != nil {
 			// TODO: should we leak the error to the user?
 			return DecisionNoOpinion("an error occurred"), err
 		}
 		if applies {
-			reason := fmt.Sprintf("condition %q evaluated to NoOpinion", cond.ID)
+			reason := fmt.Sprintf("condition %q evaluated to NoOpinion", id)
 			if len(cond.Description) != 0 {
 				reason += fmt.Sprintf(" with description %q", cond.Description)
 			}
@@ -319,7 +310,7 @@ func EvaluateConditionSet(conditionSet *ConditionSet, supportedConditionType str
 	}
 
 	var errlist []error
-	for cond := range conditionSet.AllowConditions() {
+	for id, cond := range conditionSet.AllowConditions() {
 		applies, err := eval(cond.Condition)
 		if err != nil {
 			// errors from Allow conditions don't affect the Decision, but
@@ -328,7 +319,7 @@ func EvaluateConditionSet(conditionSet *ConditionSet, supportedConditionType str
 			continue
 		}
 		if applies {
-			reason := fmt.Sprintf("condition %q allowed the request", cond.ID)
+			reason := fmt.Sprintf("condition %q allowed the request", id)
 			if len(cond.Description) != 0 {
 				reason += fmt.Sprintf(" with description %q", cond.Description)
 			}

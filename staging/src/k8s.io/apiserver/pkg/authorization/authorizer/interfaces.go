@@ -19,11 +19,15 @@ package authorizer
 import (
 	"context"
 	"fmt"
+	"iter"
 	"net/http"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/api/validate/content"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
+	utilerrors "k8s.io/apimachinery/pkg/util/errors"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apiserver/pkg/authentication/user"
 )
 
@@ -271,17 +275,63 @@ func DecisionNoOpinion(reasons ...string) Decision {
 // TODO: Should reason be encoded on the Decision struct in the SAR API?
 
 // TODO: How to build the Decision type from the serialized SAR when one needs to provide the authorizer?
-func DecisionConditional(conditionSet ConditionSet, attrs Attributes, reasons ...string) Decision {
-	if attrs == nil || attrs.GetConditionsMode() == ConditionsModeNone {
-		return conditionSet.FailClosedDecision().
-			WithAdditionalReasons("client does not support conditions, but authorizer tried to return a conditional response")
+func DecisionConditional(attrs Attributes, conditionType string, conditionsIter iter.Seq2[string, Condition], reasons ...string) (Decision, error) {
+	conditionSet := map[string]Condition{}
+	seenIDs := sets.New[string]()
+	errlist := []error{}
+	decisionOnError := DecisionNoOpinion()
+	for id, condition := range conditionsIter {
+		if condition.Effect == ConditionEffectDeny {
+			decisionOnError = DecisionDeny()
+		}
+		if seenIDs.Has(id) {
+			errlist = append(errlist, fmt.Errorf("duplicate condition ID %q", id))
+			continue
+		}
+		if err := validateCondition(id, condition); err != nil {
+			errlist = append(errlist, err)
+			continue
+		}
+		conditionSet[id] = condition
+		// defensively stop directly when having seen too many conditions
+		if len(conditionSet) > MaxConditionsPerSet {
+			return DecisionDeny(), fmt.Errorf("too many conditions: %d exceeds maximum of %d", len(conditionSet), MaxConditionsPerSet)
+		}
 	}
+
+	// check errors before len(conditionSet) == 0, as some errors might have made the map be empty
+	// although there were items in the iterator
+	if err := utilerrors.NewAggregate(errlist); err != nil {
+		// the error is returned first here, not in the loop, to make sure we saw all conditions,
+		// and fail closed with deny if there were any deny conditions
+		return decisionOnError, err
+	}
+
+	// an empty conditionset always evaluates to NoOpinion
+	// ignore conditionType being invalid in this case, as it does not matter
+	if len(conditionSet) == 0 {
+		return DecisionNoOpinion("empty ConditionSet"), nil
+	}
+
+	if errs := content.IsLabelKey(conditionType); len(errs) > 0 {
+		return decisionOnError, fmt.Errorf("invalid condition type %q: %s", conditionType, strings.Join(errs, "; "))
+	}
+
+	// Protect against authorizers that forget to fail closed for clients that aren't conditions-aware
+	if attrs == nil || attrs.GetConditionsMode() == ConditionsModeNone {
+		return decisionOnError.
+			WithAdditionalReasons("client does not support conditions, but authorizer tried to return a conditional response"), nil
+	}
+
 	return Decision{
 		unconditionalDecision: 0,
-		conditionSet:          &conditionSet,
-		decisionChain:         nil,
-		reasons:               nil,
-	}.WithAdditionalReasons(reasons...)
+		conditionSet: &ConditionSet{
+			conditionType: conditionType,
+			conditions:    conditionSet,
+		},
+		decisionChain: nil,
+		reasons:       nil,
+	}.WithAdditionalReasons(reasons...), nil
 }
 
 // ConditionalDecisionChain is an aggregate Decision type. Order of decisions matter.

@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"testing"
 
@@ -243,13 +244,13 @@ type evalTestAuthz struct {
 
 func (a *evalTestAuthz) Authorize(ctx context.Context, attrs authorizer.Attributes) (authorizer.Decision, error) {
 	if a.conditionEffect != "" {
-		cs, err := authorizer.NewConditionSet("test-type", []authorizer.Condition{
-			{ID: "test-cond", Condition: "test", Effect: a.conditionEffect},
-		})
+		d, err := authorizer.DecisionConditional(attrs, "test-type", maps.All(map[string]authorizer.Condition{
+			"test-cond": {Condition: "test", Effect: a.conditionEffect},
+		}))
 		if err != nil {
-			return authorizer.DecisionDeny(), err
+			panic(err) // these test conditions are always valid
 		}
-		return authorizer.DecisionConditional(*cs, attrs), a.authorizeErr
+		return d, a.authorizeErr
 	}
 	return a.decision, a.authorizeErr
 }

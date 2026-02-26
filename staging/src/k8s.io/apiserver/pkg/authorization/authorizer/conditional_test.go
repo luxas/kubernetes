@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 
@@ -58,22 +59,17 @@ func (a sampleAuthorizer) Authorize(ctx context.Context, attrs Attributes) (Deci
 		case "list":
 			return DecisionAllow(), nil
 		case "update":
-			conditions, err := NewConditionSet("labelSelectorApplies", []Condition{
-				{
-					ID: "owner-label-is-set",
+			// the authorizer is misbehaving here, it SHOULD check attrs.GetConditionsMode() and
+			// fail closed to NoOpinion or Deny whenever it would like to return a conditional decision,
+			// but the client does not support it. However, this check is also done in DecisionConditional here.
+			return DecisionConditional(attrs, "labelSelectorApplies", maps.All(map[string]Condition{
+				"owner-label-is-set": {
 					// (oldobject != nil && has(oldobject.metadata.labels.owner) && oldobject.metadata.labels.owner == "carol") &&
 					// (object != nil && has(object.metadata.labels.owner) && object.metadata.labels.owner == "carol")
 					Condition: "owner=carol|owner=carol",
 					Effect:    ConditionEffectAllow,
 				},
-			})
-			if err != nil {
-				return DecisionNoOpinion(), err
-			}
-			// the authorizer is misbehaving here, it SHOULD check attrs.GetConditionsMode() and
-			// fail closed to NoOpinion or Deny whenever it would like to return a conditional decision,
-			// but the client does not support it. However, this check is also done in DecisionConditional here.
-			return DecisionConditional(*conditions, attrs), nil
+			}))
 		default:
 			return DecisionNoOpinion(), nil
 		}
@@ -83,27 +79,21 @@ func (a sampleAuthorizer) Authorize(ctx context.Context, attrs Attributes) (Deci
 		case "list":
 			return DecisionAllow(), nil
 		case "create", "update", "delete":
-			conditions, err := NewConditionSet("labelSelectorApplies", []Condition{
-				{
-					ID: "deny-supersecret-label-on-oldobject",
+			// the authorizer is misbehaving here, it SHOULD check attrs.GetConditionsMode() and
+			// fail closed to NoOpinion or Deny whenever it would like to return a conditional decision,
+			// but the client does not support it. However, this check is also done in DecisionConditional here.
+			return DecisionConditional(attrs, "labelSelectorApplies", maps.All(map[string]Condition{
+				"deny-supersecret-label-on-oldobject": {
 					// (oldobject != nil && has(oldobject.metadata.labels.supersecret)) && true
 					Condition: "supersecret|",
 					Effect:    ConditionEffectDeny,
 				},
-				{
-					ID: "deny-supersecret-label-on-object",
+				"deny-supersecret-label-on-object": {
 					// true && (object != nil && has(object.metadata.labels.supersecret))
 					Condition: "|supersecret",
 					Effect:    ConditionEffectDeny,
 				},
-			})
-			if err != nil {
-				return DecisionNoOpinion(), err
-			}
-			// the authorizer is misbehaving here, it SHOULD check attrs.GetConditionsMode() and
-			// fail closed to NoOpinion or Deny whenever it would like to return a conditional decision,
-			// but the client does not support it. However, this check is also done in DecisionConditional here.
-			return DecisionConditional(*conditions, attrs), nil
+			}))
 		default:
 			return DecisionNoOpinion(), nil
 		}
@@ -467,8 +457,8 @@ func TestEvaluateConditionSet(t *testing.T) {
 			name: "wrong type with only allow conditions",
 			conditionSet: &ConditionSet{
 				conditionType: "wrong-type",
-				conditions: []Condition{
-					{ID: "allow-cond", Condition: "x", Effect: ConditionEffectAllow},
+				conditions: map[string]Condition{
+					"allow-cond": {Condition: "x", Effect: ConditionEffectAllow},
 				},
 			},
 			supportedType: "test",
@@ -480,8 +470,8 @@ func TestEvaluateConditionSet(t *testing.T) {
 			name: "wrong type with only noopinion conditions",
 			conditionSet: &ConditionSet{
 				conditionType: "wrong-type",
-				conditions: []Condition{
-					{ID: "nop-cond", Condition: "x", Effect: ConditionEffectNoOpinion},
+				conditions: map[string]Condition{
+					"nop-cond": {Condition: "x", Effect: ConditionEffectNoOpinion},
 				},
 			},
 			supportedType: "test",
@@ -493,9 +483,9 @@ func TestEvaluateConditionSet(t *testing.T) {
 			name: "wrong type with deny conditions",
 			conditionSet: &ConditionSet{
 				conditionType: "wrong-type",
-				conditions: []Condition{
-					{ID: "deny-cond", Condition: "x", Effect: ConditionEffectDeny},
-					{ID: "allow-cond", Condition: "x", Effect: ConditionEffectAllow},
+				conditions: map[string]Condition{
+					"deny-cond":  {Condition: "x", Effect: ConditionEffectDeny},
+					"allow-cond": {Condition: "x", Effect: ConditionEffectAllow},
 				},
 			},
 			supportedType: "test",
