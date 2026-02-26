@@ -79,6 +79,7 @@ type Condition struct {
 	// that authored the condition. Validated as a Kubernetes label key, i.e.
 	// (<DNS1123 subdomain>/)[-A-Za-z0-9_.]{1,63}.
 	// IDs with the 'k8s.io/' prefix are reserved for Kubernetes.
+	// TODO: Maybe don't have the ID here, but just in the map key?
 	ID string
 
 	// Condition is an opaque string that represents the condition to be evaluated.

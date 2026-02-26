@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
@@ -92,6 +93,7 @@ type Authorizer interface {
 }
 
 // AuthorizerFunc implements Authorizer using a function.
+// It does not support conditional authorization.
 type AuthorizerFunc func(ctx context.Context, a Attributes) (Decision, error)
 
 func (f AuthorizerFunc) Authorize(ctx context.Context, a Attributes) (Decision, error) {
@@ -283,20 +285,20 @@ func DecisionConditional(conditionSet ConditionSet, attrs Attributes, reasons ..
 }
 
 // ConditionalDecisionChain is an aggregate Decision type. Order of decisions matter.
-type ConditionalDecisionChain []NamedDecision
+type ConditionalDecisionChain []Decision
 
 func (chain ConditionalDecisionChain) CanBecomeAllowed() bool {
 	for _, subDecision := range chain {
-		if subDecision.Decision.IsDenied() {
+		if subDecision.IsDenied() {
 			return false
 		}
-		if subDecision.Decision.IsAllowed() {
+		if subDecision.IsAllowed() {
 			return true
 		}
-		if subDecision.Decision.IsConditional() && subDecision.Decision.CanBecomeAllowed() {
+		if subDecision.IsConditional() && subDecision.CanBecomeAllowed() {
 			return true
 		}
-		if subDecision.Decision.IsConditionalChain() && subDecision.Decision.CanBecomeAllowed() {
+		if subDecision.IsConditionalChain() && subDecision.CanBecomeAllowed() {
 			return true
 		}
 	}
@@ -305,11 +307,20 @@ func (chain ConditionalDecisionChain) CanBecomeAllowed() bool {
 
 func (chain ConditionalDecisionChain) FailClosedDecision() Decision {
 	for _, subDecision := range chain {
-		if subDecision.Decision.FailClosedDecision().IsDenied() {
+		if subDecision.FailClosedDecision().IsDenied() {
 			return DecisionDeny()
 		}
 	}
 	return DecisionNoOpinion()
+}
+
+func (chain ConditionalDecisionChain) HasConcreteResponse() bool {
+	for _, subDecision := range chain {
+		if subDecision.HasConcreteResponse() {
+			return true
+		}
+	}
+	return false
 }
 
 /*func (chain ConditionalDecisionChain) ToDecision() Decision {
@@ -331,25 +342,46 @@ func (chain ConditionalDecisionChain) FailClosedDecision() Decision {
 	}
 }*/
 
-func DecisionConditionalChain(namedDecisions ...NamedDecision) Decision {
-	if len(namedDecisions) == 0 {
+func DecisionConditionalChain(decisions ...Decision) Decision {
+	if len(decisions) == 0 {
 		return DecisionNoOpinion()
 	}
-	if len(namedDecisions) == 1 {
-		d := namedDecisions[0].Decision
+	if len(decisions) == 1 {
+		d := decisions[0]
 		if d.IsAllowed() || d.IsDenied() || d.IsNoOpinion() {
 			return d
 		}
 		// else, wrap the conditional response in a chain, so that the caller knows which
 		// authorizer authored the condition
 	}
+	// Everything is NoOpinion => NoOpinion
+	if allItems(decisions, func(d Decision) bool { return d.IsNoOpinion() }) {
+		// TODO: Gather errors here
+		return DecisionNoOpinion()
+	}
+	// There is at least one decision that is not NoOpinion. If this is the last one, return it
+	if allItems(decisions[:len(decisions)-1], func(d Decision) bool { return d.IsNoOpinion() }) {
+		d := decisions[len(decisions)-1] // last item of the slice is the only non-NoOpinion
+		if d.IsAllowed() || d.IsDenied() || d.IsNoOpinion() {
+			return d
+		}
+	}
 
 	return Decision{
 		unconditionalDecision: 0,
 		conditionSet:          nil,
-		decisionChain:         namedDecisions,
+		decisionChain:         decisions,
 		reasons:               nil,
 	}
+}
+
+func allItems(decisions []Decision, pred func(d Decision) bool) bool {
+	for _, d := range decisions {
+		if !pred(d) {
+			return false
+		}
+	}
+	return true
 }
 
 type NamedDecision struct {
@@ -392,6 +424,16 @@ func (d Decision) CanBecomeAllowed() bool {
 		return d.decisionChain.CanBecomeAllowed()
 	}
 	return false
+}
+
+func (d Decision) HasConcreteResponse() bool {
+	if d.IsAllowed() || d.IsDenied() {
+		return true
+	}
+	if d.IsNoOpinion() || d.IsConditional() {
+		return false
+	}
+	return d.decisionChain.HasConcreteResponse()
 }
 
 // IsDenied returns true if the decision is Deny.
@@ -480,10 +522,7 @@ func (d Decision) Equal(other Decision) bool {
 			return false
 		}
 		for i := range d.decisionChain {
-			if d.decisionChain[i].AuthorizerName != other.decisionChain[i].AuthorizerName {
-				return false
-			}
-			if !d.decisionChain[i].Decision.Equal(other.decisionChain[i].Decision) {
+			if !d.decisionChain[i].Equal(other.decisionChain[i]) {
 				return false
 			}
 		}
@@ -529,10 +568,14 @@ func (d Decision) String() string {
 		return "NoOpinion"
 	}
 	if d.IsConditional() {
-		return "Conditional"
+		return fmt.Sprintf("Conditional(type=%q, len=%d)", d.conditionSet.conditionType, len(d.conditionSet.conditions))
 	}
 	if d.IsConditionalChain() {
-		return "ConditionalChain"
+		subdecisionStrings := make([]string, 0, len(d.decisionChain))
+		for _, subDecision := range d.decisionChain {
+			subdecisionStrings = append(subdecisionStrings, subDecision.String())
+		}
+		return fmt.Sprintf("ConditionalChain[%s]", strings.Join(subdecisionStrings, ", "))
 	}
 	return "Unknown" // should never happen, according to our invariant
 }

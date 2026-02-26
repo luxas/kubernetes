@@ -27,8 +27,6 @@ package union
 import (
 	"context"
 	"errors"
-	"fmt"
-	"strconv"
 
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apiserver/pkg/authentication/user"
@@ -50,12 +48,11 @@ func New(authorizationHandlers ...authorizer.Authorizer) authorizer.Authorizer {
 // Authorizes against a chain of authorizer.Authorizer objects and returns nil if successful and returns error if unsuccessful
 func (authzHandler unionAuthzHandler) Authorize(ctx context.Context, a authorizer.Attributes) (authorizer.Decision, error) {
 	var (
-		errlist             []error
-		noOpinionReasonList []string
-		decisionChain       []authorizer.NamedDecision
+		errlist       []error
+		decisionChain authorizer.ConditionalDecisionChain
 	)
 
-	for i, currAuthzHandler := range authzHandler {
+	for _, currAuthzHandler := range authzHandler {
 		// Precondition: All previously seen decisions were either NoOpinion or Conditional.
 		decision, err := currAuthzHandler.Authorize(ctx, a)
 
@@ -63,34 +60,16 @@ func (authzHandler unionAuthzHandler) Authorize(ctx context.Context, a authorize
 			// TODO: Wrap the errors to be of the form "authenticator 'foo' returned error: %w"
 			errlist = append(errlist, err)
 		}
-
-		if !decision.IsNoOpinion() {
-			decisionChain = append(decisionChain, authorizer.NamedDecision{
-				AuthorizerName: fmt.Sprintf("%d", i),
-				Decision:       decision,
-			})
-		} else { // decision.IsNoOpinion()
-			reason := decision.Reason()
-			if len(reason) != 0 {
-				noOpinionReasonList = append(noOpinionReasonList, reason)
-			}
-		}
+		decisionChain = append(decisionChain, decision)
 
 		// If we got a concrete Allow/Deny decision, no need to walk the chain further.
-		if decision.IsDenied() || decision.IsAllowed() {
+		if decisionChain.HasConcreteResponse() {
 			// TODO: should we capture the reasons and errors from earlier conditional decisions?
 			return authorizer.DecisionConditionalChain(decisionChain...), utilerrors.NewAggregate(errlist)
 		}
 	}
 
-	if len(decisionChain) != 0 {
-		// We reached the end of the chain and found no concrete Allow/Deny decision,
-		// but at least one conditional decision. Return that here
-		return authorizer.DecisionConditionalChain(decisionChain...), utilerrors.NewAggregate(errlist)
-	}
-
-	// We reached the end of the chain and all of the decisions were NoOpinions.
-	return authorizer.DecisionNoOpinion(noOpinionReasonList...), utilerrors.NewAggregate(errlist)
+	return authorizer.DecisionConditionalChain(decisionChain...), utilerrors.NewAggregate(errlist)
 }
 
 func (authzHandler unionAuthzHandler) EvaluateConditions(ctx context.Context, unevaluatedDecision authorizer.Decision, data authorizer.ConditionData) (authorizer.Decision, error) {
@@ -103,23 +82,19 @@ func (authzHandler unionAuthzHandler) EvaluateConditions(ctx context.Context, un
 	}
 
 	errlist := []error{}
-	for _, namedUnevaluatedSubDecision := range unevaluatedDecision.ConditionalChain() {
-		failClosedDecision := namedUnevaluatedSubDecision.Decision.FailClosedDecision()
-		i, err := strconv.Atoi(namedUnevaluatedSubDecision.AuthorizerName)
-		if err != nil {
-			if failClosedDecision.IsDenied() {
-				return failClosedDecision, fmt.Errorf("unrecognized authorizer %q", namedUnevaluatedSubDecision.AuthorizerName)
-			}
+	for i, unevaluatedSubDecision := range unevaluatedDecision.ConditionalChain() {
+		// Whenever we reach a concrete Allow/Deny in the list, that is our answer
+		if unevaluatedSubDecision.IsAllowed() || unevaluatedSubDecision.IsDenied() {
+			return unevaluatedSubDecision, nil
+		}
+		// No point in trying to evaluate conditions for a NoOpinion decision, skip
+		if unevaluatedSubDecision.IsNoOpinion() {
 			continue
 		}
-		if i < 0 || i >= len(authzHandler) {
-			if failClosedDecision.IsDenied() {
-				return failClosedDecision, fmt.Errorf("unrecognized authorizer %q", namedUnevaluatedSubDecision.AuthorizerName)
-			}
-			continue
-		}
+
+		failClosedDecision := unevaluatedSubDecision.FailClosedDecision()
 		conditionsAuthorizer := authzHandler[i]
-		evalResult, err := conditionsAuthorizer.EvaluateConditions(ctx, namedUnevaluatedSubDecision.Decision, data)
+		evalResult, err := conditionsAuthorizer.EvaluateConditions(ctx, unevaluatedSubDecision, data)
 		if evalResult.IsAllowed() || evalResult.IsDenied() {
 			return evalResult, err
 		}
