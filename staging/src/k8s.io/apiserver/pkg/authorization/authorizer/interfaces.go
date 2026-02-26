@@ -409,7 +409,7 @@ func (d Decision) FailClosedDecision() Decision {
 		return d.conditionSet.FailClosedDecision()
 	}
 	if d.IsConditionalChain() {
-		return d.conditionSet.FailClosedDecision()
+		return d.decisionChain.FailClosedDecision()
 	}
 	return DecisionNoOpinion()
 }
