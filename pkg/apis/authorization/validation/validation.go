@@ -68,6 +68,7 @@ func ValidateSubjectAccessReview(sar *authorizationapi.SubjectAccessReview) fiel
 	if !apiequality.Semantic.DeepEqual(metav1.ObjectMeta{}, objectMetaShallowCopy) {
 		allErrs = append(allErrs, field.Invalid(field.NewPath("metadata"), sar.ObjectMeta, `must be empty`))
 	}
+	// TODO(luxas): Do we need to validate the conditionsmode, or shall we keep it an open enum? I guess open enum.
 	return allErrs
 }
 
