@@ -9,12 +9,25 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
+// +genclient
+// +genclient:nonNamespaced
+// +genclient:onlyVerbs=create
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 // +k8s:prerelease-lifecycle-gen:introduced=1.36
 
 // AuthorizationConditionsReview describes a request to evaluate authorization conditions.
 type AuthorizationConditionsReview struct {
 	metav1.TypeMeta `json:",inline"`
+	// metadata is the standard list metadata.
+	// In AuthorizationConditionsReview, it must be an empty struct.
+	// TODO(luxas): Validate this. Or could we make this error disappear:
+	// F0227 11:04:00.026163   99872 lister.go:76] unable to find ObjectMeta for any types in package k8s.io/api/authorization/v1alpha1
+	// !!! [0227 11:04:00] Call tree:
+	// !!! [0227 11:04:00]  1: hack/update-codegen.sh:1036 codegen::listers(...)
+	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+	// +optional
+	metav1.ObjectMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
+
 	// Request describes the attributes for the authorization conditions request.
 	// +optional
 	Request *AuthorizationConditionsRequest `json:"request,omitempty" protobuf:"bytes,1,opt,name=request"`

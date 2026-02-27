@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -147,7 +148,7 @@ func TestSubjectAccessReview(t *testing.T) {
 			t.Errorf("%s: expected %v, got %v", test.name, test.expectedError, err)
 			continue
 		}
-		if response.Status != test.expectedStatus {
+		if !reflect.DeepEqual(response.Status, test.expectedStatus) {
 			t.Errorf("%s: expected %v, got %v", test.name, test.expectedStatus, response.Status)
 			continue
 		}
@@ -248,7 +249,7 @@ func TestSelfSubjectAccessReview(t *testing.T) {
 			t.Errorf("%s: expected %v, got %v", test.name, test.expectedError, err)
 			continue
 		}
-		if response.Status != test.expectedStatus {
+		if !reflect.DeepEqual(response.Status, test.expectedStatus) {
 			t.Errorf("%s: expected %v, got %v", test.name, test.expectedStatus, response.Status)
 			continue
 		}
@@ -369,7 +370,7 @@ func TestLocalSubjectAccessReview(t *testing.T) {
 			t.Errorf("%s: expected %v, got %v", test.name, test.expectedError, err)
 			continue
 		}
-		if response.Status != test.expectedStatus {
+		if !reflect.DeepEqual(response.Status, test.expectedStatus) {
 			t.Errorf("%s: expected %#v, got %#v", test.name, test.expectedStatus, response.Status)
 			continue
 		}

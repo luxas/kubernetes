@@ -66,37 +66,74 @@ func runConditionalAuthorizationTests(t *testing.T, featureEnabled bool) {
 	webhookServer := newWebhookServer(t)
 	defer webhookServer.server.Close()
 
-	// Write a kubeconfig for the webhook server
+	// Write a kubeconfig for the webhook server with two contexts:
+	// - "default" context for SAR on /authorize
+	// - "conditions" context for ACR on /conditionsreview
 	kubeconfigPath := filepath.Join(dir, "webhook-kubeconfig.yaml")
 	if err := os.WriteFile(kubeconfigPath, []byte(fmt.Sprintf(`
 apiVersion: v1
 kind: Config
 clusters:
-- name: webhook
+- name: authorize
+  cluster:
+    server: %q
+    insecure-skip-tls-verify: true
+- name: conditions
   cluster:
     server: %q
     insecure-skip-tls-verify: true
 contexts:
 - name: default
   context:
-    cluster: webhook
+    cluster: authorize
+    user: test
+- name: conditions
+  context:
+    cluster: conditions
     user: test
 current-context: default
 users:
 - name: test
-`, webhookServer.server.URL+"/authorize")), 0644); err != nil {
+`, webhookServer.server.URL+"/authorize", webhookServer.server.URL+"/conditionsreview")), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	// Start the test API server with the webhook authorizer, feature gate,
+	// Write an AuthorizationConfiguration file
+	authzConfigPath := filepath.Join(dir, "authz-config.yaml")
+	conditionsReviewSection := ""
+	if featureEnabled {
+		conditionsReviewSection = `
+    conditionsReview:
+      kubeConfigContextName: conditions
+      version: v1alpha1`
+	}
+	if err := os.WriteFile(authzConfigPath, []byte(fmt.Sprintf(`
+apiVersion: apiserver.config.k8s.io/v1beta1
+kind: AuthorizationConfiguration
+authorizers:
+- type: Webhook
+  name: conditional-webhook
+  webhook:
+    timeout: 10s
+    subjectAccessReviewVersion: v1
+    matchConditionSubjectAccessReviewVersion: v1
+    failurePolicy: NoOpinion
+    authorizedTTL: 1ms
+    unauthorizedTTL: 1ms
+    connectionInfo:
+      type: KubeConfigFile
+      kubeConfigFile: %q%s
+- type: RBAC
+  name: rbac
+`, kubeconfigPath, conditionsReviewSection)), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Start the test API server with the AuthorizationConfiguration, feature gate,
 	// and the AuthorizationConditionsEnforcer admission plugin
 	flags := []string{
 		fmt.Sprintf("--feature-gates=ConditionalAuthorization=%v", featureEnabled),
-		"--authorization-mode=Webhook,RBAC",
-		"--authorization-webhook-config-file=" + kubeconfigPath,
-		"--authorization-webhook-version=v1",
-		"--authorization-webhook-cache-authorized-ttl=1ms",
-		"--authorization-webhook-cache-unauthorized-ttl=1ms",
+		"--authorization-config=" + authzConfigPath,
 		"--enable-admission-plugins=AuthorizationConditionsEnforcer",
 	}
 	server := kubeapiservertesting.StartTestServerOrDie(t, nil, flags, framework.SharedEtcd())
@@ -709,7 +746,8 @@ type webhookServerHandler struct {
 func newWebhookServer(t *testing.T) *webhookServer {
 	handler := &webhookServerHandler{t: t}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/authorize", handler.ServeHTTP)
+	mux.HandleFunc("/authorize", handler.serveSAR)
+	mux.HandleFunc("/conditionsreview", handler.serveACR)
 	server := httptest.NewTLSServer(mux)
 	return &webhookServer{
 		server:  server,
@@ -717,7 +755,7 @@ func newWebhookServer(t *testing.T) *webhookServer {
 	}
 }
 
-func (h *webhookServerHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+func (h *webhookServerHandler) serveSAR(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodPost {
 		http.Error(w, "only POST is supported", http.StatusMethodNotAllowed)
 		return
@@ -731,25 +769,24 @@ func (h *webhookServerHandler) ServeHTTP(w http.ResponseWriter, req *http.Reques
 	}
 	defer req.Body.Close()
 
-	// Parse TypeMeta first to determine which type to decode
-	var typeMeta metav1.TypeMeta
-	if err := json.Unmarshal(body, &typeMeta); err != nil {
-		h.t.Errorf("failed to unmarshal TypeMeta: %v", err)
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	h.handleSAR(w, body)
+}
+
+func (h *webhookServerHandler) serveACR(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		http.Error(w, "only POST is supported", http.StatusMethodNotAllowed)
 		return
 	}
 
-	h.t.Logf("webhook received: apiVersion=%s kind=%s", typeMeta.APIVersion, typeMeta.Kind)
-
-	switch {
-	case typeMeta.APIVersion == "authorization.k8s.io/v1" && typeMeta.Kind == "SubjectAccessReview":
-		h.handleSAR(w, body)
-	case typeMeta.APIVersion == "authorization.k8s.io/v1alpha1" && typeMeta.Kind == "AuthorizationConditionsReview":
-		h.handleACR(w, body)
-	default:
-		h.t.Errorf("unexpected type: %s/%s", typeMeta.APIVersion, typeMeta.Kind)
-		http.Error(w, fmt.Sprintf("unexpected type: %s/%s", typeMeta.APIVersion, typeMeta.Kind), http.StatusBadRequest)
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		h.t.Errorf("failed to read request body: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
+	defer req.Body.Close()
+
+	h.handleACR(w, body)
 }
 
 func (h *webhookServerHandler) handleSAR(w http.ResponseWriter, body []byte) {
@@ -847,7 +884,7 @@ func celEvaluateConditions(t *testing.T, acr *authorizationv1alpha1.Authorizatio
 		"request":   requestMap,
 	}
 
-	conditions := acr.Request.Decision.Conditions
+	conditions := collectConditions(acr.Request.Decision)
 
 	// Phase 1: Deny conditions
 	for _, cond := range conditions {
@@ -881,6 +918,20 @@ func celEvaluateConditions(t *testing.T, acr *authorizationv1alpha1.Authorizatio
 
 	// Default: NoOpinion
 	return false, false
+}
+
+// collectConditions recursively extracts all conditions from a decision.
+// When the decision comes through an aggregated API server, the conditions may
+// be nested inside ConditionalDecisionChain entries rather than at the top level.
+func collectConditions(decision authorizationv1.SubjectAccessReviewAuthorizationDecision) []authorizationv1.SubjectAccessReviewCondition {
+	if len(decision.Conditions) > 0 {
+		return decision.Conditions
+	}
+	var conditions []authorizationv1.SubjectAccessReviewCondition
+	for _, subDecision := range decision.ConditionalDecisionChain {
+		conditions = append(conditions, collectConditions(subDecision)...)
+	}
+	return conditions
 }
 
 // evalCEL compiles and evaluates a single CEL expression, returning true/false.

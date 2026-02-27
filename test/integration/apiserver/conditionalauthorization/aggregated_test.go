@@ -87,25 +87,62 @@ func TestAggregatedConditionalAuthorization(t *testing.T) {
 		sar.Status.Reason = "default allow during setup"
 	}
 
-	// Write a kubeconfig for the webhook server
+	// Write a kubeconfig for the webhook server with two contexts:
+	// - "default" context for SAR on /authorize
+	// - "conditions" context for ACR on /conditionsreview
 	webhookKubeconfigPath := filepath.Join(dir, "webhook-kubeconfig.yaml")
 	if err := os.WriteFile(webhookKubeconfigPath, []byte(fmt.Sprintf(`
 apiVersion: v1
 kind: Config
 clusters:
-- name: webhook
+- name: authorize
+  cluster:
+    server: %q
+    insecure-skip-tls-verify: true
+- name: conditions
   cluster:
     server: %q
     insecure-skip-tls-verify: true
 contexts:
 - name: default
   context:
-    cluster: webhook
+    cluster: authorize
+    user: test
+- name: conditions
+  context:
+    cluster: conditions
     user: test
 current-context: default
 users:
 - name: test
-`, webhookServer.server.URL+"/authorize")), 0644); err != nil {
+`, webhookServer.server.URL+"/authorize", webhookServer.server.URL+"/conditionsreview")), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write an AuthorizationConfiguration file for kube-apiserver
+	authzConfigPath := filepath.Join(dir, "authz-config.yaml")
+	if err := os.WriteFile(authzConfigPath, []byte(fmt.Sprintf(`
+apiVersion: apiserver.config.k8s.io/v1beta1
+kind: AuthorizationConfiguration
+authorizers:
+- type: Webhook
+  name: conditional-webhook
+  webhook:
+    timeout: 10s
+    subjectAccessReviewVersion: v1
+    matchConditionSubjectAccessReviewVersion: v1
+    failurePolicy: NoOpinion
+    authorizedTTL: 1ms
+    unauthorizedTTL: 1ms
+    connectionInfo:
+      type: KubeConfigFile
+      kubeConfigFile: %q
+    conditionsReview:
+      kubeConfigContextName: conditions
+      version: v1alpha1
+- type: RBAC
+  name: rbac
+`, webhookKubeconfigPath)), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -119,14 +156,10 @@ users:
 	namespace := "wardle-conditional-auth-ns"
 	t.Cleanup(app.SetServiceResolverForTests(staticURLServiceResolver(fmt.Sprintf("https://127.0.0.1:%d", wardlePort))))
 
-	// Start kube-apiserver with webhook authorizer + conditional authorization
+	// Start kube-apiserver with AuthorizationConfiguration + conditional authorization
 	kasFlags := []string{
 		"--feature-gates=ConditionalAuthorization=true",
-		"--authorization-mode=Webhook,RBAC",
-		"--authorization-webhook-config-file=" + webhookKubeconfigPath,
-		"--authorization-webhook-version=v1",
-		"--authorization-webhook-cache-authorized-ttl=1ms",
-		"--authorization-webhook-cache-unauthorized-ttl=1ms",
+		"--authorization-config=" + authzConfigPath,
 		"--enable-admission-plugins=AuthorizationConditionsEnforcer",
 	}
 	testServer := kastesting.StartTestServerOrDie(t,
@@ -183,16 +216,19 @@ users:
 
 	certDir := filepath.Join(dir, "wardle-certs")
 
-	// Write kubeconfig for wardle → kube-apiserver connection
+	// Write kubeconfig for wardle → kube-apiserver connection (for authentication + kubeconfig)
 	wardleToKASKubeConfigFile := writeKubeConfigForConnection(t, rest.CopyConfig(kubeConfig))
 	t.Cleanup(func() { os.Remove(wardleToKASKubeConfigFile) })
+
+	wardleAuthzKubeConfigFile := writeKubeConfigForConnectionWithConditionsContext(t,
+		rest.CopyConfig(kubeConfig))
+	t.Cleanup(func() { os.Remove(wardleAuthzKubeConfigFile) })
 
 	// Start wardle with conditional authorization support
 	go func() {
 		args := []string{
 			"--authentication-kubeconfig", wardleToKASKubeConfigFile,
-			"--authorization-kubeconfig", wardleToKASKubeConfigFile,
-			"--authorization-conditions-webhook-config-file", webhookKubeconfigPath,
+			"--authorization-kubeconfig", wardleAuthzKubeConfigFile,
 			"--authorization-webhook-cache-authorized-ttl", "1ms",
 			"--authorization-webhook-cache-unauthorized-ttl", "1ms",
 			"--enable-admission-plugins", "AuthorizationConditionsEnforcer",
@@ -546,6 +582,60 @@ func writeKubeConfigForConnection(t *testing.T, kubeClientConfig *rest.Config) s
 	cluster.InsecureSkipTLSVerify = kubeClientConfig.Insecure
 	config.Clusters["cluster"] = cluster
 
+	ctx := clientcmdapi.NewContext()
+	ctx.Cluster = "cluster"
+	ctx.AuthInfo = "user"
+	config.Contexts["context"] = ctx
+	config.CurrentContext = "context"
+
+	f, _ := os.CreateTemp("", "")
+	if err := clientcmd.WriteToFile(*config, f.Name()); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	return f.Name()
+}
+
+// TODO: Find a better way to write the kubeconfig for wardle -> kas comms
+func writeKubeConfigForConnectionWithConditionsContext(t *testing.T, kubeClientConfig *rest.Config) string {
+	t.Helper()
+
+	// Get the real serving cert from the server
+	servingCerts, _, err := cert.GetServingCertificatesForURL(kubeClientConfig.Host, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedServing, err := cert.EncodeCertificates(servingCerts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kubeClientConfig.CAData = encodedServing
+
+	config := clientcmdapi.NewConfig()
+
+	credentials := clientcmdapi.NewAuthInfo()
+	credentials.Token = kubeClientConfig.BearerToken
+	credentials.ClientCertificate = kubeClientConfig.TLSClientConfig.CertFile
+	if len(credentials.ClientCertificate) == 0 {
+		credentials.ClientCertificateData = kubeClientConfig.TLSClientConfig.CertData
+	}
+	credentials.ClientKey = kubeClientConfig.TLSClientConfig.KeyFile
+	if len(credentials.ClientKey) == 0 {
+		credentials.ClientKeyData = kubeClientConfig.TLSClientConfig.KeyData
+	}
+	config.AuthInfos["user"] = credentials
+
+	// Default cluster: kube-apiserver
+	cluster := clientcmdapi.NewCluster()
+	cluster.Server = kubeClientConfig.Host
+	cluster.CertificateAuthority = kubeClientConfig.CAFile
+	if len(cluster.CertificateAuthority) == 0 {
+		cluster.CertificateAuthorityData = kubeClientConfig.CAData
+	}
+	cluster.InsecureSkipTLSVerify = kubeClientConfig.Insecure
+	config.Clusters["cluster"] = cluster
+
+	// Default context
 	ctx := clientcmdapi.NewContext()
 	ctx.Cluster = "cluster"
 	ctx.AuthInfo = "user"

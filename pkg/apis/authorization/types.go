@@ -371,6 +371,9 @@ type NonResourceRule struct {
 // AuthorizationConditionsReview describes a request to evaluate authorization conditions.
 type AuthorizationConditionsReview struct {
 	metav1.TypeMeta
+	// Not actually used, only here to get a lister implementation
+	metav1.ObjectMeta
+
 	// Request describes the attributes for the authorization conditions request.
 	// +optional
 	Request *AuthorizationConditionsRequest
