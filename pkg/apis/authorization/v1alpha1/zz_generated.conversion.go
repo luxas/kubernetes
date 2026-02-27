@@ -145,6 +145,7 @@ func Convert_authorization_AuthorizationConditionsResponse_To_v1alpha1_Authoriza
 }
 
 func autoConvert_v1alpha1_AuthorizationConditionsReview_To_authorization_AuthorizationConditionsReview(in *authorizationv1alpha1.AuthorizationConditionsReview, out *authorization.AuthorizationConditionsReview, s conversion.Scope) error {
+	out.ObjectMeta = in.ObjectMeta
 	if in.Request != nil {
 		in, out := &in.Request, &out.Request
 		*out = new(authorization.AuthorizationConditionsRequest)
@@ -164,6 +165,7 @@ func Convert_v1alpha1_AuthorizationConditionsReview_To_authorization_Authorizati
 }
 
 func autoConvert_authorization_AuthorizationConditionsReview_To_v1alpha1_AuthorizationConditionsReview(in *authorization.AuthorizationConditionsReview, out *authorizationv1alpha1.AuthorizationConditionsReview, s conversion.Scope) error {
+	out.ObjectMeta = in.ObjectMeta
 	if in.Request != nil {
 		in, out := &in.Request, &out.Request
 		*out = new(authorizationv1alpha1.AuthorizationConditionsRequest)

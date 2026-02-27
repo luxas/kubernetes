@@ -13746,6 +13746,13 @@ func schema_k8sio_api_authorization_v1alpha1_AuthorizationConditionsReview(ref c
 							Format:      "",
 						},
 					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Description: "metadata is the standard list metadata. In AuthorizationConditionsReview, it must be an empty struct. F0227 11:04:00.026163   99872 lister.go:76] unable to find ObjectMeta for any types in package k8s.io/api/authorization/v1alpha1 !!! [0227 11:04:00] Call tree: !!! [0227 11:04:00]  1: hack/update-codegen.sh:1036 codegen::listers(...) More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata",
+							Default:     map[string]interface{}{},
+							Ref:         ref(metav1.ObjectMeta{}.OpenAPIModelName()),
+						},
+					},
 					"request": {
 						SchemaProps: spec.SchemaProps{
 							Description: "Request describes the attributes for the authorization conditions request.",
@@ -13762,7 +13769,7 @@ func schema_k8sio_api_authorization_v1alpha1_AuthorizationConditionsReview(ref c
 			},
 		},
 		Dependencies: []string{
-			authorizationv1alpha1.AuthorizationConditionsRequest{}.OpenAPIModelName(), authorizationv1alpha1.AuthorizationConditionsResponse{}.OpenAPIModelName()},
+			authorizationv1alpha1.AuthorizationConditionsRequest{}.OpenAPIModelName(), authorizationv1alpha1.AuthorizationConditionsResponse{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 

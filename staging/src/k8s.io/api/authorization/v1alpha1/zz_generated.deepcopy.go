@@ -81,6 +81,7 @@ func (in *AuthorizationConditionsResponse) DeepCopy() *AuthorizationConditionsRe
 func (in *AuthorizationConditionsReview) DeepCopyInto(out *AuthorizationConditionsReview) {
 	*out = *in
 	out.TypeMeta = in.TypeMeta
+	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
 	if in.Request != nil {
 		in, out := &in.Request, &out.Request
 		*out = new(AuthorizationConditionsRequest)
