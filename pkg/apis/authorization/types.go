@@ -386,7 +386,7 @@ type AuthorizationConditionsReview struct {
 type AuthorizationConditionsRequest struct {
 	Decision SubjectAccessReviewAuthorizationDecision
 
-	WriteRequest AuthorizationConditionsWriteRequest
+	WriteRequest *AuthorizationConditionsWriteRequest
 }
 
 type AuthorizationConditionsWriteRequest struct {
@@ -474,15 +474,7 @@ type AuthorizationConditionsResponse struct {
 	// TODO: Does this need to be here?
 	UID types.UID
 
-	// Allowed indicates whether or not the request is authorized according to the authorization conditions.
-	// Mutually exclusive with Denied.
-	// Allowed=false and Denied=false means that the authorizer has no NoOpinion on the request.
-	Allowed bool
-
-	// Denied indicates whether or not the request is denied according to the authorization conditions.
-	// Mutually exclusive with Allowed.
-	// Allowed=false and Denied=false means that the authorizer has no NoOpinion on the request.
-	Denied bool
+	SubjectAccessReviewAuthorizationDecision
 
 	// Result contains extra details into why an authorization conditions request was denied.
 	// This field IS NOT consulted in any way if "Allowed" is "true".

@@ -21,10 +21,12 @@ import (
 	authorizationv1alpha1 "k8s.io/api/authorization/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
+	genericfeatures "k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/registry/generic"
 	"k8s.io/apiserver/pkg/registry/rest"
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	serverstorage "k8s.io/apiserver/pkg/server/storage"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	"k8s.io/kubernetes/pkg/apis/authorization"
 	"k8s.io/kubernetes/pkg/registry/authorization/authorizationconditionsreview"
@@ -79,9 +81,11 @@ func (p RESTStorageProvider) v1Storage(apiResourceConfigSource serverstorage.API
 		storage[resource] = selfsubjectrulesreview.NewREST(p.RuleResolver)
 	}
 
-	// authorizationconditionsreviews
-	if resource := "authorizationconditionsreviews"; apiResourceConfigSource.ResourceEnabled(authorizationv1alpha1.SchemeGroupVersion.WithResource(resource)) {
-		storage[resource] = authorizationconditionsreview.NewREST(p.Serializer)
+	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
+		// authorizationconditionsreviews
+		if resource := "authorizationconditionsreviews"; apiResourceConfigSource.ResourceEnabled(authorizationv1alpha1.SchemeGroupVersion.WithResource(resource)) {
+			storage[resource] = authorizationconditionsreview.NewREST(p.Authorizer, p.Serializer)
+		}
 	}
 
 	return storage
