@@ -28,3 +28,7 @@ func (*AuthorizationConditionsResponse) ProtoMessage() {}
 func (*AuthorizationConditionsReview) ProtoMessage() {}
 
 func (*AuthorizationConditionsWriteRequest) ProtoMessage() {}
+
+func (*SubjectAccessReviewAuthorizationDecision) ProtoMessage() {}
+
+func (*SubjectAccessReviewCondition) ProtoMessage() {}

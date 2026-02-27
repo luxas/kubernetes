@@ -25,9 +25,8 @@ import (
 	unsafe "unsafe"
 
 	admissionv1 "k8s.io/api/admission/v1"
-	v1 "k8s.io/api/authorization/v1"
 	authorizationv1alpha1 "k8s.io/api/authorization/v1alpha1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	conversion "k8s.io/apimachinery/pkg/conversion"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	types "k8s.io/apimachinery/pkg/types"
@@ -83,14 +82,41 @@ func RegisterConversions(s *runtime.Scheme) error {
 	}); err != nil {
 		return err
 	}
+	if err := s.AddGeneratedConversionFunc((*authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision)(nil), (*authorization.SubjectAccessReviewAuthorizationDecision)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha1_SubjectAccessReviewAuthorizationDecision_To_authorization_SubjectAccessReviewAuthorizationDecision(a.(*authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision), b.(*authorization.SubjectAccessReviewAuthorizationDecision), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*authorization.SubjectAccessReviewAuthorizationDecision)(nil), (*authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_authorization_SubjectAccessReviewAuthorizationDecision_To_v1alpha1_SubjectAccessReviewAuthorizationDecision(a.(*authorization.SubjectAccessReviewAuthorizationDecision), b.(*authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*authorizationv1alpha1.SubjectAccessReviewCondition)(nil), (*authorization.SubjectAccessReviewCondition)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha1_SubjectAccessReviewCondition_To_authorization_SubjectAccessReviewCondition(a.(*authorizationv1alpha1.SubjectAccessReviewCondition), b.(*authorization.SubjectAccessReviewCondition), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*authorization.SubjectAccessReviewCondition)(nil), (*authorizationv1alpha1.SubjectAccessReviewCondition)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_authorization_SubjectAccessReviewCondition_To_v1alpha1_SubjectAccessReviewCondition(a.(*authorization.SubjectAccessReviewCondition), b.(*authorizationv1alpha1.SubjectAccessReviewCondition), scope)
+	}); err != nil {
+		return err
+	}
 	return nil
 }
 
 func autoConvert_v1alpha1_AuthorizationConditionsRequest_To_authorization_AuthorizationConditionsRequest(in *authorizationv1alpha1.AuthorizationConditionsRequest, out *authorization.AuthorizationConditionsRequest, s conversion.Scope) error {
-	// FIXME: Provide conversion function to convert v1.SubjectAccessReviewAuthorizationDecision to authorization.SubjectAccessReviewAuthorizationDecision
-	compileErrorOnMissingConversion()
-	if err := Convert_v1alpha1_AuthorizationConditionsWriteRequest_To_authorization_AuthorizationConditionsWriteRequest(&in.WriteRequest, &out.WriteRequest, s); err != nil {
+	if err := Convert_v1alpha1_SubjectAccessReviewAuthorizationDecision_To_authorization_SubjectAccessReviewAuthorizationDecision(&in.Decision, &out.Decision, s); err != nil {
 		return err
+	}
+	if in.WriteRequest != nil {
+		in, out := &in.WriteRequest, &out.WriteRequest
+		*out = new(authorization.AuthorizationConditionsWriteRequest)
+		if err := Convert_v1alpha1_AuthorizationConditionsWriteRequest_To_authorization_AuthorizationConditionsWriteRequest(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.WriteRequest = nil
 	}
 	return nil
 }
@@ -101,10 +127,17 @@ func Convert_v1alpha1_AuthorizationConditionsRequest_To_authorization_Authorizat
 }
 
 func autoConvert_authorization_AuthorizationConditionsRequest_To_v1alpha1_AuthorizationConditionsRequest(in *authorization.AuthorizationConditionsRequest, out *authorizationv1alpha1.AuthorizationConditionsRequest, s conversion.Scope) error {
-	// FIXME: Provide conversion function to convert authorization.SubjectAccessReviewAuthorizationDecision to v1.SubjectAccessReviewAuthorizationDecision
-	compileErrorOnMissingConversion()
-	if err := Convert_authorization_AuthorizationConditionsWriteRequest_To_v1alpha1_AuthorizationConditionsWriteRequest(&in.WriteRequest, &out.WriteRequest, s); err != nil {
+	if err := Convert_authorization_SubjectAccessReviewAuthorizationDecision_To_v1alpha1_SubjectAccessReviewAuthorizationDecision(&in.Decision, &out.Decision, s); err != nil {
 		return err
+	}
+	if in.WriteRequest != nil {
+		in, out := &in.WriteRequest, &out.WriteRequest
+		*out = new(authorizationv1alpha1.AuthorizationConditionsWriteRequest)
+		if err := Convert_authorization_AuthorizationConditionsWriteRequest_To_v1alpha1_AuthorizationConditionsWriteRequest(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.WriteRequest = nil
 	}
 	return nil
 }
@@ -115,10 +148,11 @@ func Convert_authorization_AuthorizationConditionsRequest_To_v1alpha1_Authorizat
 }
 
 func autoConvert_v1alpha1_AuthorizationConditionsResponse_To_authorization_AuthorizationConditionsResponse(in *authorizationv1alpha1.AuthorizationConditionsResponse, out *authorization.AuthorizationConditionsResponse, s conversion.Scope) error {
+	if err := Convert_v1alpha1_SubjectAccessReviewAuthorizationDecision_To_authorization_SubjectAccessReviewAuthorizationDecision(&in.SubjectAccessReviewAuthorizationDecision, &out.SubjectAccessReviewAuthorizationDecision, s); err != nil {
+		return err
+	}
 	out.UID = types.UID(in.UID)
-	out.Allowed = in.Allowed
-	out.Denied = in.Denied
-	out.Result = (*metav1.Status)(unsafe.Pointer(in.Result))
+	out.Result = (*v1.Status)(unsafe.Pointer(in.Result))
 	out.AuditAnnotations = *(*map[string]string)(unsafe.Pointer(&in.AuditAnnotations))
 	out.Warnings = *(*[]string)(unsafe.Pointer(&in.Warnings))
 	return nil
@@ -131,9 +165,10 @@ func Convert_v1alpha1_AuthorizationConditionsResponse_To_authorization_Authoriza
 
 func autoConvert_authorization_AuthorizationConditionsResponse_To_v1alpha1_AuthorizationConditionsResponse(in *authorization.AuthorizationConditionsResponse, out *authorizationv1alpha1.AuthorizationConditionsResponse, s conversion.Scope) error {
 	out.UID = types.UID(in.UID)
-	out.Allowed = in.Allowed
-	out.Denied = in.Denied
-	out.Result = (*metav1.Status)(unsafe.Pointer(in.Result))
+	if err := Convert_authorization_SubjectAccessReviewAuthorizationDecision_To_v1alpha1_SubjectAccessReviewAuthorizationDecision(&in.SubjectAccessReviewAuthorizationDecision, &out.SubjectAccessReviewAuthorizationDecision, s); err != nil {
+		return err
+	}
+	out.Result = (*v1.Status)(unsafe.Pointer(in.Result))
 	out.AuditAnnotations = *(*map[string]string)(unsafe.Pointer(&in.AuditAnnotations))
 	out.Warnings = *(*[]string)(unsafe.Pointer(&in.Warnings))
 	return nil
@@ -155,7 +190,15 @@ func autoConvert_v1alpha1_AuthorizationConditionsReview_To_authorization_Authori
 	} else {
 		out.Request = nil
 	}
-	out.Response = (*authorization.AuthorizationConditionsResponse)(unsafe.Pointer(in.Response))
+	if in.Response != nil {
+		in, out := &in.Response, &out.Response
+		*out = new(authorization.AuthorizationConditionsResponse)
+		if err := Convert_v1alpha1_AuthorizationConditionsResponse_To_authorization_AuthorizationConditionsResponse(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.Response = nil
+	}
 	return nil
 }
 
@@ -175,7 +218,15 @@ func autoConvert_authorization_AuthorizationConditionsReview_To_v1alpha1_Authori
 	} else {
 		out.Request = nil
 	}
-	out.Response = (*authorizationv1alpha1.AuthorizationConditionsResponse)(unsafe.Pointer(in.Response))
+	if in.Response != nil {
+		in, out := &in.Response, &out.Response
+		*out = new(authorizationv1alpha1.AuthorizationConditionsResponse)
+		if err := Convert_authorization_AuthorizationConditionsResponse_To_v1alpha1_AuthorizationConditionsResponse(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.Response = nil
+	}
 	return nil
 }
 
@@ -189,8 +240,8 @@ func autoConvert_v1alpha1_AuthorizationConditionsWriteRequest_To_authorization_A
 	out.Kind = in.Kind
 	out.Resource = in.Resource
 	out.SubResource = in.SubResource
-	out.RequestKind = (*metav1.GroupVersionKind)(unsafe.Pointer(in.RequestKind))
-	out.RequestResource = (*metav1.GroupVersionResource)(unsafe.Pointer(in.RequestResource))
+	out.RequestKind = (*v1.GroupVersionKind)(unsafe.Pointer(in.RequestKind))
+	out.RequestResource = (*v1.GroupVersionResource)(unsafe.Pointer(in.RequestResource))
 	out.RequestSubResource = in.RequestSubResource
 	out.Name = in.Name
 	out.Namespace = in.Namespace
@@ -216,8 +267,8 @@ func autoConvert_authorization_AuthorizationConditionsWriteRequest_To_v1alpha1_A
 	out.Kind = in.Kind
 	out.Resource = in.Resource
 	out.SubResource = in.SubResource
-	out.RequestKind = (*metav1.GroupVersionKind)(unsafe.Pointer(in.RequestKind))
-	out.RequestResource = (*metav1.GroupVersionResource)(unsafe.Pointer(in.RequestResource))
+	out.RequestKind = (*v1.GroupVersionKind)(unsafe.Pointer(in.RequestKind))
+	out.RequestResource = (*v1.GroupVersionResource)(unsafe.Pointer(in.RequestResource))
 	out.RequestSubResource = in.RequestSubResource
 	out.Name = in.Name
 	out.Namespace = in.Namespace
@@ -236,4 +287,60 @@ func autoConvert_authorization_AuthorizationConditionsWriteRequest_To_v1alpha1_A
 // Convert_authorization_AuthorizationConditionsWriteRequest_To_v1alpha1_AuthorizationConditionsWriteRequest is an autogenerated conversion function.
 func Convert_authorization_AuthorizationConditionsWriteRequest_To_v1alpha1_AuthorizationConditionsWriteRequest(in *authorization.AuthorizationConditionsWriteRequest, out *authorizationv1alpha1.AuthorizationConditionsWriteRequest, s conversion.Scope) error {
 	return autoConvert_authorization_AuthorizationConditionsWriteRequest_To_v1alpha1_AuthorizationConditionsWriteRequest(in, out, s)
+}
+
+func autoConvert_v1alpha1_SubjectAccessReviewAuthorizationDecision_To_authorization_SubjectAccessReviewAuthorizationDecision(in *authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision, out *authorization.SubjectAccessReviewAuthorizationDecision, s conversion.Scope) error {
+	out.Allowed = in.Allowed
+	out.Denied = in.Denied
+	out.ConditionsType = in.ConditionsType
+	out.Conditions = *(*[]authorization.SubjectAccessReviewCondition)(unsafe.Pointer(&in.Conditions))
+	out.ConditionalDecisionChain = *(*[]authorization.SubjectAccessReviewAuthorizationDecision)(unsafe.Pointer(&in.ConditionalDecisionChain))
+	out.Reason = in.Reason
+	return nil
+}
+
+// Convert_v1alpha1_SubjectAccessReviewAuthorizationDecision_To_authorization_SubjectAccessReviewAuthorizationDecision is an autogenerated conversion function.
+func Convert_v1alpha1_SubjectAccessReviewAuthorizationDecision_To_authorization_SubjectAccessReviewAuthorizationDecision(in *authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision, out *authorization.SubjectAccessReviewAuthorizationDecision, s conversion.Scope) error {
+	return autoConvert_v1alpha1_SubjectAccessReviewAuthorizationDecision_To_authorization_SubjectAccessReviewAuthorizationDecision(in, out, s)
+}
+
+func autoConvert_authorization_SubjectAccessReviewAuthorizationDecision_To_v1alpha1_SubjectAccessReviewAuthorizationDecision(in *authorization.SubjectAccessReviewAuthorizationDecision, out *authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision, s conversion.Scope) error {
+	out.Allowed = in.Allowed
+	out.Denied = in.Denied
+	out.ConditionsType = in.ConditionsType
+	out.Conditions = *(*[]authorizationv1alpha1.SubjectAccessReviewCondition)(unsafe.Pointer(&in.Conditions))
+	out.ConditionalDecisionChain = *(*[]authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision)(unsafe.Pointer(&in.ConditionalDecisionChain))
+	out.Reason = in.Reason
+	return nil
+}
+
+// Convert_authorization_SubjectAccessReviewAuthorizationDecision_To_v1alpha1_SubjectAccessReviewAuthorizationDecision is an autogenerated conversion function.
+func Convert_authorization_SubjectAccessReviewAuthorizationDecision_To_v1alpha1_SubjectAccessReviewAuthorizationDecision(in *authorization.SubjectAccessReviewAuthorizationDecision, out *authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision, s conversion.Scope) error {
+	return autoConvert_authorization_SubjectAccessReviewAuthorizationDecision_To_v1alpha1_SubjectAccessReviewAuthorizationDecision(in, out, s)
+}
+
+func autoConvert_v1alpha1_SubjectAccessReviewCondition_To_authorization_SubjectAccessReviewCondition(in *authorizationv1alpha1.SubjectAccessReviewCondition, out *authorization.SubjectAccessReviewCondition, s conversion.Scope) error {
+	out.ID = in.ID
+	out.Effect = authorization.SubjectAccessReviewConditionEffect(in.Effect)
+	out.Condition = in.Condition
+	out.Description = in.Description
+	return nil
+}
+
+// Convert_v1alpha1_SubjectAccessReviewCondition_To_authorization_SubjectAccessReviewCondition is an autogenerated conversion function.
+func Convert_v1alpha1_SubjectAccessReviewCondition_To_authorization_SubjectAccessReviewCondition(in *authorizationv1alpha1.SubjectAccessReviewCondition, out *authorization.SubjectAccessReviewCondition, s conversion.Scope) error {
+	return autoConvert_v1alpha1_SubjectAccessReviewCondition_To_authorization_SubjectAccessReviewCondition(in, out, s)
+}
+
+func autoConvert_authorization_SubjectAccessReviewCondition_To_v1alpha1_SubjectAccessReviewCondition(in *authorization.SubjectAccessReviewCondition, out *authorizationv1alpha1.SubjectAccessReviewCondition, s conversion.Scope) error {
+	out.ID = in.ID
+	out.Effect = authorizationv1alpha1.SubjectAccessReviewConditionEffect(in.Effect)
+	out.Condition = in.Condition
+	out.Description = in.Description
+	return nil
+}
+
+// Convert_authorization_SubjectAccessReviewCondition_To_v1alpha1_SubjectAccessReviewCondition is an autogenerated conversion function.
+func Convert_authorization_SubjectAccessReviewCondition_To_v1alpha1_SubjectAccessReviewCondition(in *authorization.SubjectAccessReviewCondition, out *authorizationv1alpha1.SubjectAccessReviewCondition, s conversion.Scope) error {
+	return autoConvert_authorization_SubjectAccessReviewCondition_To_v1alpha1_SubjectAccessReviewCondition(in, out, s)
 }
