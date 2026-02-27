@@ -220,6 +220,7 @@ func AuthorizationAttributesFrom(spec authorizationapi.SubjectAccessReviewSpec) 
 
 // matchAllVersionIfEmpty returns a "*" if the version is unspecified
 func matchAllVersionIfEmpty(version string) string {
+	// TODO(luxas): Could this cause issues?
 	if len(version) == 0 {
 		return "*"
 	}

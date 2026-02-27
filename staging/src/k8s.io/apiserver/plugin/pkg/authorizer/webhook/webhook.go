@@ -385,6 +385,7 @@ func (w *WebhookAuthorizer) EvaluateConditions(ctx context.Context, decision aut
 	}
 
 	// TODO(luxas): Should probably factor out this logic between the two functions
+	// TODO: Allow a conditional response to evaluate to a conditional here too
 	switch {
 	case result.Response == nil:
 		return authorizer.DecisionNoOpinion(), nil

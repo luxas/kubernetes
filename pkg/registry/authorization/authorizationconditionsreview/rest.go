@@ -23,6 +23,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
@@ -45,7 +46,7 @@ func (r *REST) NamespaceScoped() bool {
 }
 
 func (r *REST) New() runtime.Object {
-	return &authorizationapi.SubjectAccessReview{}
+	return &authorizationapi.AuthorizationConditionsReview{}
 }
 
 // Destroy cleans up resources on shutdown.
@@ -114,17 +115,15 @@ func (r *REST) toConditionsData(req *authorizationapi.AuthorizationConditionsReq
 	}
 
 	var err error
-	// TODO: Verify this encodes into runtime.RawExtension if we don't know what type it is
-	// TODO: Or does
 	if len(req.WriteRequest.Object.Raw) != 0 {
-		wr.object, _, err = r.serializer.Decode(req.WriteRequest.Object.Raw, nil, nil)
+		wr.object, err = r.decodeObject(req.WriteRequest.Object.Raw)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	if len(req.WriteRequest.OldObject.Raw) != 0 {
-		wr.oldObject, _, err = r.serializer.Decode(req.WriteRequest.OldObject.Raw, nil, nil)
+		wr.oldObject, err = r.decodeObject(req.WriteRequest.OldObject.Raw)
 		if err != nil {
 			return nil, err
 		}
@@ -132,6 +131,26 @@ func (r *REST) toConditionsData(req *authorizationapi.AuthorizationConditionsReq
 
 	// TODO: How to decode options?
 	return &conditionsData{writeReq: wr}, nil
+}
+
+// decodeObject tries to decode the raw bytes using the known scheme serializer first.
+// If the type is not registered (e.g., objects from aggregated API servers), it falls
+// back to decoding as unstructured.
+func (r *REST) decodeObject(raw []byte) (runtime.Object, error) {
+	obj, _, err := r.serializer.Decode(raw, nil, nil)
+	if err == nil {
+		return obj, nil
+	}
+	// Fall back to unstructured for types not registered in the scheme
+	// (e.g., objects from aggregated API servers).
+	if !runtime.IsNotRegisteredError(err) {
+		return nil, err
+	}
+	obj, _, err = unstructured.UnstructuredJSONScheme.Decode(raw, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	return obj, nil
 }
 
 var _ authorizer.ConditionData = &conditionsData{}
@@ -182,7 +201,7 @@ func toAuthorizerConditions(conditionList []authorizationapi.SubjectAccessReview
 }
 
 func deserializeDecision(attrs authorizer.Attributes, serializedDecision authorizationapi.SubjectAccessReviewAuthorizationDecision, fldPath *field.Path) (authorizer.Decision, field.ErrorList) {
-	allErrs := field.ErrorList{}
+	var allErrs field.ErrorList
 
 	hasConditionSet := len(serializedDecision.Conditions) != 0
 	hasDecisionChain := len(serializedDecision.ConditionalDecisionChain) != 0

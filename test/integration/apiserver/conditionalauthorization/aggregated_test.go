@@ -159,6 +159,7 @@ authorizers:
 	// Start kube-apiserver with AuthorizationConfiguration + conditional authorization
 	kasFlags := []string{
 		"--feature-gates=ConditionalAuthorization=true",
+		"--runtime-config=authorization.k8s.io/v1alpha1=true",
 		"--authorization-config=" + authzConfigPath,
 		"--enable-admission-plugins=AuthorizationConditionsEnforcer",
 	}

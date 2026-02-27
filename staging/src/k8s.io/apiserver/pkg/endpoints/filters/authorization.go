@@ -78,6 +78,12 @@ func withAuthorization(handler http.Handler, a authorizer.Authorizer, s runtime.
 			responsewriters.InternalError(w, req, err)
 			return
 		}
+
+		// Specifically opt-in to Conditional Authorization for this Authorize call.
+		if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
+			attributes.(*authorizer.AttributesRecord).ConditionsMode = authorizer.ConditionsModeOptimized
+		}
+
 		authorized, err := a.Authorize(ctx, attributes)
 		reason := authorized.Reason()
 
@@ -152,10 +158,6 @@ func GetAuthorizerAttributes(ctx context.Context) (authorizer.Attributes, error)
 	attribs.Subresource = requestInfo.Subresource
 	attribs.Namespace = requestInfo.Namespace
 	attribs.Name = requestInfo.Name
-
-	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
-		attribs.ConditionsMode = authorizer.ConditionsModeOptimized
-	}
 
 	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.AuthorizeWithSelectors) {
 		// parsing here makes it easy to keep the AttributesRecord type value-only and avoids any mutex copies when

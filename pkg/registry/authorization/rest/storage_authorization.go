@@ -55,6 +55,10 @@ func (p RESTStorageProvider) NewRESTStorage(apiResourceConfigSource serverstorag
 		apiGroupInfo.VersionedResourcesStorageMap[authorizationv1.SchemeGroupVersion.Version] = storageMap
 	}
 
+	if storageMap := p.v1alpha1Storage(apiResourceConfigSource, restOptionsGetter); len(storageMap) > 0 {
+		apiGroupInfo.VersionedResourcesStorageMap[authorizationv1alpha1.SchemeGroupVersion.Version] = storageMap
+	}
+
 	return apiGroupInfo, nil
 }
 
@@ -80,6 +84,12 @@ func (p RESTStorageProvider) v1Storage(apiResourceConfigSource serverstorage.API
 	if resource := "selfsubjectrulesreviews"; apiResourceConfigSource.ResourceEnabled(authorizationv1.SchemeGroupVersion.WithResource(resource)) {
 		storage[resource] = selfsubjectrulesreview.NewREST(p.RuleResolver)
 	}
+
+	return storage
+}
+
+func (p RESTStorageProvider) v1alpha1Storage(apiResourceConfigSource serverstorage.APIResourceConfigSource, restOptionsGetter generic.RESTOptionsGetter) map[string]rest.Storage {
+	storage := map[string]rest.Storage{}
 
 	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
 		// authorizationconditionsreviews
