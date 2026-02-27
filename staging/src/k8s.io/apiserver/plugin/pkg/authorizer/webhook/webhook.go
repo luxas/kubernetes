@@ -341,9 +341,9 @@ func (w *WebhookAuthorizer) EvaluateConditions(ctx context.Context, decision aut
 		return decision, nil
 	}
 
-	var writeRequest authorizationv1alpha1.AuthorizationConditionsWriteRequest
+	var writeRequest *authorizationv1alpha1.AuthorizationConditionsWriteRequest
 	if wr := data.WriteRequest(); wr != nil {
-		writeRequest = authorizationv1alpha1.AuthorizationConditionsWriteRequest{
+		writeRequest = &authorizationv1alpha1.AuthorizationConditionsWriteRequest{
 			// TODO: Fill in the other stuff here?
 			Object: runtime.RawExtension{
 				Object: wr.GetObject(),
@@ -360,7 +360,7 @@ func (w *WebhookAuthorizer) EvaluateConditions(ctx context.Context, decision aut
 	r := &authorizationv1alpha1.AuthorizationConditionsReview{
 		Request: &authorizationv1alpha1.AuthorizationConditionsRequest{
 			Decision:     serializeDecision(decision),
-			WriteRequest: writeRequest, // TODO: should be a pointer
+			WriteRequest: writeRequest,
 		},
 	}
 
@@ -467,32 +467,32 @@ func deserializeDecision(attrs authorizer.Attributes, serializedDecision authori
 	return authorizer.DecisionNoOpinion(serializedDecision.Reason), nil
 }
 
-func conditionSetToInternalAPIDecision(conditionSet *authorizer.ConditionSet) authorizationv1.SubjectAccessReviewAuthorizationDecision {
+func conditionSetToInternalAPIDecision(conditionSet *authorizer.ConditionSet) authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision {
 	if conditionSet == nil {
-		return authorizationv1.SubjectAccessReviewAuthorizationDecision{} // NoOpinion
+		return authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{} // NoOpinion
 	}
-	conds := []authorizationv1.SubjectAccessReviewCondition{}
+	conds := []authorizationv1alpha1.SubjectAccessReviewCondition{}
 	for id, condition := range conditionSet.Conditions() {
-		conds = append(conds, authorizationv1.SubjectAccessReviewCondition{
+		conds = append(conds, authorizationv1alpha1.SubjectAccessReviewCondition{
 			ID:          id,
-			Effect:      authorizationv1.SubjectAccessReviewConditionEffect(condition.Effect),
+			Effect:      authorizationv1alpha1.SubjectAccessReviewConditionEffect(condition.Effect),
 			Condition:   condition.Condition,
 			Description: condition.Description,
 		})
 	}
 
-	return authorizationv1.SubjectAccessReviewAuthorizationDecision{
+	return authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{
 		Conditions:     conds,
 		ConditionsType: conditionSet.Type(),
 	}
 }
 
-func serializeDecision(decision authorizer.Decision) authorizationv1.SubjectAccessReviewAuthorizationDecision {
+func serializeDecision(decision authorizer.Decision) authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision {
 	if decision.IsAllowed() {
-		return authorizationv1.SubjectAccessReviewAuthorizationDecision{Allowed: true, Reason: decision.Reason()}
+		return authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{Allowed: true, Reason: decision.Reason()}
 	}
 	if decision.IsDenied() {
-		return authorizationv1.SubjectAccessReviewAuthorizationDecision{Denied: true, Reason: decision.Reason()}
+		return authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{Denied: true, Reason: decision.Reason()}
 	}
 
 	if decision.IsConditional() {
@@ -501,17 +501,17 @@ func serializeDecision(decision authorizer.Decision) authorizationv1.SubjectAcce
 		return d
 	}
 	if decision.IsConditionalChain() {
-		subDecisions := make([]authorizationv1.SubjectAccessReviewAuthorizationDecision, 0, len(decision.ConditionalChain()))
+		subDecisions := make([]authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision, 0, len(decision.ConditionalChain()))
 		for _, subDecision := range decision.ConditionalChain() {
 			subDecisions = append(subDecisions, serializeDecision(subDecision))
 		}
-		return authorizationv1.SubjectAccessReviewAuthorizationDecision{
+		return authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{
 			ConditionalDecisionChain: subDecisions,
 			Reason:                   decision.Reason(),
 		}
 	}
 	// no opinion
-	return authorizationv1.SubjectAccessReviewAuthorizationDecision{Reason: decision.Reason()}
+	return authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{Reason: decision.Reason()}
 }
 
 func resourceAttributesFrom(attr authorizer.Attributes) *authorizationv1.ResourceAttributes {

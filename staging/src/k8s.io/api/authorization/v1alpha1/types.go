@@ -29,10 +29,10 @@ type AuthorizationConditionsReview struct {
 
 	// Request describes the attributes for the authorization conditions request.
 	// +optional
-	Request *AuthorizationConditionsRequest `json:"request,omitempty" protobuf:"bytes,1,opt,name=request"`
+	Request *AuthorizationConditionsRequest `json:"request,omitempty" protobuf:"bytes,2,opt,name=request"`
 	// Response describes the attributes for the authorization conditions response.
 	// +optional
-	Response *AuthorizationConditionsResponse `json:"response,omitempty" protobuf:"bytes,2,opt,name=response"`
+	Response *AuthorizationConditionsResponse `json:"response,omitempty" protobuf:"bytes,3,opt,name=response"`
 }
 
 // AuthorizationConditionsRequest describes the authorization conditions request.

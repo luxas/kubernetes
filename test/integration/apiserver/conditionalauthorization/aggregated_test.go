@@ -414,8 +414,10 @@ authorizers:
 				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
 					allowed, denied := celEvaluateConditions(ws.t, acr)
 					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
-						Allowed: allowed,
-						Denied:  denied,
+						SubjectAccessReviewAuthorizationDecision: authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{
+							Allowed: allowed,
+							Denied:  denied,
+						},
 					}
 				}
 			},
@@ -446,8 +448,10 @@ authorizers:
 				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
 					allowed, denied := celEvaluateConditions(ws.t, acr)
 					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
-						Allowed: allowed,
-						Denied:  denied,
+						SubjectAccessReviewAuthorizationDecision: authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{
+							Allowed: allowed,
+							Denied:  denied,
+						},
 					}
 				}
 			},
@@ -486,8 +490,10 @@ authorizers:
 				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
 					allowed, denied := celEvaluateConditions(ws.t, acr)
 					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
-						Allowed: allowed,
-						Denied:  denied,
+						SubjectAccessReviewAuthorizationDecision: authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{
+							Allowed: allowed,
+							Denied:  denied,
+						},
 					}
 				}
 			},
