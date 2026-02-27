@@ -89,17 +89,21 @@ func (c *ConditionalAuthorizationEnforcer) Validate(ctx context.Context, a admis
 		return nil
 	}
 
-	versionedAttributes, err := admission.NewVersionedAttributes(a, a.GetKind(), o)
-	if err != nil {
-		return fmt.Errorf("failed to convert object version: %w", err)
-	}
-
 	authzAttrs, err := filters.GetAuthorizerAttributes(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get authorizer attributes: %w", err)
 	}
 
 	//admissionRequest := plugincel.CreateAdmissionRequest(a, metav1.GroupVersionResource(a.GetResource()), metav1.GroupVersionKind(a.GetKind()))
+	// TODO(luxas): CEL evaluation
+	return EnforceConditions(ctx, a, o, authorizer, authzAttrs, unevaluatedDecision)
+}
+
+func EnforceConditions(ctx context.Context, admissionAttrs admission.Attributes, o admission.ObjectInterfaces, authorizer authorizer.Authorizer, authzAttrs authorizer.Attributes, unevaluatedDecision authorizer.Decision) error {
+	versionedAttributes, err := admission.NewVersionedAttributes(admissionAttrs, admissionAttrs.GetKind(), o)
+	if err != nil {
+		return fmt.Errorf("failed to convert object version: %w", err)
+	}
 
 	data := conditionsData{
 		unionedAttributes: unionedAttributes{
@@ -140,6 +144,7 @@ func (d conditionsData) ImpersonationRequest() authorizer.ImpersonationRequestCo
 	return nil
 }
 
+// TODO(luxas): If we do not provide the union of authz + admission, but just unseen data, we can remove this
 type unionedAttributes struct {
 	*admission.VersionedAttributes
 	authorizationVerb string

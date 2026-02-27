@@ -31,6 +31,7 @@ import (
 
 	authorizationv1 "k8s.io/api/authorization/v1"
 	authorizationv1alpha1 "k8s.io/api/authorization/v1alpha1"
+	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -697,6 +698,216 @@ authorizers:
 						Labels: map[string]string{"review": "pending"},
 					},
 				}, metav1.CreateOptions{})
+				return err
+			},
+			expectAllowed: false,
+		},
+
+		// Update-to-create tests: When a PUT (update) request targets a non-existent
+		// resource with AllowCreateOnUpdate=true, the update handler authorizes a
+		// "create" verb. These tests verify that conditional authorization works
+		// correctly in this flow. Leases support AllowCreateOnUpdate.
+		// TODO: Verify the same behavior for patch
+		{
+			name: "update-to-create conditional allow by label",
+			user: "update-create-allow-user",
+			webhookBehavior: func(ws *webhookServerHandler) {
+				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
+					if sar.Spec.ResourceAttributes == nil {
+						return
+					}
+					switch sar.Spec.ResourceAttributes.Verb {
+					case "update", "patch":
+						// Unconditionally allow updates
+						sar.Status.Allowed = true
+						sar.Status.Reason = "updates always allowed"
+					case "create":
+						// Conditionally allow creates: only when creator=update-create-allow-user
+						sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+							{
+								ConditionsType: "webhook",
+								Conditions: []authorizationv1.SubjectAccessReviewCondition{
+									{
+										ID:     "require-owner-label",
+										Effect: authorizationv1.SubjectAccessReviewConditionEffectAllow,
+										Condition: `has(object.metadata.labels) && ` +
+											`has(object.metadata.labels.creator) && ` +
+											`object.metadata.labels.creator == "update-create-allow-user"`,
+										Description: "only allow creates when creator=update-create-allow-user",
+									},
+								},
+							},
+						}
+					}
+				}
+				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
+					allowed, denied := celEvaluateConditions(ws.t, acr)
+					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
+						SubjectAccessReviewAuthorizationDecision: authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{
+							Allowed: allowed,
+							Denied:  denied,
+						},
+					}
+				}
+			},
+			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
+				// PUT a non-existent lease with creator=update-create-allow-user.
+				// Since Leases support AllowCreateOnUpdate, this becomes a create.
+				// The create authorization should succeed because the condition is met.
+				_, err := client.CoordinationV1().Leases("test-ns").Update(context.TODO(), &coordinationv1.Lease{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:   "update-create-allowed",
+						Labels: map[string]string{"creator": "update-create-allow-user"},
+					},
+				}, metav1.UpdateOptions{})
+				/*_, err := client.CoordinationV1().Leases("test-ns").Apply(context.TODO(),
+				applyconfigurationscoordinationv1.
+					Lease("update-create-denied", "test-ns").
+					WithLabels(map[string]string{"creator": "update-create-allow-user"}),
+				metav1.ApplyOptions{
+					FieldManager: "foo",
+				})*/
+				return err
+			},
+			expectAllowed: true,
+			// When disabled, the conditional create decision is treated as NoOpinion,
+			// falls through to RBAC which denies (no RBAC rules for this user).
+			expectAllowedWhenDisabled: boolPtr(false),
+		},
+		{
+			name: "update-to-create conditional deny by label",
+			user: "update-create-deny-user",
+			webhookBehavior: func(ws *webhookServerHandler) {
+				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
+					if sar.Spec.ResourceAttributes == nil {
+						return
+					}
+					switch sar.Spec.ResourceAttributes.Verb {
+					case "update", "patch":
+						// Unconditionally allow updates
+						sar.Status.Allowed = true
+						sar.Status.Reason = "updates always allowed"
+					case "create":
+						// Conditionally allow creates: only when creator=update-create-deny-user
+						sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+							{
+								ConditionsType: "webhook",
+								Conditions: []authorizationv1.SubjectAccessReviewCondition{
+									{
+										ID:     "require-owner-label",
+										Effect: authorizationv1.SubjectAccessReviewConditionEffectAllow,
+										Condition: `has(object.metadata.labels) && ` +
+											`has(object.metadata.labels.creator) && ` +
+											`object.metadata.labels.creator == "update-create-deny-user"`,
+										Description: "only allow creates when creator=update-create-deny-user",
+									},
+								},
+							},
+						}
+					}
+				}
+				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
+					allowed, denied := celEvaluateConditions(ws.t, acr)
+					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
+						SubjectAccessReviewAuthorizationDecision: authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{
+							Allowed: allowed,
+							Denied:  denied,
+						},
+					}
+				}
+			},
+			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
+				// PUT a non-existent lease with classified=true.
+				// The create authorization should fail because the condition is not met.
+				_, err := client.CoordinationV1().Leases("test-ns").Update(context.TODO(), &coordinationv1.Lease{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:   "update-create-denied",
+						Labels: map[string]string{"creator": "not-authorized-user"},
+					},
+				}, metav1.UpdateOptions{})
+				/*_, err := client.CoordinationV1().Leases("test-ns").Apply(context.TODO(),
+				applyconfigurationscoordinationv1.
+					Lease("update-create-denied", "test-ns").
+					WithLabels(map[string]string{"creator": "not-authorized-user"}),
+				metav1.ApplyOptions{
+					FieldManager: "foo",
+				})*/
+				return err
+			},
+			expectAllowed: false,
+		},
+		{
+			name: "update-to-create, both update and create conditions must be satisfied",
+			user: "update-create-deny-user",
+			webhookBehavior: func(ws *webhookServerHandler) {
+				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
+					if sar.Spec.ResourceAttributes == nil {
+						return
+					}
+					switch sar.Spec.ResourceAttributes.Verb {
+					case "update", "patch":
+						// Conditionally allow updates: only when classified=false
+						sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+							{
+								ConditionsType: "webhook",
+								Conditions: []authorizationv1.SubjectAccessReviewCondition{
+									{
+										ID:     "allow-unclassified",
+										Effect: authorizationv1.SubjectAccessReviewConditionEffectAllow,
+										Condition: `has(object.metadata.labels) && ` +
+											`has(object.metadata.labels.classified) && ` +
+											`object.metadata.labels.classified == "false"`,
+										Description: "only allow creates when classified=false",
+									},
+								},
+							},
+						}
+					case "create":
+						// Conditionally allow creates: only when creator=update-create-deny-user
+						sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+							{
+								ConditionsType: "webhook",
+								Conditions: []authorizationv1.SubjectAccessReviewCondition{
+									{
+										ID:     "require-owner-label",
+										Effect: authorizationv1.SubjectAccessReviewConditionEffectAllow,
+										Condition: `has(object.metadata.labels) && ` +
+											`has(object.metadata.labels.creator) && ` +
+											`object.metadata.labels.creator == "update-create-deny-user"`,
+										Description: "only allow creates when creator=update-create-deny-user",
+									},
+								},
+							},
+						}
+					}
+				}
+				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
+					allowed, denied := celEvaluateConditions(ws.t, acr)
+					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
+						SubjectAccessReviewAuthorizationDecision: authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{
+							Allowed: allowed,
+							Denied:  denied,
+						},
+					}
+				}
+			},
+			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
+				// PUT a non-existent lease with classified=true.
+				// The create authorization should fail because the condition is not met.
+				_, err := client.CoordinationV1().Leases("test-ns").Update(context.TODO(), &coordinationv1.Lease{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:   "update-create-denied-by-update-condition",
+						Labels: map[string]string{"creator": "update-create-deny-user"},
+					},
+				}, metav1.UpdateOptions{})
+				/*_, err := client.CoordinationV1().Leases("test-ns").Apply(context.TODO(),
+				applyconfigurationscoordinationv1.
+					Lease("update-create-denied-by-update-condition", "test-ns").
+					// Satisfies the create condition, but not the update one
+					WithLabels(map[string]string{"creator": "update-create-deny-user"}),
+				metav1.ApplyOptions{
+					FieldManager: "foo",
+				})*/
 				return err
 			},
 			expectAllowed: false,
