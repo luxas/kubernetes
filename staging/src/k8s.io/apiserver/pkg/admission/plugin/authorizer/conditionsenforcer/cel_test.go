@@ -17,7 +17,6 @@ limitations under the License.
 package conditionsenforcer
 
 import (
-	"context"
 	"maps"
 	"testing"
 
@@ -33,67 +32,56 @@ import (
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
 )
 
+var (
+	podGVK = schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Pod"}
+	podGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
+)
+
 func newObjectInterfacesForTest() admission.ObjectInterfaces {
 	scheme := runtime.NewScheme()
 	corev1.AddToScheme(scheme)
 	return admission.NewObjectInterfacesFromScheme(scheme)
 }
 
-func endpointCreateAttributes() admission.Attributes {
-	object := &corev1.Endpoints{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Endpoints",
-			APIVersion: "v1",
-		},
+func podCreateAttributes() admission.Attributes {
+	object := &corev1.Pod{
+		TypeMeta: metav1.TypeMeta{Kind: "Pod", APIVersion: "v1"},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "endpoints1",
+			Name:      "test-pod",
 			Namespace: "default",
+			Labels:    map[string]string{"app": "web"},
 		},
-		Subsets: []corev1.EndpointSubset{
-			{
-				Addresses: []corev1.EndpointAddress{{IP: "127.0.0.1"}},
-			},
+		Spec: corev1.PodSpec{
+			NodeName: "node1",
 		},
 	}
-	gvk := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Endpoints"}
-	gvr := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "endpoints"}
-	return admission.NewAttributesRecord(object, nil, gvk, "default", "endpoints1", gvr, "", admission.Create, &metav1.CreateOptions{}, false, nil)
+	return admission.NewAttributesRecord(object, nil, podGVK, "default", "test-pod", podGVR, "", admission.Create, &metav1.CreateOptions{}, false, nil)
 }
 
-func endpointUpdateAttributes() admission.Attributes {
-	oldObject := &corev1.Endpoints{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Endpoints",
-			APIVersion: "v1",
-		},
+func podUpdateAttributes() admission.Attributes {
+	oldObject := &corev1.Pod{
+		TypeMeta: metav1.TypeMeta{Kind: "Pod", APIVersion: "v1"},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "endpoints1",
+			Name:      "test-pod",
 			Namespace: "default",
+			Labels:    map[string]string{"app": "web"},
 		},
-		Subsets: []corev1.EndpointSubset{
-			{
-				Addresses: []corev1.EndpointAddress{{IP: "127.0.0.1"}},
-			},
+		Spec: corev1.PodSpec{
+			NodeName: "node1",
 		},
 	}
-	newObject := &corev1.Endpoints{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Endpoints",
-			APIVersion: "v1",
-		},
+	newObject := &corev1.Pod{
+		TypeMeta: metav1.TypeMeta{Kind: "Pod", APIVersion: "v1"},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "endpoints1",
+			Name:      "test-pod",
 			Namespace: "default",
+			Labels:    map[string]string{"app": "web", "version": "v2"},
 		},
-		Subsets: []corev1.EndpointSubset{
-			{
-				Addresses: []corev1.EndpointAddress{{IP: "10.0.0.1"}},
-			},
+		Spec: corev1.PodSpec{
+			NodeName: "node2",
 		},
 	}
-	gvk := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Endpoints"}
-	gvr := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "endpoints"}
-	return admission.NewAttributesRecord(newObject, oldObject, gvk, "default", "endpoints1", gvr, "", admission.Update, &metav1.UpdateOptions{}, false, nil)
+	return admission.NewAttributesRecord(newObject, oldObject, podGVK, "default", "test-pod", podGVR, "", admission.Update, &metav1.UpdateOptions{}, false, nil)
 }
 
 func makeVersionedAttrs(t *testing.T, attrs admission.Attributes) *admission.VersionedAttributes {
@@ -108,7 +96,6 @@ func makeVersionedAttrs(t *testing.T, attrs admission.Attributes) *admission.Ver
 func makeConditionalDecision(t *testing.T, conditionType authorizer.ConditionType, conditions map[string]authorizer.Condition) authorizer.Decision {
 	t.Helper()
 	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ConditionalAuthorization, true)
-
 	attrs := authorizer.AttributesRecord{
 		ConditionsMode: authorizer.ConditionsModeHumanReadable,
 	}
@@ -119,21 +106,7 @@ func makeConditionalDecision(t *testing.T, conditionType authorizer.ConditionTyp
 	return d
 }
 
-func TestCelConditionsEnforcer_EvaluateConditions_NilWriteRequest(t *testing.T) {
-	enforcer := &celConditionsEnforcer{}
-	decision := authorizer.DecisionAllow("test")
-
-	// conditionsData with nil WriteRequest should just return the unevaluated decision
-	data := &noWriteRequestData{}
-	result, err := enforcer.EvaluateConditions(context.Background(), decision, data)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !result.IsAllowed() {
-		t.Errorf("expected Allow decision, got %v", result)
-	}
-}
-
+// noWriteRequestData is a ConditionData that returns nil for WriteRequest.
 type noWriteRequestData struct{}
 
 func (d *noWriteRequestData) WriteRequest() authorizer.WriteRequestConditionData { return nil }
@@ -141,77 +114,7 @@ func (d *noWriteRequestData) ImpersonationRequest() authorizer.ImpersonationRequ
 	return nil
 }
 
-func TestCelConditionsEnforcer_ConcreteDecisions(t *testing.T) {
-	enforcer := &celConditionsEnforcer{}
-	va := makeVersionedAttrs(t, endpointCreateAttributes())
-	data := conditionsData{attrsShim: attrsShim{VersionedAttributes: va}}
-
-	tests := []struct {
-		name     string
-		decision authorizer.Decision
-		check    func(t *testing.T, d authorizer.Decision)
-	}{
-		{
-			name:     "Allow passes through",
-			decision: authorizer.DecisionAllow("already allowed"),
-			check: func(t *testing.T, d authorizer.Decision) {
-				if !d.IsAllowed() {
-					t.Errorf("expected Allow, got %v", d)
-				}
-			},
-		},
-		{
-			name:     "Deny passes through",
-			decision: authorizer.DecisionDeny("already denied"),
-			check: func(t *testing.T, d authorizer.Decision) {
-				if !d.IsDenied() {
-					t.Errorf("expected Deny, got %v", d)
-				}
-			},
-		},
-		{
-			name:     "NoOpinion passes through",
-			decision: authorizer.DecisionNoOpinion("no opinion"),
-			check: func(t *testing.T, d authorizer.Decision) {
-				if !d.IsNoOpinion() {
-					t.Errorf("expected NoOpinion, got %v", d)
-				}
-			},
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			result, err := enforcer.EvaluateConditions(context.Background(), tc.decision, data)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			tc.check(t, result)
-		})
-	}
-}
-
-func TestCelConditionsEnforcer_NonAttrsShimWriteRequest(t *testing.T) {
-	enforcer := &celConditionsEnforcer{}
-	decision := makeConditionalDecision(t, ConditionTypeAuthorizationCEL, map[string]authorizer.Condition{
-		"test-cond": {
-			Condition: "true",
-			Effect:    authorizer.ConditionEffectAllow,
-		},
-	})
-
-	// Use a ConditionData where WriteRequest() returns a non-attrsShim type
-	data := &fakeWriteRequestData{}
-	result, err := enforcer.evaluateWriteRequest(context.Background(), decision, data, celconfig.RuntimeCELCostBudget)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	// Should return the unevaluated decision because it can't cast to *attrsShim
-	if !result.IsConditional() {
-		t.Errorf("expected conditional decision to pass through, got %v", result)
-	}
-}
-
+// fakeWriteRequestData implements WriteRequestConditionData but is not an *attrsShim.
 type fakeWriteRequestData struct{}
 
 func (d *fakeWriteRequestData) GetOperation() string                { return "CREATE" }
@@ -219,337 +122,301 @@ func (d *fakeWriteRequestData) GetOperationOptions() runtime.Object { return nil
 func (d *fakeWriteRequestData) GetObject() runtime.Object           { return nil }
 func (d *fakeWriteRequestData) GetOldObject() runtime.Object        { return nil }
 
+// TestCelConditionsEnforcer_NoOp tests all cases where the enforcer is a no-op
+// and returns the unevaluated decision unchanged: nil WriteRequest, concrete
+// decisions (Allow/Deny/NoOpinion), and non-attrsShim WriteRequest data.
+func TestCelConditionsEnforcer_NoOp(t *testing.T) {
+	enforcer := &celConditionsEnforcer{}
+	va := makeVersionedAttrs(t, podCreateAttributes())
+	writeRequestData := conditionsData{attrsShim: attrsShim{VersionedAttributes: va}}
+
+	tests := []struct {
+		name         string
+		decision     authorizer.Decision
+		data         authorizer.ConditionData
+		wantDecision string
+	}{
+		{
+			name:         "nil WriteRequest returns unevaluated decision",
+			decision:     authorizer.DecisionAllow("test"),
+			data:         &noWriteRequestData{},
+			wantDecision: "Allow",
+		},
+		{
+			name:         "Allow passes through",
+			decision:     authorizer.DecisionAllow("already allowed"),
+			data:         writeRequestData,
+			wantDecision: "Allow",
+		},
+		{
+			name:         "Deny passes through",
+			decision:     authorizer.DecisionDeny("already denied"),
+			data:         writeRequestData,
+			wantDecision: "Deny",
+		},
+		{
+			name:         "NoOpinion passes through",
+			decision:     authorizer.DecisionNoOpinion("no opinion"),
+			data:         writeRequestData,
+			wantDecision: "NoOpinion",
+		},
+		{
+			name: "Conditional of the wrong type cannot be simplified",
+			decision: makeConditionalDecision(t, "some.io/unsupported-type", map[string]authorizer.Condition{
+				"test-cond": {
+					Condition: "true",
+					Effect:    authorizer.ConditionEffectAllow,
+				},
+			}),
+			data:         writeRequestData,
+			wantDecision: `Conditional(type="some.io/unsupported-type", len=1)`,
+		},
+		{
+			name: "Conditional of the supported CEL type simplifies to Allow",
+			decision: makeConditionalDecision(t, ConditionTypeAuthorizationCEL, map[string]authorizer.Condition{
+				"test-cond": {
+					Condition: "true",
+					Effect:    authorizer.ConditionEffectAllow,
+				},
+			}),
+			data:         writeRequestData,
+			wantDecision: `Allow`,
+		},
+		// TODO(luxas): Add tests for ConditionalChain here too.
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := enforcer.EvaluateConditions(t.Context(), tc.decision, tc.data)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got := result.String(); got != tc.wantDecision {
+				t.Errorf("got %s, want %s", got, tc.wantDecision)
+			}
+		})
+	}
+
+	// TODO(luxas): Hopefully we can remove this test/check in the future, and just use data given.
+	t.Run("non-attrsShim WriteRequest passes through conditional", func(t *testing.T) {
+		conditionalDecision := makeConditionalDecision(t, ConditionTypeAuthorizationCEL, map[string]authorizer.Condition{
+			"test-cond": {
+				Condition: "true",
+				Effect:    authorizer.ConditionEffectAllow,
+			},
+		})
+		result, err := enforcer.evaluateWriteRequest(t.Context(), conditionalDecision, &fakeWriteRequestData{}, celconfig.RuntimeCELCostBudget)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !result.IsConditional() {
+			t.Errorf("got %s, want Conditional (pass-through)", result.String())
+		}
+	})
+}
+
 func TestCelConditionsEnforcer_EvaluateWriteRequest(t *testing.T) {
 	tests := []struct {
-		name       string
-		attrs      admission.Attributes
-		conditions map[string]authorizer.Condition
-		check      func(t *testing.T, d authorizer.Decision, err error)
+		name         string
+		attrs        admission.Attributes
+		conditions   map[string]authorizer.Condition
+		costBudget   int64
+		wantDecision string
+		wantErr      bool
 	}{
 		{
 			name:  "single allow condition evaluates to true",
-			attrs: endpointCreateAttributes(),
+			attrs: podCreateAttributes(),
 			conditions: map[string]authorizer.Condition{
 				"allow-cond": {
-					Condition: "object.metadata.name == 'endpoints1'",
+					Condition: "'app' in object.metadata.labels && object.metadata.labels.app == 'web'",
 					Effect:    authorizer.ConditionEffectAllow,
 				},
 			},
-			check: func(t *testing.T, d authorizer.Decision, err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if !d.IsAllowed() {
-					t.Errorf("expected Allow, got %v", d)
-				}
-			},
+			wantDecision: "Allow",
 		},
 		{
 			name:  "single allow condition evaluates to false",
-			attrs: endpointCreateAttributes(),
+			attrs: podCreateAttributes(),
 			conditions: map[string]authorizer.Condition{
 				"allow-cond": {
-					Condition: "object.metadata.name == 'something-else'",
+					Condition: "has(object.metadata.labels.app) && object.metadata.labels.app == 'notfound'",
 					Effect:    authorizer.ConditionEffectAllow,
 				},
 			},
-			check: func(t *testing.T, d authorizer.Decision, err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if !d.IsNoOpinion() {
-					t.Errorf("expected NoOpinion (no conditions matched), got %v", d)
-				}
-			},
+			wantDecision: "NoOpinion",
 		},
 		{
-			name:  "single deny condition evaluates to true",
-			attrs: endpointCreateAttributes(),
+			name:  "deny condition evaluates to true, takes precedence over allow",
+			attrs: podCreateAttributes(),
 			conditions: map[string]authorizer.Condition{
 				"deny-cond": {
-					Condition:   "object.metadata.name == 'endpoints1'",
+					Condition:   "has(object.metadata.labels.app)",
 					Effect:      authorizer.ConditionEffectDeny,
-					Description: "endpoints1 not allowed",
+					Description: "test-pod not allowed",
+				},
+				"allow-cond": {
+					Condition: "object.metadata.name == 'test-pod'",
+					Effect:    authorizer.ConditionEffectAllow,
 				},
 			},
-			check: func(t *testing.T, d authorizer.Decision, err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if !d.IsDenied() {
-					t.Errorf("expected Deny, got %v", d)
-				}
-			},
+			wantDecision: "Deny",
 		},
 		{
 			name:  "single deny condition evaluates to false",
-			attrs: endpointCreateAttributes(),
+			attrs: podCreateAttributes(),
 			conditions: map[string]authorizer.Condition{
 				"deny-cond": {
-					Condition: "object.metadata.name == 'something-else'",
+					Condition: "has(object.metadata.labels.notexistent)",
 					Effect:    authorizer.ConditionEffectDeny,
 				},
 			},
-			check: func(t *testing.T, d authorizer.Decision, err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if !d.IsNoOpinion() {
-					t.Errorf("expected NoOpinion (no conditions matched), got %v", d)
-				}
-			},
+			wantDecision: "NoOpinion",
 		},
 		{
-			name:  "single noopinion condition evaluates to true",
-			attrs: endpointCreateAttributes(),
+			name:  "noopinion condition evaluates to true, takes precedence over allow",
+			attrs: podCreateAttributes(),
 			conditions: map[string]authorizer.Condition{
 				"noop-cond": {
-					Condition: "object.metadata.name == 'endpoints1'",
+					Condition: "object.metadata.name == 'test-pod'",
 					Effect:    authorizer.ConditionEffectNoOpinion,
 				},
-			},
-			check: func(t *testing.T, d authorizer.Decision, err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if !d.IsNoOpinion() {
-					t.Errorf("expected NoOpinion, got %v", d)
-				}
-			},
-		},
-		{
-			name:  "allow with object field check",
-			attrs: endpointCreateAttributes(),
-			conditions: map[string]authorizer.Condition{
 				"allow-cond": {
-					Condition: "has(object.subsets) && object.subsets.size() == 1",
+					Condition: "object.spec.nodeName == 'node1'",
 					Effect:    authorizer.ConditionEffectAllow,
 				},
 			},
-			check: func(t *testing.T, d authorizer.Decision, err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if !d.IsAllowed() {
-					t.Errorf("expected Allow, got %v", d)
-				}
-			},
+			wantDecision: "NoOpinion",
 		},
 		{
-			name:  "deny takes precedence over allow",
-			attrs: endpointCreateAttributes(),
+			name:  "request.kind.kind check",
+			attrs: podCreateAttributes(),
 			conditions: map[string]authorizer.Condition{
 				"allow-cond": {
-					Condition: "object.metadata.name == 'endpoints1'",
-					Effect:    authorizer.ConditionEffectAllow,
-				},
-				"deny-cond": {
-					Condition: "object.metadata.name == 'endpoints1'",
-					Effect:    authorizer.ConditionEffectDeny,
-				},
-			},
-			check: func(t *testing.T, d authorizer.Decision, err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				// Deny conditions are evaluated before Allow conditions, so deny wins
-				if !d.IsDenied() {
-					t.Errorf("expected Deny (deny takes precedence), got %v", d)
-				}
-			},
-		},
-		{
-			name:  "noopinion takes precedence over allow",
-			attrs: endpointCreateAttributes(),
-			conditions: map[string]authorizer.Condition{
-				"allow-cond": {
-					Condition: "object.metadata.name == 'endpoints1'",
-					Effect:    authorizer.ConditionEffectAllow,
-				},
-				"noop-cond": {
-					Condition: "object.metadata.name == 'endpoints1'",
-					Effect:    authorizer.ConditionEffectNoOpinion,
-				},
-			},
-			check: func(t *testing.T, d authorizer.Decision, err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				// NoOpinion conditions are evaluated before Allow conditions
-				if !d.IsNoOpinion() {
-					t.Errorf("expected NoOpinion (noopinion takes precedence over allow), got %v", d)
-				}
-			},
-		},
-		{
-			name:  "CEL expression using request object",
-			attrs: endpointCreateAttributes(),
-			conditions: map[string]authorizer.Condition{
-				"allow-cond": {
-					Condition: "request.kind.kind == 'Endpoints'",
+					Condition: "request.kind.kind == 'Pod'",
 					Effect:    authorizer.ConditionEffectAllow,
 				},
 			},
-			check: func(t *testing.T, d authorizer.Decision, err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if !d.IsAllowed() {
-					t.Errorf("expected Allow, got %v", d)
-				}
-			},
+			wantDecision: "Allow",
 		},
 		{
-			name:  "CEL expression using request namespace",
-			attrs: endpointCreateAttributes(),
+			name:  "request.namespace check",
+			attrs: podCreateAttributes(),
 			conditions: map[string]authorizer.Condition{
 				"allow-cond": {
 					Condition: "request.namespace == 'default'",
 					Effect:    authorizer.ConditionEffectAllow,
 				},
 			},
-			check: func(t *testing.T, d authorizer.Decision, err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if !d.IsAllowed() {
-					t.Errorf("expected Allow, got %v", d)
-				}
-			},
+			wantDecision: "Allow",
 		},
 		{
-			name:  "CEL expression using request operation",
-			attrs: endpointCreateAttributes(),
+			name:  "request.operation check",
+			attrs: podCreateAttributes(),
 			conditions: map[string]authorizer.Condition{
 				"allow-cond": {
 					Condition: "request.operation == 'CREATE'",
 					Effect:    authorizer.ConditionEffectAllow,
 				},
 			},
-			check: func(t *testing.T, d authorizer.Decision, err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if !d.IsAllowed() {
-					t.Errorf("expected Allow, got %v", d)
-				}
-			},
+			wantDecision: "Allow",
 		},
 		{
-			name:  "CEL expression with oldObject on update",
-			attrs: endpointUpdateAttributes(),
+			name:  "oldObject and object both present on update",
+			attrs: podUpdateAttributes(),
 			conditions: map[string]authorizer.Condition{
 				"allow-cond": {
 					Condition: "oldObject != null && object != null",
 					Effect:    authorizer.ConditionEffectAllow,
 				},
 			},
-			check: func(t *testing.T, d authorizer.Decision, err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if !d.IsAllowed() {
-					t.Errorf("expected Allow, got %v", d)
-				}
-			},
+			wantDecision: "Allow",
 		},
 		{
-			name:  "CEL expression with oldObject null on create",
-			attrs: endpointCreateAttributes(),
+			name:  "oldObject is null on create",
+			attrs: podCreateAttributes(),
 			conditions: map[string]authorizer.Condition{
 				"allow-cond": {
 					Condition: "oldObject == null",
 					Effect:    authorizer.ConditionEffectAllow,
 				},
 			},
-			check: func(t *testing.T, d authorizer.Decision, err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if !d.IsAllowed() {
-					t.Errorf("expected Allow, got %v", d)
-				}
+			wantDecision: "Allow",
+		},
+		{
+			name:  "update comparing old and new object",
+			attrs: podUpdateAttributes(),
+			conditions: map[string]authorizer.Condition{
+				"allow-cond": {
+					Condition: "object.spec.nodeName != oldObject.spec.nodeName",
+					Effect:    authorizer.ConditionEffectAllow,
+				},
 			},
+			wantDecision: "Allow",
+		},
+		{
+			name:  "multiple allow conditions one matches",
+			attrs: podCreateAttributes(),
+			conditions: map[string]authorizer.Condition{
+				"allow-1": {
+					Condition: "object.metadata.name == 'test-pod'",
+					Effect:    authorizer.ConditionEffectAllow,
+				},
+				"allow-2": {
+					Condition: "object.metadata.name == 'other-pod'",
+					Effect:    authorizer.ConditionEffectAllow,
+				},
+			},
+			wantDecision: "Allow",
+		},
+		{
+			name:  "no matching conditions returns NoOpinion",
+			attrs: podCreateAttributes(),
+			conditions: map[string]authorizer.Condition{
+				"allow-cond": {
+					Condition: "object.metadata.name == 'never-matches'",
+					Effect:    authorizer.ConditionEffectAllow,
+				},
+			},
+			wantDecision: "NoOpinion",
 		},
 		{
 			name:  "invalid CEL expression returns error",
-			attrs: endpointCreateAttributes(),
+			attrs: podCreateAttributes(),
 			conditions: map[string]authorizer.Condition{
 				"bad-cond": {
 					Condition: "1 < 'asdf'",
 					Effect:    authorizer.ConditionEffectAllow,
 				},
 			},
-			check: func(t *testing.T, d authorizer.Decision, err error) {
-				// The condition should produce a compilation error which results
-				// in an error from the evaluator.
-				if err == nil {
-					t.Errorf("expected error for invalid CEL expression, got nil")
-				}
-			},
+			wantDecision: "NoOpinion",
+			wantErr:      true,
 		},
 		{
-			name:  "deny condition with description",
-			attrs: endpointCreateAttributes(),
+			name:  "cost budget exceeded on allow condition",
+			attrs: podCreateAttributes(),
 			conditions: map[string]authorizer.Condition{
-				"deny-desc": {
-					Condition:   "object.metadata.name == 'endpoints1'",
-					Effect:      authorizer.ConditionEffectDeny,
-					Description: "deny this endpoint by name",
-				},
-			},
-			check: func(t *testing.T, d authorizer.Decision, err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if !d.IsDenied() {
-					t.Errorf("expected Deny, got %v", d)
-				}
-				reason := d.Reason()
-				if reason == "" {
-					t.Errorf("expected non-empty reason with description, got empty")
-				}
-			},
-		},
-		{
-			name:  "multiple allow conditions first match wins",
-			attrs: endpointCreateAttributes(),
-			conditions: map[string]authorizer.Condition{
-				"allow-1": {
-					Condition: "object.metadata.name == 'endpoints1'",
-					Effect:    authorizer.ConditionEffectAllow,
-				},
-				"allow-2": {
-					Condition: "object.metadata.name == 'something-else'",
+				"allow-cond": {
+					Condition: "object.spec.nodeName == 'node1'",
 					Effect:    authorizer.ConditionEffectAllow,
 				},
 			},
-			check: func(t *testing.T, d authorizer.Decision, err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if !d.IsAllowed() {
-					t.Errorf("expected Allow, got %v", d)
-				}
-			},
+			costBudget:   1,
+			wantDecision: "NoOpinion",
+			wantErr:      true,
 		},
 		{
-			name:  "no matching conditions returns NoOpinion",
-			attrs: endpointCreateAttributes(),
+			name:  "cost budget exceeded on deny condition",
+			attrs: podCreateAttributes(),
 			conditions: map[string]authorizer.Condition{
-				"allow-1": {
-					Condition: "object.metadata.name == 'never-matches'",
-					Effect:    authorizer.ConditionEffectAllow,
+				"deny-cond": {
+					Condition: "object.spec.nodeName == 'node1'",
+					Effect:    authorizer.ConditionEffectDeny,
 				},
 			},
-			check: func(t *testing.T, d authorizer.Decision, err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if !d.IsNoOpinion() {
-					t.Errorf("expected NoOpinion, got %v", d)
-				}
-			},
+			costBudget:   1,
+			wantDecision: "Deny",
+			wantErr:      true,
 		},
 	}
 
@@ -560,152 +427,22 @@ func TestCelConditionsEnforcer_EvaluateWriteRequest(t *testing.T) {
 			enforcer := &celConditionsEnforcer{}
 			va := makeVersionedAttrs(t, tc.attrs)
 			wr := &attrsShim{VersionedAttributes: va}
-			result, err := enforcer.evaluateWriteRequest(context.Background(), decision, wr, celconfig.RuntimeCELCostBudget)
-			tc.check(t, result, err)
+
+			budget := tc.costBudget
+			if budget == 0 {
+				budget = celconfig.RuntimeCELCostBudget
+			}
+
+			result, err := enforcer.evaluateWriteRequest(t.Context(), decision, wr, budget)
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got := result.String(); got != tc.wantDecision {
+				t.Errorf("got decision %s, want %s", got, tc.wantDecision)
+			}
 		})
-	}
-}
-
-func TestCelConditionsEnforcer_WrongConditionType(t *testing.T) {
-	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ConditionalAuthorization, true)
-
-	attrs := authorizer.AttributesRecord{
-		ConditionsMode: authorizer.ConditionsModeHumanReadable,
-	}
-	decision, err := authorizer.DecisionConditional(attrs, "some.io/other-type", maps.All(map[string]authorizer.Condition{
-		"allow-cond": {
-			Condition: "true",
-			Effect:    authorizer.ConditionEffectAllow,
-		},
-	}))
-	if err != nil {
-		t.Fatalf("failed to create conditional decision: %v", err)
-	}
-
-	enforcer := &celConditionsEnforcer{}
-	va := makeVersionedAttrs(t, endpointCreateAttributes())
-	wr := &attrsShim{VersionedAttributes: va}
-	result, err := enforcer.evaluateWriteRequest(context.Background(), decision, wr, celconfig.RuntimeCELCostBudget)
-	if err == nil {
-		t.Fatalf("expected error for wrong condition type, got nil")
-	}
-	// With only allow conditions and wrong type, FailClosedDecision returns NoOpinion
-	if !result.IsNoOpinion() {
-		t.Errorf("expected NoOpinion for wrong condition type with only allow conditions, got %v", result)
-	}
-}
-
-func TestCelConditionsEnforcer_WrongConditionTypeWithDeny(t *testing.T) {
-	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ConditionalAuthorization, true)
-
-	attrs := authorizer.AttributesRecord{
-		ConditionsMode: authorizer.ConditionsModeHumanReadable,
-	}
-	decision, err := authorizer.DecisionConditional(attrs, "some.io/other-type", maps.All(map[string]authorizer.Condition{
-		"deny-cond": {
-			Condition: "true",
-			Effect:    authorizer.ConditionEffectDeny,
-		},
-	}))
-	if err != nil {
-		t.Fatalf("failed to create conditional decision: %v", err)
-	}
-
-	enforcer := &celConditionsEnforcer{}
-	va := makeVersionedAttrs(t, endpointCreateAttributes())
-	wr := &attrsShim{VersionedAttributes: va}
-	result, err := enforcer.evaluateWriteRequest(context.Background(), decision, wr, celconfig.RuntimeCELCostBudget)
-	if err == nil {
-		t.Fatalf("expected error for wrong condition type, got nil")
-	}
-	// With deny conditions and wrong type, FailClosedDecision returns Deny
-	if !result.IsDenied() {
-		t.Errorf("expected Deny for wrong condition type with deny conditions, got %v", result)
-	}
-}
-
-func TestCelConditionsEnforcer_CostBudgetExceeded(t *testing.T) {
-	enforcer := &celConditionsEnforcer{}
-	decision := makeConditionalDecision(t, ConditionTypeAuthorizationCEL, map[string]authorizer.Condition{
-		"allow-cond": {
-			Condition: "has(object.subsets) && object.subsets.size() < 2",
-			Effect:    authorizer.ConditionEffectAllow,
-		},
-	})
-
-	va := makeVersionedAttrs(t, endpointCreateAttributes())
-	wr := &attrsShim{VersionedAttributes: va}
-	// Use a very small budget to trigger cost exceeded error
-	result, err := enforcer.evaluateWriteRequest(context.Background(), decision, wr, 1)
-	if err == nil {
-		t.Fatalf("expected error for cost budget exceeded, got nil")
-	}
-	// Allow condition error means NoOpinion (no matching conditions)
-	if result.IsAllowed() {
-		t.Errorf("expected non-Allow result when cost budget exceeded, got %v", result)
-	}
-}
-
-func TestCelConditionsEnforcer_CostBudgetExceeded_DenyCondition(t *testing.T) {
-	enforcer := &celConditionsEnforcer{}
-	decision := makeConditionalDecision(t, ConditionTypeAuthorizationCEL, map[string]authorizer.Condition{
-		"deny-cond": {
-			Condition: "has(object.subsets) && object.subsets.size() < 2",
-			Effect:    authorizer.ConditionEffectDeny,
-		},
-	})
-
-	va := makeVersionedAttrs(t, endpointCreateAttributes())
-	wr := &attrsShim{VersionedAttributes: va}
-	// Use a very small budget to trigger cost exceeded error on a deny condition
-	result, err := enforcer.evaluateWriteRequest(context.Background(), decision, wr, 1)
-	if err == nil {
-		t.Fatalf("expected error for cost budget exceeded, got nil")
-	}
-	// Deny condition error means Deny (fail closed)
-	if !result.IsDenied() {
-		t.Errorf("expected Deny when deny condition cost budget exceeded, got %v", result)
-	}
-}
-
-func TestCelConditionsEnforcer_EvaluateConditions_FullFlow(t *testing.T) {
-	enforcer := &celConditionsEnforcer{}
-	decision := makeConditionalDecision(t, ConditionTypeAuthorizationCEL, map[string]authorizer.Condition{
-		"allow-cond": {
-			Condition: "object.metadata.name == 'endpoints1'",
-			Effect:    authorizer.ConditionEffectAllow,
-		},
-	})
-
-	va := makeVersionedAttrs(t, endpointCreateAttributes())
-	data := conditionsData{attrsShim: attrsShim{VersionedAttributes: va}}
-
-	result, err := enforcer.EvaluateConditions(context.Background(), decision, data)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !result.IsAllowed() {
-		t.Errorf("expected Allow, got %v", result)
-	}
-}
-
-func TestCelConditionsEnforcer_EvaluateConditions_UpdateFlow(t *testing.T) {
-	enforcer := &celConditionsEnforcer{}
-	decision := makeConditionalDecision(t, ConditionTypeAuthorizationCEL, map[string]authorizer.Condition{
-		"allow-cond": {
-			Condition: "object != null && oldObject != null && object.metadata.name == oldObject.metadata.name",
-			Effect:    authorizer.ConditionEffectAllow,
-		},
-	})
-
-	va := makeVersionedAttrs(t, endpointUpdateAttributes())
-	data := conditionsData{attrsShim: attrsShim{VersionedAttributes: va}}
-
-	result, err := enforcer.EvaluateConditions(context.Background(), decision, data)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !result.IsAllowed() {
-		t.Errorf("expected Allow, got %v", result)
 	}
 }

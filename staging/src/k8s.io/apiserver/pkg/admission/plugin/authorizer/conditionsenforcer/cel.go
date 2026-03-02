@@ -44,7 +44,7 @@ func (e *celConditionsEnforcer) EvaluateConditions(ctx context.Context, unevalua
 
 // runtimeCELCostBudget was added for testing purpose only. Callers should always use const RuntimeCELCostBudget from k8s.io/apiserver/pkg/apis/cel/config.go as input.
 func (e *celConditionsEnforcer) evaluateWriteRequest(ctx context.Context, unevaluatedDecision authorizer.Decision, wr authorizer.WriteRequestConditionData, runtimeCELCostBudget int64) (authorizer.Decision, error) {
-	if unevaluatedDecision.IsAllowed() || unevaluatedDecision.IsDenied() || unevaluatedDecision.IsNoOpinion() {
+	if unevaluatedDecision.IsConcrete() {
 		// Nothing to evaluate
 		return unevaluatedDecision, nil
 	}
@@ -54,6 +54,11 @@ func (e *celConditionsEnforcer) evaluateWriteRequest(ctx context.Context, uneval
 	}
 
 	conditionSet := unevaluatedDecision.ConditionSet()
+
+	if conditionSet.Type() != ConditionTypeAuthorizationCEL {
+		// Cannot handle this condition type
+		return unevaluatedDecision, nil
+	}
 
 	attrsShim, ok := wr.(*attrsShim)
 	if !ok {
