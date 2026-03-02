@@ -200,6 +200,7 @@ type SubjectAccessReviewCondition struct {
 // - denied (unconditional deny)
 // - conditionsType + conditions (conditional decision)
 // - conditionalDecisionChain (composite/nested decisions)
+// TODO(luxas): Maybe this shouldn't have the SAR prefix?
 type SubjectAccessReviewAuthorizationDecision struct {
 	// allowed specifies whether this element is unconditionally allowed.
 	// Mutually exclusive with denied, conditions, and conditionalDecisionChain.

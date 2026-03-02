@@ -388,6 +388,7 @@ func (w *WebhookAuthorizer) EvaluateConditions(ctx context.Context, decision aut
 	// TODO: Allow a conditional response to evaluate to a conditional here too
 	switch {
 	case result.Response == nil:
+		// TODO: Should we treat this as "return decision, nil" instead?
 		return authorizer.DecisionNoOpinion(), nil
 	case result.Response.Denied && result.Response.Allowed:
 		return authorizer.DecisionDeny(), fmt.Errorf("webhook subject access review returned both allow and deny response")

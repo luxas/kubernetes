@@ -30,7 +30,6 @@ import (
 	"time"
 
 	authorizationv1 "k8s.io/api/authorization/v1"
-	authorizationv1alpha1 "k8s.io/api/authorization/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -400,7 +399,7 @@ authorizers:
 				ws.sarHandler = userSARHandler("agg-cond-allow-user", func(sar *authorizationv1.SubjectAccessReview) {
 					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
 						{
-							ConditionsType: "webhook",
+							ConditionsType: "k8s.io/authorization-cel",
 							Conditions: []authorizationv1.SubjectAccessReviewCondition{
 								{
 									ID:          "allow-safe-prefix",
@@ -412,15 +411,7 @@ authorizers:
 						},
 					}
 				})
-				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
-					allowed, denied := celEvaluateConditions(ws.t, acr)
-					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
-						SubjectAccessReviewAuthorizationDecision: authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{
-							Allowed: allowed,
-							Denied:  denied,
-						},
-					}
-				}
+				ws.acrHandler = acrEvaluateCEL(ws.t, "k8s.io/authorization-cel")
 			},
 			flunder: &wardlev1alpha1.Flunder{
 				ObjectMeta: metav1.ObjectMeta{Name: "safe-flunder"},
@@ -434,7 +425,7 @@ authorizers:
 				ws.sarHandler = userSARHandler("agg-cond-deny-user", func(sar *authorizationv1.SubjectAccessReview) {
 					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
 						{
-							ConditionsType: "webhook",
+							ConditionsType: "k8s.io/authorization-cel",
 							Conditions: []authorizationv1.SubjectAccessReviewCondition{
 								{
 									ID:          "allow-safe-prefix",
@@ -446,15 +437,7 @@ authorizers:
 						},
 					}
 				})
-				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
-					allowed, denied := celEvaluateConditions(ws.t, acr)
-					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
-						SubjectAccessReviewAuthorizationDecision: authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{
-							Allowed: allowed,
-							Denied:  denied,
-						},
-					}
-				}
+				ws.acrHandler = acrEvaluateCEL(ws.t, "k8s.io/authorization-cel")
 			},
 			flunder: &wardlev1alpha1.Flunder{
 				ObjectMeta: metav1.ObjectMeta{Name: "unsafe-flunder"},
@@ -468,7 +451,7 @@ authorizers:
 				ws.sarHandler = userSARHandler("agg-cond-label-deny-user", func(sar *authorizationv1.SubjectAccessReview) {
 					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
 						{
-							ConditionsType: "webhook",
+							ConditionsType: "k8s.io/authorization-cel",
 							Conditions: []authorizationv1.SubjectAccessReviewCondition{
 								{
 									ID:          "allow-all",
@@ -488,15 +471,7 @@ authorizers:
 						},
 					}
 				})
-				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
-					allowed, denied := celEvaluateConditions(ws.t, acr)
-					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
-						SubjectAccessReviewAuthorizationDecision: authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{
-							Allowed: allowed,
-							Denied:  denied,
-						},
-					}
-				}
+				ws.acrHandler = acrEvaluateCEL(ws.t, "k8s.io/authorization-cel")
 			},
 			flunder: &wardlev1alpha1.Flunder{
 				ObjectMeta: metav1.ObjectMeta{

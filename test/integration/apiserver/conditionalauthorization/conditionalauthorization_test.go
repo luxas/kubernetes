@@ -25,6 +25,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/cel-go/cel"
@@ -154,9 +155,11 @@ authorizers:
 		name string
 		// user is the username that will be impersonated
 		user string
-		// webhookBehavior configures the webhook for this test case.
+		// webhookBehaviors configures the webhook for this test case.
 		// It is called before makeRequest to set the desired behavior.
-		webhookBehavior func(ws *webhookServerHandler)
+		// Multiple webhook behaviors can be specified to assert the same
+		// result for various webhook configurations
+		webhookBehaviors map[string]func(ws *webhookServerHandler)
 		// makeRequest creates a client with the given user and performs an API request.
 		// Returns an error if the request fails.
 		makeRequest func(t *testing.T, client *clientset.Clientset) error
@@ -169,11 +172,13 @@ authorizers:
 		{
 			name: "unconditional allow from webhook",
 			user: "allow-user",
-			webhookBehavior: func(ws *webhookServerHandler) {
-				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
-					sar.Status.Allowed = true
-					sar.Status.Reason = "unconditionally allowed"
-				}
+			webhookBehaviors: map[string]func(ws *webhookServerHandler){
+				"": func(ws *webhookServerHandler) {
+					ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
+						sar.Status.Allowed = true
+						sar.Status.Reason = "unconditionally allowed"
+					}
+				},
 			},
 			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
@@ -186,7 +191,7 @@ authorizers:
 		{
 			name: "unconditional deny from webhook",
 			user: "deny-user",
-			webhookBehavior: func(ws *webhookServerHandler) {
+			webhookBehaviors: func(ws *webhookServerHandler) {
 				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
 					sar.Status.Allowed = false
 					sar.Status.Denied = true
@@ -204,7 +209,7 @@ authorizers:
 		{
 			name: "conditional allow - condition evaluates to allow",
 			user: "conditional-allow-user",
-			webhookBehavior: func(ws *webhookServerHandler) {
+			webhookBehaviors: func(ws *webhookServerHandler) {
 				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
 					// Return a conditional decision with conditions that should evaluate to allow
 					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
@@ -243,7 +248,7 @@ authorizers:
 		{
 			name: "conditional deny - condition evaluates to deny",
 			user: "conditional-deny-user",
-			webhookBehavior: func(ws *webhookServerHandler) {
+			webhookBehaviors: func(ws *webhookServerHandler) {
 				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
 					// Return a conditional decision with a deny condition
 					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
@@ -285,7 +290,7 @@ authorizers:
 		{
 			name: "conditional no-opinion falls through to RBAC allow",
 			user: "conditional-noop-rbac-user",
-			webhookBehavior: func(ws *webhookServerHandler) {
+			webhookBehaviors: func(ws *webhookServerHandler) {
 				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
 					// Return a conditional decision that will evaluate to NoOpinion
 					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
@@ -332,7 +337,7 @@ authorizers:
 		{
 			name: "webhook no-opinion falls through to RBAC allow",
 			user: "webhook-noop-rbac-user",
-			webhookBehavior: func(ws *webhookServerHandler) {
+			webhookBehaviors: func(ws *webhookServerHandler) {
 				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
 					// NoOpinion: neither allowed nor denied
 					sar.Status.Allowed = false
@@ -352,7 +357,7 @@ authorizers:
 		{
 			name: "cel allow by name pattern",
 			user: "cel-name-user",
-			webhookBehavior: func(ws *webhookServerHandler) {
+			webhookBehaviors: func(ws *webhookServerHandler) {
 				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
 					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
 						{
@@ -390,7 +395,7 @@ authorizers:
 		{
 			name: "cel deny by name pattern mismatch",
 			user: "cel-name-deny-user",
-			webhookBehavior: func(ws *webhookServerHandler) {
+			webhookBehaviors: func(ws *webhookServerHandler) {
 				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
 					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
 						{
@@ -427,7 +432,7 @@ authorizers:
 		{
 			name: "cel deny by label overrides allow",
 			user: "cel-label-deny-user",
-			webhookBehavior: func(ws *webhookServerHandler) {
+			webhookBehaviors: func(ws *webhookServerHandler) {
 				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
 					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
 						{
@@ -475,7 +480,7 @@ authorizers:
 		{
 			name: "cel allow by data content",
 			user: "cel-data-user",
-			webhookBehavior: func(ws *webhookServerHandler) {
+			webhookBehaviors: func(ws *webhookServerHandler) {
 				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
 					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
 						{
@@ -516,7 +521,7 @@ authorizers:
 		{
 			name: "cel deny by data content missing",
 			user: "cel-data-deny-user",
-			webhookBehavior: func(ws *webhookServerHandler) {
+			webhookBehaviors: func(ws *webhookServerHandler) {
 				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
 					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
 						{
@@ -556,7 +561,7 @@ authorizers:
 		{
 			name: "cel operation-aware deny update",
 			user: "cel-op-user",
-			webhookBehavior: func(ws *webhookServerHandler) {
+			webhookBehaviors: func(ws *webhookServerHandler) {
 				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
 					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
 						{
@@ -608,7 +613,7 @@ authorizers:
 		{
 			name: "cel deny overrides allow and noopinion",
 			user: "cel-priority-user",
-			webhookBehavior: func(ws *webhookServerHandler) {
+			webhookBehaviors: func(ws *webhookServerHandler) {
 				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
 					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
 						{
@@ -657,7 +662,7 @@ authorizers:
 		{
 			name: "cel noopinion overrides allow",
 			user: "cel-noop-vs-allow-user",
-			webhookBehavior: func(ws *webhookServerHandler) {
+			webhookBehaviors: func(ws *webhookServerHandler) {
 				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
 					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
 						{
@@ -711,7 +716,7 @@ authorizers:
 		{
 			name: "update-to-create conditional allow by label",
 			user: "update-create-allow-user",
-			webhookBehavior: func(ws *webhookServerHandler) {
+			webhookBehaviors: func(ws *webhookServerHandler) {
 				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
 					if sar.Spec.ResourceAttributes == nil {
 						return
@@ -777,7 +782,7 @@ authorizers:
 		{
 			name: "update-to-create conditional deny by label",
 			user: "update-create-deny-user",
-			webhookBehavior: func(ws *webhookServerHandler) {
+			webhookBehaviors: func(ws *webhookServerHandler) {
 				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
 					if sar.Spec.ResourceAttributes == nil {
 						return
@@ -839,7 +844,7 @@ authorizers:
 		{
 			name: "update-to-create, both update and create conditions must be satisfied",
 			user: "update-create-deny-user",
-			webhookBehavior: func(ws *webhookServerHandler) {
+			webhookBehaviors: func(ws *webhookServerHandler) {
 				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
 					if sar.Spec.ResourceAttributes == nil {
 						return
@@ -916,44 +921,49 @@ authorizers:
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Configure the webhook behavior for this test case
-			tc.webhookBehavior(webhookServer.handler)
+			// Support multiple webhook behaviors with the same assertions
+			for webhookBehaviorName, webhookBehavior := range tc.webhookBehaviors {
+				t.Run(webhookBehaviorName, func(t *testing.T) {
+					// Configure the webhook behavior for this test case
+					webhookBehavior(webhookServer.handler)
 
-			// For tests that need RBAC fallthrough, grant RBAC access
-			if tc.user == "conditional-noop-rbac-user" || tc.user == "webhook-noop-rbac-user" {
-				authutil.GrantUserAuthorization(t, context.TODO(), adminClient, tc.user,
-					rbacv1.PolicyRule{
-						Verbs:     []string{"list", "get"},
-						APIGroups: []string{""},
-						Resources: []string{"configmaps"},
-					},
-				)
-			}
+					// For tests that need RBAC fallthrough, grant RBAC access
+					if tc.user == "conditional-noop-rbac-user" || tc.user == "webhook-noop-rbac-user" {
+						authutil.GrantUserAuthorization(t, context.TODO(), adminClient, tc.user,
+							rbacv1.PolicyRule{
+								Verbs:     []string{"list", "get"},
+								APIGroups: []string{""},
+								Resources: []string{"configmaps"},
+							},
+						)
+					}
 
-			// Create an impersonated client for the test user
-			impersonationConfig := rest.CopyConfig(server.ClientConfig)
-			impersonationConfig.Impersonate.UserName = tc.user
-			userClient := clientset.NewForConfigOrDie(impersonationConfig)
+					// Create an impersonated client for the test user
+					impersonationConfig := rest.CopyConfig(server.ClientConfig)
+					impersonationConfig.Impersonate.UserName = tc.user
+					userClient := clientset.NewForConfigOrDie(impersonationConfig)
 
-			// Execute the request
-			err := tc.makeRequest(t, userClient)
+					// Execute the request
+					err := tc.makeRequest(t, userClient)
 
-			expected := tc.expectAllowed
-			if !featureEnabled && tc.expectAllowedWhenDisabled != nil {
-				expected = *tc.expectAllowedWhenDisabled
-			}
+					expected := tc.expectAllowed
+					if !featureEnabled && tc.expectAllowedWhenDisabled != nil {
+						expected = *tc.expectAllowedWhenDisabled
+					}
 
-			if expected {
-				if err != nil {
-					t.Fatalf("expected request to be allowed, got error: %v", err)
-				}
-			} else {
-				if err == nil {
-					t.Fatalf("expected request to be denied, got success")
-				}
-				if !apierrors.IsForbidden(err) && !apierrors.IsUnauthorized(err) {
-					t.Fatalf("expected Forbidden or Unauthorized error, got: %v", err)
-				}
+					if expected {
+						if err != nil {
+							t.Fatalf("expected request to be allowed, got error: %v", err)
+						}
+					} else {
+						if err == nil {
+							t.Fatalf("expected request to be denied, got success")
+						}
+						if !apierrors.IsForbidden(err) && !apierrors.IsUnauthorized(err) {
+							t.Fatalf("expected Forbidden or Unauthorized error, got: %v", err)
+						}
+					}
+				})
 			}
 		})
 	}
@@ -961,6 +971,88 @@ authorizers:
 
 func boolPtr(b bool) *bool {
 	return &b
+}
+
+func acrEvaluateCEL(t *testing.T, expectedConditionsType string) func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
+	return func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
+		if len(acr.Response.ConditionalDecisionChain) != 1 {
+			t.Fatal("expected exactly one ConditionSet") // This could be extended later with more complex test cases
+		}
+		conditionSet := acr.Response.ConditionalDecisionChain[0]
+		if conditionSet.ConditionsType != expectedConditionsType {
+			t.Fatalf("Expected conditions type %q, got ", expectedConditionsType, conditionSet.ConditionsType)
+		}
+		allowed, denied := celEvaluateConditions(t, acr.Request.WriteRequest, &conditionSet)
+		acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
+			SubjectAccessReviewAuthorizationDecision: authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{
+				Allowed: allowed,
+				Denied:  denied,
+			},
+		}
+	}
+}
+
+func celConditionalTestCases(conditions []authorizationv1.SubjectAccessReviewCondition) map[string]func(*webhookServerHandler) {
+	return map[string]func(*webhookServerHandler){
+		// when the condition type is opaque, the webhook should be called to resolve the condition
+		"using-webhook-only": func(ws *webhookServerHandler) {
+			ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
+				// Return a conditional decision with conditions that should evaluate to allow
+				sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+					{
+						ConditionsType: "opaque-cel-condition-type",
+						Conditions:     conditions,
+					},
+				}
+			}
+			ws.acrHandler = acrEvaluateCEL(ws.t, "opaque-cel-condition-type")
+		},
+		"in-process-eval-only": func(ws *webhookServerHandler) {
+			ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
+				sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+					{
+						ConditionsType: "k8s.io/authorization-cel",
+						Conditions:     conditions,
+					},
+				}
+			}
+			// Ensure no calls to ACR are made, as the above should be handled in-tree only.
+			// If Kubernetes did webhook out to us, the test panics as the conditions type does not match
+			ws.acrHandler = acrEvaluateCEL(ws.t, "nonexistent-panic-on-ACR-webhook")
+		},
+		"if-in-process-fails-call-webhook": func(ws *webhookServerHandler) {
+			unsupportedIntreeConditions := make([]authorizationv1.SubjectAccessReviewCondition, len(conditions))
+			for i, condition := range conditions {
+				unsupportedIntreeConditions[i] = authorizationv1.SubjectAccessReviewCondition{
+					ID:          condition.ID,
+					Effect:      condition.Effect,
+					Condition:   "unsupported-in-tree && " + condition.Condition,
+					Description: condition.Description,
+				}
+			}
+
+			ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
+				sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+					{
+						ConditionsType: "k8s.io/authorization-cel",
+						Conditions:     unsupportedIntreeConditions,
+					},
+				}
+			}
+			// Ensure that a call to the webhook is made, even though in-tree evaluation failed, and that
+			// the webhook answer is the one that matters in the end
+			// This simulates the case where the webhook would use a newer CEL expression syntax version than the
+			// kube-apiserver (such that in-tree evaluation fails). In this case the request must still succeed,
+			// as the kube-apiserver calls back to the webhook as if the condition type was opaque.
+			ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
+				for i := range acr.Request.Decision.Conditions {
+					acr.Request.Decision.Conditions[i].Condition = strings.TrimPrefix(acr.Request.Decision.Conditions[i].Condition, "unsupported-in-tree &&")
+				}
+
+				acrEvaluateCEL(ws.t, "k8s.io/authorization-cel")(acr)
+			}
+		},
+	}
 }
 
 // webhookServer wraps an httptest.Server serving both SubjectAccessReview and
@@ -1078,7 +1170,7 @@ func safeResourceAttr(sar *authorizationv1.SubjectAccessReview, fn func(*authori
 // the objects in the write request. It follows the condition precedence:
 // Deny > NoOpinion > Allow (matching EvaluateConditionSet semantics).
 // Returns (allowed, denied).
-func celEvaluateConditions(t *testing.T, acr *authorizationv1alpha1.AuthorizationConditionsReview) (bool, bool) {
+func celEvaluateConditions(t *testing.T, wr *authorizationv1alpha1.AuthorizationConditionsWriteRequest, serializedDecision *authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision) (bool, bool) {
 	t.Helper()
 
 	env, err := cel.NewEnv(
@@ -1092,23 +1184,23 @@ func celEvaluateConditions(t *testing.T, acr *authorizationv1alpha1.Authorizatio
 
 	// Deserialize object and oldObject from RawExtension JSON
 	var objectMap map[string]any
-	if len(acr.Request.WriteRequest.Object.Raw) > 0 {
-		if err := json.Unmarshal(acr.Request.WriteRequest.Object.Raw, &objectMap); err != nil {
+	if len(wr.Object.Raw) > 0 {
+		if err := json.Unmarshal(wr.Object.Raw, &objectMap); err != nil {
 			t.Fatalf("failed to unmarshal object: %v", err)
 		}
 	}
 
 	var oldObjectMap map[string]any
-	if len(acr.Request.WriteRequest.OldObject.Raw) > 0 {
-		if err := json.Unmarshal(acr.Request.WriteRequest.OldObject.Raw, &oldObjectMap); err != nil {
+	if len(wr.OldObject.Raw) > 0 {
+		if err := json.Unmarshal(wr.OldObject.Raw, &oldObjectMap); err != nil {
 			t.Fatalf("failed to unmarshal oldObject: %v", err)
 		}
 	}
 
 	requestMap := map[string]any{
-		"operation": string(acr.Request.WriteRequest.Operation),
-		"namespace": acr.Request.WriteRequest.Namespace,
-		"name":      acr.Request.WriteRequest.Name,
+		"operation": string(wr.Operation),
+		"namespace": wr.Namespace,
+		"name":      wr.Name,
 	}
 
 	vars := map[string]any{
@@ -1117,10 +1209,13 @@ func celEvaluateConditions(t *testing.T, acr *authorizationv1alpha1.Authorizatio
 		"request":   requestMap,
 	}
 
-	conditions := collectConditions(acr.Request.Decision)
+	if len(serializedDecision.Conditions) == 0 || len(serializedDecision.ConditionsType) == 0 {
+		// TODO(luxas): This could be extended to cover the recursive case.
+		t.Fatal("expected a ConditionSet in celEvaluateConditions")
+	}
 
 	// Phase 1: Deny conditions
-	for _, cond := range conditions {
+	for _, cond := range serializedDecision.Conditions {
 		if cond.Effect != authorizationv1alpha1.SubjectAccessReviewConditionEffectDeny {
 			continue
 		}
@@ -1130,7 +1225,7 @@ func celEvaluateConditions(t *testing.T, acr *authorizationv1alpha1.Authorizatio
 	}
 
 	// Phase 2: NoOpinion conditions
-	for _, cond := range conditions {
+	for _, cond := range serializedDecision.Conditions {
 		if cond.Effect != authorizationv1alpha1.SubjectAccessReviewConditionEffectNoOpinion {
 			continue
 		}
@@ -1140,7 +1235,7 @@ func celEvaluateConditions(t *testing.T, acr *authorizationv1alpha1.Authorizatio
 	}
 
 	// Phase 3: Allow conditions
-	for _, cond := range conditions {
+	for _, cond := range serializedDecision.Conditions {
 		if cond.Effect != authorizationv1alpha1.SubjectAccessReviewConditionEffectAllow {
 			continue
 		}
