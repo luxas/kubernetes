@@ -158,7 +158,8 @@ authorizers:
 		// webhookBehaviors configures the webhook for this test case.
 		// It is called before makeRequest to set the desired behavior.
 		// Multiple webhook behaviors can be specified to assert the same
-		// result for various webhook configurations
+		// result for various webhook configurations (e.g. out-of-tree
+		// webhook evaluation vs in-tree CEL evaluation).
 		webhookBehaviors map[string]func(ws *webhookServerHandler)
 		// makeRequest creates a client with the given user and performs an API request.
 		// Returns an error if the request fails.
@@ -169,6 +170,7 @@ authorizers:
 		// If nil, uses expectAllowed.
 		expectAllowedWhenDisabled *bool
 	}{
+		// Unconditional decisions: the webhook returns a concrete Allow/Deny/NoOpinion.
 		{
 			name: "unconditional allow from webhook",
 			user: "allow-user",
@@ -191,12 +193,14 @@ authorizers:
 		{
 			name: "unconditional deny from webhook",
 			user: "deny-user",
-			webhookBehaviors: func(ws *webhookServerHandler) {
-				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
-					sar.Status.Allowed = false
-					sar.Status.Denied = true
-					sar.Status.Reason = "unconditionally denied"
-				}
+			webhookBehaviors: map[string]func(ws *webhookServerHandler){
+				"": func(ws *webhookServerHandler) {
+					ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
+						sar.Status.Allowed = false
+						sar.Status.Denied = true
+						sar.Status.Reason = "unconditionally denied"
+					}
+				},
 			},
 			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
@@ -207,33 +211,46 @@ authorizers:
 			expectAllowed: false,
 		},
 		{
+			name: "webhook no-opinion falls through to RBAC allow",
+			user: "webhook-noop-rbac-user",
+			webhookBehaviors: map[string]func(ws *webhookServerHandler){
+				"": func(ws *webhookServerHandler) {
+					ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
+						// NoOpinion: neither allowed nor denied
+						sar.Status.Allowed = false
+						sar.Status.Denied = false
+					}
+				},
+			},
+			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
+				_, err := client.CoreV1().ConfigMaps("test-ns").List(context.TODO(), metav1.ListOptions{})
+				return err
+			},
+			expectAllowed: true,
+		},
+
+		// Conditional decisions: the webhook returns conditions that must be
+		// evaluated. Each test runs with multiple webhook behaviors that produce
+		// the same logical outcome: out-of-tree webhook evaluation, in-tree CEL
+		// evaluation, and in-tree failure falling back to the webhook.
+		{
 			name: "conditional allow - condition evaluates to allow",
 			user: "conditional-allow-user",
-			webhookBehaviors: func(ws *webhookServerHandler) {
-				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
-					// Return a conditional decision with conditions that should evaluate to allow
-					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
-						{
-							ConditionsType: "webhook",
-							Conditions: []authorizationv1.SubjectAccessReviewCondition{
-								{
-									ID:          "always-allow",
-									Effect:      authorizationv1.SubjectAccessReviewConditionEffectAllow,
-									Condition:   "true", // always true
-									Description: "always allow condition",
-								},
+			webhookBehaviors: celConditionalTestCases(func(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
+				sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+					{
+						ConditionsType: conditionsType,
+						Conditions: []authorizationv1.SubjectAccessReviewCondition{
+							{
+								ID:          "always-allow",
+								Effect:      authorizationv1.SubjectAccessReviewConditionEffectAllow,
+								Condition:   "true",
+								Description: "always allow condition",
 							},
 						},
-					}
+					},
 				}
-				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
-					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
-						SubjectAccessReviewAuthorizationDecision: authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{
-							Allowed: true,
-						},
-					}
-				}
-			},
+			}),
 			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
 					ObjectMeta: metav1.ObjectMeta{Name: "test-conditional-allow"},
@@ -248,37 +265,27 @@ authorizers:
 		{
 			name: "conditional deny - condition evaluates to deny",
 			user: "conditional-deny-user",
-			webhookBehaviors: func(ws *webhookServerHandler) {
-				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
-					// Return a conditional decision with a deny condition
-					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
-						{
-							ConditionsType: "webhook",
-							Conditions: []authorizationv1.SubjectAccessReviewCondition{
-								{
-									ID:          "always-allow",
-									Effect:      authorizationv1.SubjectAccessReviewConditionEffectAllow,
-									Condition:   "true",
-									Description: "base allow condition",
-								},
-								{
-									ID:          "always-deny",
-									Effect:      authorizationv1.SubjectAccessReviewConditionEffectDeny,
-									Condition:   "true", // deny is true => denied
-									Description: "always deny condition",
-								},
+			webhookBehaviors: celConditionalTestCases(func(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
+				sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+					{
+						ConditionsType: conditionsType,
+						Conditions: []authorizationv1.SubjectAccessReviewCondition{
+							{
+								ID:          "always-allow",
+								Effect:      authorizationv1.SubjectAccessReviewConditionEffectAllow,
+								Condition:   "true",
+								Description: "base allow condition",
+							},
+							{
+								ID:          "always-deny",
+								Effect:      authorizationv1.SubjectAccessReviewConditionEffectDeny,
+								Condition:   "true",
+								Description: "always deny condition",
 							},
 						},
-					}
+					},
 				}
-				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
-					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
-						SubjectAccessReviewAuthorizationDecision: authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{
-							Denied: true,
-						},
-					}
-				}
-			},
+			}),
 			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
 					ObjectMeta: metav1.ObjectMeta{Name: "test-conditional-deny"},
@@ -290,99 +297,55 @@ authorizers:
 		{
 			name: "conditional no-opinion falls through to RBAC allow",
 			user: "conditional-noop-rbac-user",
-			webhookBehaviors: func(ws *webhookServerHandler) {
-				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
-					// Return a conditional decision that will evaluate to NoOpinion
-					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
-						{
-							ConditionsType: "webhook",
-							Conditions: []authorizationv1.SubjectAccessReviewCondition{
-								{
-									ID:          "no-opinion",
-									Effect:      authorizationv1.SubjectAccessReviewConditionEffectNoOpinion,
-									Condition:   "true", // no-opinion is true => NoOpinion
-									Description: "no opinion condition",
-								},
+			webhookBehaviors: celConditionalTestCases(func(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
+				sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+					{
+						ConditionsType: conditionsType,
+						Conditions: []authorizationv1.SubjectAccessReviewCondition{
+							{
+								ID:          "no-opinion",
+								Effect:      authorizationv1.SubjectAccessReviewConditionEffectNoOpinion,
+								Condition:   "true",
+								Description: "no opinion condition",
 							},
 						},
-					}
+					},
 				}
-				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
-					// NoOpinion: allowed=false, denied=false
-					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
-						SubjectAccessReviewAuthorizationDecision: authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{
-							Allowed: false,
-							Denied:  false,
-						},
-					}
-				}
-			},
+			}),
 			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").List(context.TODO(), metav1.ListOptions{})
 				return err
 			},
-			// With feature enabled: conditional => NoOpinion from webhook conditions evaluation,
-			// but wait — the conditions evaluator returns NoOpinion, so it falls through.
-			// Actually, the conditional flow: webhook returns conditional, and then during admission
-			// the conditions are evaluated. If they return NoOpinion the request is denied because
-			// the authorizer "used up" its chance. So this should be denied.
-			// Let's grant RBAC for this user and observe the conditional NoOpinion behavior:
-			// When feature is enabled, conditional decisions bypass RBAC (they're handled during admission).
+			// With feature enabled: conditional => NoOpinion from conditions evaluation.
 			// The original Authorize() in the chain returns Conditional (which CanBecomeAllowed),
 			// so RBAC is never consulted. The conditions evaluator returns NoOpinion => denied.
 			expectAllowed: false,
 			// When disabled: conditional decision is NoOpinion, RBAC is consulted and allows.
 			expectAllowedWhenDisabled: boolPtr(true),
 		},
-		{
-			name: "webhook no-opinion falls through to RBAC allow",
-			user: "webhook-noop-rbac-user",
-			webhookBehaviors: func(ws *webhookServerHandler) {
-				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
-					// NoOpinion: neither allowed nor denied
-					sar.Status.Allowed = false
-					sar.Status.Denied = false
-				}
-			},
-			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
-				_, err := client.CoreV1().ConfigMaps("test-ns").List(context.TODO(), metav1.ListOptions{})
-				return err
-			},
-			expectAllowed: true,
-		},
 
 		// CEL-based conditional authorization tests.
-		// These test that CEL expressions flow through the SAR → Decision → ACR
-		// pipeline and the webhook can evaluate them against the actual request objects.
+		// These test that CEL expressions flow through the SAR -> Decision -> conditions
+		// evaluation pipeline. The assertions are the same whether conditions are evaluated
+		// in-tree (k8s.io/authorization-cel) or out-of-tree (opaque type via webhook).
 		{
 			name: "cel allow by name pattern",
 			user: "cel-name-user",
-			webhookBehaviors: func(ws *webhookServerHandler) {
-				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
-					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
-						{
-							ConditionsType: "webhook",
-							Conditions: []authorizationv1.SubjectAccessReviewCondition{
-								{
-									ID:          "allow-safe-prefix",
-									Effect:      authorizationv1.SubjectAccessReviewConditionEffectAllow,
-									Condition:   `object.metadata.name.startsWith("safe-")`,
-									Description: "only allow configmaps with safe- prefix",
-								},
+			webhookBehaviors: celConditionalTestCases(func(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
+				sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+					{
+						ConditionsType: conditionsType,
+						Conditions: []authorizationv1.SubjectAccessReviewCondition{
+							{
+								ID:          "allow-safe-prefix",
+								Effect:      authorizationv1.SubjectAccessReviewConditionEffectAllow,
+								Condition:   `object.metadata.name.startsWith("safe-")`,
+								Description: "only allow configmaps with safe- prefix",
 							},
 						},
-					}
+					},
 				}
-				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
-					allowed, denied := celEvaluateConditions(ws.t, acr)
-					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
-						SubjectAccessReviewAuthorizationDecision: authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{
-							Allowed: allowed,
-							Denied:  denied,
-						},
-					}
-				}
-			},
+			}),
 			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
 					ObjectMeta: metav1.ObjectMeta{Name: "safe-configmap"},
@@ -395,32 +358,21 @@ authorizers:
 		{
 			name: "cel deny by name pattern mismatch",
 			user: "cel-name-deny-user",
-			webhookBehaviors: func(ws *webhookServerHandler) {
-				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
-					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
-						{
-							ConditionsType: "webhook",
-							Conditions: []authorizationv1.SubjectAccessReviewCondition{
-								{
-									ID:          "allow-safe-prefix",
-									Effect:      authorizationv1.SubjectAccessReviewConditionEffectAllow,
-									Condition:   `object.metadata.name.startsWith("safe-")`,
-									Description: "only allow configmaps with safe- prefix",
-								},
+			webhookBehaviors: celConditionalTestCases(func(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
+				sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+					{
+						ConditionsType: conditionsType,
+						Conditions: []authorizationv1.SubjectAccessReviewCondition{
+							{
+								ID:          "allow-safe-prefix",
+								Effect:      authorizationv1.SubjectAccessReviewConditionEffectAllow,
+								Condition:   `object.metadata.name.startsWith("safe-")`,
+								Description: "only allow configmaps with safe- prefix",
 							},
 						},
-					}
+					},
 				}
-				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
-					allowed, denied := celEvaluateConditions(ws.t, acr)
-					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
-						SubjectAccessReviewAuthorizationDecision: authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{
-							Allowed: allowed,
-							Denied:  denied,
-						},
-					}
-				}
-			},
+			}),
 			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
 					ObjectMeta: metav1.ObjectMeta{Name: "unsafe-configmap"},
@@ -432,40 +384,29 @@ authorizers:
 		{
 			name: "cel deny by label overrides allow",
 			user: "cel-label-deny-user",
-			webhookBehaviors: func(ws *webhookServerHandler) {
-				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
-					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
-						{
-							ConditionsType: "webhook",
-							Conditions: []authorizationv1.SubjectAccessReviewCondition{
-								{
-									ID:          "allow-all",
-									Effect:      authorizationv1.SubjectAccessReviewConditionEffectAllow,
-									Condition:   "true",
-									Description: "base allow",
-								},
-								{
-									ID:     "deny-restricted-label",
-									Effect: authorizationv1.SubjectAccessReviewConditionEffectDeny,
-									Condition: `has(object.metadata.labels) && ` +
-										`has(object.metadata.labels.restricted) && ` +
-										`object.metadata.labels.restricted == "true"`,
-									Description: "deny restricted labels",
-								},
+			webhookBehaviors: celConditionalTestCases(func(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
+				sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+					{
+						ConditionsType: conditionsType,
+						Conditions: []authorizationv1.SubjectAccessReviewCondition{
+							{
+								ID:          "allow-all",
+								Effect:      authorizationv1.SubjectAccessReviewConditionEffectAllow,
+								Condition:   "true",
+								Description: "base allow",
+							},
+							{
+								ID:     "deny-restricted-label",
+								Effect: authorizationv1.SubjectAccessReviewConditionEffectDeny,
+								Condition: `has(object.metadata.labels) && ` +
+									`has(object.metadata.labels.restricted) && ` +
+									`object.metadata.labels.restricted == "true"`,
+								Description: "deny restricted labels",
 							},
 						},
-					}
+					},
 				}
-				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
-					allowed, denied := celEvaluateConditions(ws.t, acr)
-					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
-						SubjectAccessReviewAuthorizationDecision: authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{
-							Allowed: allowed,
-							Denied:  denied,
-						},
-					}
-				}
-			},
+			}),
 			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
 					ObjectMeta: metav1.ObjectMeta{
@@ -480,34 +421,23 @@ authorizers:
 		{
 			name: "cel allow by data content",
 			user: "cel-data-user",
-			webhookBehaviors: func(ws *webhookServerHandler) {
-				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
-					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
-						{
-							ConditionsType: "webhook",
-							Conditions: []authorizationv1.SubjectAccessReviewCondition{
-								{
-									ID:     "allow-approved-data",
-									Effect: authorizationv1.SubjectAccessReviewConditionEffectAllow,
-									Condition: `has(object.data) && ` +
-										`has(object.data.approved) && ` +
-										`object.data.approved == "yes"`,
-									Description: "only allow configmaps with approved=yes in data",
-								},
+			webhookBehaviors: celConditionalTestCases(func(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
+				sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+					{
+						ConditionsType: conditionsType,
+						Conditions: []authorizationv1.SubjectAccessReviewCondition{
+							{
+								ID:     "allow-approved-data",
+								Effect: authorizationv1.SubjectAccessReviewConditionEffectAllow,
+								Condition: `has(object.data) && ` +
+									`has(object.data.approved) && ` +
+									`object.data.approved == "yes"`,
+								Description: "only allow configmaps with approved=yes in data",
 							},
 						},
-					}
+					},
 				}
-				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
-					allowed, denied := celEvaluateConditions(ws.t, acr)
-					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
-						SubjectAccessReviewAuthorizationDecision: authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{
-							Allowed: allowed,
-							Denied:  denied,
-						},
-					}
-				}
-			},
+			}),
 			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
 					ObjectMeta: metav1.ObjectMeta{Name: "cel-approved-cm"},
@@ -521,34 +451,23 @@ authorizers:
 		{
 			name: "cel deny by data content missing",
 			user: "cel-data-deny-user",
-			webhookBehaviors: func(ws *webhookServerHandler) {
-				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
-					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
-						{
-							ConditionsType: "webhook",
-							Conditions: []authorizationv1.SubjectAccessReviewCondition{
-								{
-									ID:     "allow-approved-data",
-									Effect: authorizationv1.SubjectAccessReviewConditionEffectAllow,
-									Condition: `has(object.data) && ` +
-										`has(object.data.approved) && ` +
-										`object.data.approved == "yes"`,
-									Description: "only allow configmaps with approved=yes in data",
-								},
+			webhookBehaviors: celConditionalTestCases(func(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
+				sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+					{
+						ConditionsType: conditionsType,
+						Conditions: []authorizationv1.SubjectAccessReviewCondition{
+							{
+								ID:     "allow-approved-data",
+								Effect: authorizationv1.SubjectAccessReviewConditionEffectAllow,
+								Condition: `has(object.data) && ` +
+									`has(object.data.approved) && ` +
+									`object.data.approved == "yes"`,
+								Description: "only allow configmaps with approved=yes in data",
 							},
 						},
-					}
+					},
 				}
-				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
-					allowed, denied := celEvaluateConditions(ws.t, acr)
-					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
-						SubjectAccessReviewAuthorizationDecision: authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{
-							Allowed: allowed,
-							Denied:  denied,
-						},
-					}
-				}
-			},
+			}),
 			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
 					ObjectMeta: metav1.ObjectMeta{Name: "cel-unapproved-cm"},
@@ -561,38 +480,27 @@ authorizers:
 		{
 			name: "cel operation-aware deny update",
 			user: "cel-op-user",
-			webhookBehaviors: func(ws *webhookServerHandler) {
-				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
-					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
-						{
-							ConditionsType: "webhook",
-							Conditions: []authorizationv1.SubjectAccessReviewCondition{
-								{
-									ID:          "allow-creates",
-									Effect:      authorizationv1.SubjectAccessReviewConditionEffectAllow,
-									Condition:   `request.operation == "CREATE"`,
-									Description: "allow create operations",
-								},
-								{
-									ID:          "deny-updates",
-									Effect:      authorizationv1.SubjectAccessReviewConditionEffectDeny,
-									Condition:   `request.operation == "UPDATE"`,
-									Description: "deny update operations",
-								},
+			webhookBehaviors: celConditionalTestCases(func(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
+				sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+					{
+						ConditionsType: conditionsType,
+						Conditions: []authorizationv1.SubjectAccessReviewCondition{
+							{
+								ID:          "allow-creates",
+								Effect:      authorizationv1.SubjectAccessReviewConditionEffectAllow,
+								Condition:   `request.operation == "CREATE"`,
+								Description: "allow create operations",
+							},
+							{
+								ID:          "deny-updates",
+								Effect:      authorizationv1.SubjectAccessReviewConditionEffectDeny,
+								Condition:   `request.operation == "UPDATE"`,
+								Description: "deny update operations",
 							},
 						},
-					}
+					},
 				}
-				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
-					allowed, denied := celEvaluateConditions(ws.t, acr)
-					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
-						SubjectAccessReviewAuthorizationDecision: authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{
-							Allowed: allowed,
-							Denied:  denied,
-						},
-					}
-				}
-			},
+			}),
 			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
 				// Create should succeed (CEL allows CREATE)
 				cm, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
@@ -613,44 +521,33 @@ authorizers:
 		{
 			name: "cel deny overrides allow and noopinion",
 			user: "cel-priority-user",
-			webhookBehaviors: func(ws *webhookServerHandler) {
-				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
-					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
-						{
-							ConditionsType: "webhook",
-							Conditions: []authorizationv1.SubjectAccessReviewCondition{
-								{
-									ID:          "allow-all",
-									Effect:      authorizationv1.SubjectAccessReviewConditionEffectAllow,
-									Condition:   "true",
-									Description: "allow everything",
-								},
-								{
-									ID:          "noop-all",
-									Effect:      authorizationv1.SubjectAccessReviewConditionEffectNoOpinion,
-									Condition:   "true",
-									Description: "no opinion on everything",
-								},
-								{
-									ID:          "deny-all",
-									Effect:      authorizationv1.SubjectAccessReviewConditionEffectDeny,
-									Condition:   "true",
-									Description: "deny everything",
-								},
+			webhookBehaviors: celConditionalTestCases(func(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
+				sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+					{
+						ConditionsType: conditionsType,
+						Conditions: []authorizationv1.SubjectAccessReviewCondition{
+							{
+								ID:          "allow-all",
+								Effect:      authorizationv1.SubjectAccessReviewConditionEffectAllow,
+								Condition:   "true",
+								Description: "allow everything",
+							},
+							{
+								ID:          "noop-all",
+								Effect:      authorizationv1.SubjectAccessReviewConditionEffectNoOpinion,
+								Condition:   "true",
+								Description: "no opinion on everything",
+							},
+							{
+								ID:          "deny-all",
+								Effect:      authorizationv1.SubjectAccessReviewConditionEffectDeny,
+								Condition:   "true",
+								Description: "deny everything",
 							},
 						},
-					}
+					},
 				}
-				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
-					allowed, denied := celEvaluateConditions(ws.t, acr)
-					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
-						SubjectAccessReviewAuthorizationDecision: authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{
-							Allowed: allowed,
-							Denied:  denied,
-						},
-					}
-				}
-			},
+			}),
 			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
 					ObjectMeta: metav1.ObjectMeta{Name: "cel-priority-cm"},
@@ -662,40 +559,29 @@ authorizers:
 		{
 			name: "cel noopinion overrides allow",
 			user: "cel-noop-vs-allow-user",
-			webhookBehaviors: func(ws *webhookServerHandler) {
-				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
-					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
-						{
-							ConditionsType: "webhook",
-							Conditions: []authorizationv1.SubjectAccessReviewCondition{
-								{
-									ID:          "allow-all",
-									Effect:      authorizationv1.SubjectAccessReviewConditionEffectAllow,
-									Condition:   "true",
-									Description: "allow everything",
-								},
-								{
-									ID:     "noop-on-pending-review",
-									Effect: authorizationv1.SubjectAccessReviewConditionEffectNoOpinion,
-									Condition: `has(object.metadata.labels) && ` +
-										`has(object.metadata.labels.review) && ` +
-										`object.metadata.labels.review == "pending"`,
-									Description: "no opinion when review=pending label is present",
-								},
+			webhookBehaviors: celConditionalTestCases(func(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
+				sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+					{
+						ConditionsType: conditionsType,
+						Conditions: []authorizationv1.SubjectAccessReviewCondition{
+							{
+								ID:          "allow-all",
+								Effect:      authorizationv1.SubjectAccessReviewConditionEffectAllow,
+								Condition:   "true",
+								Description: "allow everything",
+							},
+							{
+								ID:     "noop-on-pending-review",
+								Effect: authorizationv1.SubjectAccessReviewConditionEffectNoOpinion,
+								Condition: `has(object.metadata.labels) && ` +
+									`has(object.metadata.labels.review) && ` +
+									`object.metadata.labels.review == "pending"`,
+								Description: "no opinion when review=pending label is present",
 							},
 						},
-					}
+					},
 				}
-				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
-					allowed, denied := celEvaluateConditions(ws.t, acr)
-					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
-						SubjectAccessReviewAuthorizationDecision: authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{
-							Allowed: allowed,
-							Denied:  denied,
-						},
-					}
-				}
-			},
+			}),
 			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
 					ObjectMeta: metav1.ObjectMeta{
@@ -716,45 +602,34 @@ authorizers:
 		{
 			name: "update-to-create conditional allow by label",
 			user: "update-create-allow-user",
-			webhookBehaviors: func(ws *webhookServerHandler) {
-				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
-					if sar.Spec.ResourceAttributes == nil {
-						return
-					}
-					switch sar.Spec.ResourceAttributes.Verb {
-					case "update", "patch":
-						// Unconditionally allow updates
-						sar.Status.Allowed = true
-						sar.Status.Reason = "updates always allowed"
-					case "create":
-						// Conditionally allow creates: only when creator=update-create-allow-user
-						sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
-							{
-								ConditionsType: "webhook",
-								Conditions: []authorizationv1.SubjectAccessReviewCondition{
-									{
-										ID:     "require-owner-label",
-										Effect: authorizationv1.SubjectAccessReviewConditionEffectAllow,
-										Condition: `has(object.metadata.labels) && ` +
-											`has(object.metadata.labels.creator) && ` +
-											`object.metadata.labels.creator == "update-create-allow-user"`,
-										Description: "only allow creates when creator=update-create-allow-user",
-									},
+			webhookBehaviors: celConditionalTestCases(func(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
+				if sar.Spec.ResourceAttributes == nil {
+					return
+				}
+				switch sar.Spec.ResourceAttributes.Verb {
+				case "update", "patch":
+					// Unconditionally allow updates
+					sar.Status.Allowed = true
+					sar.Status.Reason = "updates always allowed"
+				case "create":
+					// Conditionally allow creates: only when creator=update-create-allow-user
+					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+						{
+							ConditionsType: conditionsType,
+							Conditions: []authorizationv1.SubjectAccessReviewCondition{
+								{
+									ID:     "require-owner-label",
+									Effect: authorizationv1.SubjectAccessReviewConditionEffectAllow,
+									Condition: `has(object.metadata.labels) && ` +
+										`has(object.metadata.labels.creator) && ` +
+										`object.metadata.labels.creator == "update-create-allow-user"`,
+									Description: "only allow creates when creator=update-create-allow-user",
 								},
 							},
-						}
-					}
-				}
-				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
-					allowed, denied := celEvaluateConditions(ws.t, acr)
-					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
-						SubjectAccessReviewAuthorizationDecision: authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{
-							Allowed: allowed,
-							Denied:  denied,
 						},
 					}
 				}
-			},
+			}),
 			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
 				// PUT a non-existent lease with creator=update-create-allow-user.
 				// Since Leases support AllowCreateOnUpdate, this becomes a create.
@@ -782,47 +657,36 @@ authorizers:
 		{
 			name: "update-to-create conditional deny by label",
 			user: "update-create-deny-user",
-			webhookBehaviors: func(ws *webhookServerHandler) {
-				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
-					if sar.Spec.ResourceAttributes == nil {
-						return
-					}
-					switch sar.Spec.ResourceAttributes.Verb {
-					case "update", "patch":
-						// Unconditionally allow updates
-						sar.Status.Allowed = true
-						sar.Status.Reason = "updates always allowed"
-					case "create":
-						// Conditionally allow creates: only when creator=update-create-deny-user
-						sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
-							{
-								ConditionsType: "webhook",
-								Conditions: []authorizationv1.SubjectAccessReviewCondition{
-									{
-										ID:     "require-owner-label",
-										Effect: authorizationv1.SubjectAccessReviewConditionEffectAllow,
-										Condition: `has(object.metadata.labels) && ` +
-											`has(object.metadata.labels.creator) && ` +
-											`object.metadata.labels.creator == "update-create-deny-user"`,
-										Description: "only allow creates when creator=update-create-deny-user",
-									},
+			webhookBehaviors: celConditionalTestCases(func(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
+				if sar.Spec.ResourceAttributes == nil {
+					return
+				}
+				switch sar.Spec.ResourceAttributes.Verb {
+				case "update", "patch":
+					// Unconditionally allow updates
+					sar.Status.Allowed = true
+					sar.Status.Reason = "updates always allowed"
+				case "create":
+					// Conditionally allow creates: only when creator=update-create-deny-user
+					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+						{
+							ConditionsType: conditionsType,
+							Conditions: []authorizationv1.SubjectAccessReviewCondition{
+								{
+									ID:     "require-owner-label",
+									Effect: authorizationv1.SubjectAccessReviewConditionEffectAllow,
+									Condition: `has(object.metadata.labels) && ` +
+										`has(object.metadata.labels.creator) && ` +
+										`object.metadata.labels.creator == "update-create-deny-user"`,
+									Description: "only allow creates when creator=update-create-deny-user",
 								},
 							},
-						}
-					}
-				}
-				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
-					allowed, denied := celEvaluateConditions(ws.t, acr)
-					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
-						SubjectAccessReviewAuthorizationDecision: authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{
-							Allowed: allowed,
-							Denied:  denied,
 						},
 					}
 				}
-			},
+			}),
 			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
-				// PUT a non-existent lease with classified=true.
+				// PUT a non-existent lease with creator=not-authorized-user.
 				// The create authorization should fail because the condition is not met.
 				_, err := client.CoordinationV1().Leases("test-ns").Update(context.TODO(), &coordinationv1.Lease{
 					ObjectMeta: metav1.ObjectMeta{
@@ -844,61 +708,50 @@ authorizers:
 		{
 			name: "update-to-create, both update and create conditions must be satisfied",
 			user: "update-create-deny-user",
-			webhookBehaviors: func(ws *webhookServerHandler) {
-				ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
-					if sar.Spec.ResourceAttributes == nil {
-						return
-					}
-					switch sar.Spec.ResourceAttributes.Verb {
-					case "update", "patch":
-						// Conditionally allow updates: only when classified=false
-						sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
-							{
-								ConditionsType: "webhook",
-								Conditions: []authorizationv1.SubjectAccessReviewCondition{
-									{
-										ID:     "allow-unclassified",
-										Effect: authorizationv1.SubjectAccessReviewConditionEffectAllow,
-										Condition: `has(object.metadata.labels) && ` +
-											`has(object.metadata.labels.classified) && ` +
-											`object.metadata.labels.classified == "false"`,
-										Description: "only allow creates when classified=false",
-									},
-								},
-							},
-						}
-					case "create":
-						// Conditionally allow creates: only when creator=update-create-deny-user
-						sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
-							{
-								ConditionsType: "webhook",
-								Conditions: []authorizationv1.SubjectAccessReviewCondition{
-									{
-										ID:     "require-owner-label",
-										Effect: authorizationv1.SubjectAccessReviewConditionEffectAllow,
-										Condition: `has(object.metadata.labels) && ` +
-											`has(object.metadata.labels.creator) && ` +
-											`object.metadata.labels.creator == "update-create-deny-user"`,
-										Description: "only allow creates when creator=update-create-deny-user",
-									},
-								},
-							},
-						}
-					}
+			webhookBehaviors: celConditionalTestCases(func(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
+				if sar.Spec.ResourceAttributes == nil {
+					return
 				}
-				ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
-					allowed, denied := celEvaluateConditions(ws.t, acr)
-					acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
-						SubjectAccessReviewAuthorizationDecision: authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{
-							Allowed: allowed,
-							Denied:  denied,
+				switch sar.Spec.ResourceAttributes.Verb {
+				case "update", "patch":
+					// Conditionally allow updates: only when classified=false
+					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+						{
+							ConditionsType: conditionsType,
+							Conditions: []authorizationv1.SubjectAccessReviewCondition{
+								{
+									ID:     "allow-unclassified",
+									Effect: authorizationv1.SubjectAccessReviewConditionEffectAllow,
+									Condition: `has(object.metadata.labels) && ` +
+										`has(object.metadata.labels.classified) && ` +
+										`object.metadata.labels.classified == "false"`,
+									Description: "only allow creates when classified=false",
+								},
+							},
+						},
+					}
+				case "create":
+					// Conditionally allow creates: only when creator=update-create-deny-user
+					sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+						{
+							ConditionsType: conditionsType,
+							Conditions: []authorizationv1.SubjectAccessReviewCondition{
+								{
+									ID:     "require-owner-label",
+									Effect: authorizationv1.SubjectAccessReviewConditionEffectAllow,
+									Condition: `has(object.metadata.labels) && ` +
+										`has(object.metadata.labels.creator) && ` +
+										`object.metadata.labels.creator == "update-create-deny-user"`,
+									Description: "only allow creates when creator=update-create-deny-user",
+								},
+							},
 						},
 					}
 				}
-			},
+			}),
 			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
-				// PUT a non-existent lease with classified=true.
-				// The create authorization should fail because the condition is not met.
+				// PUT a non-existent lease with creator=update-create-deny-user but no classified label.
+				// The create authorization should fail because the update condition (classified=false) is not met.
 				_, err := client.CoordinationV1().Leases("test-ns").Update(context.TODO(), &coordinationv1.Lease{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:   "update-create-denied-by-update-condition",
@@ -973,16 +826,23 @@ func boolPtr(b bool) *bool {
 	return &b
 }
 
+// acrEvaluateCEL returns an ACR handler that reads conditions from the ACR
+// request, verifies the conditions type, evaluates CEL expressions against the
+// write request objects, and sets the response.
 func acrEvaluateCEL(t *testing.T, expectedConditionsType string) func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
 	return func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
-		if len(acr.Response.ConditionalDecisionChain) != 1 {
-			t.Fatal("expected exactly one ConditionSet") // This could be extended later with more complex test cases
+		decision := acr.Request.Decision
+		// The webhook serializes conditional decisions as a chain; unwrap.
+		if len(decision.ConditionalDecisionChain) > 0 {
+			if len(decision.ConditionalDecisionChain) != 1 {
+				t.Fatalf("expected exactly one ConditionSet in chain, got %d", len(decision.ConditionalDecisionChain))
+			}
+			decision = decision.ConditionalDecisionChain[0]
 		}
-		conditionSet := acr.Response.ConditionalDecisionChain[0]
-		if conditionSet.ConditionsType != expectedConditionsType {
-			t.Fatalf("Expected conditions type %q, got ", expectedConditionsType, conditionSet.ConditionsType)
+		if decision.ConditionsType != expectedConditionsType {
+			t.Fatalf("expected conditions type %q, got %q", expectedConditionsType, decision.ConditionsType)
 		}
-		allowed, denied := celEvaluateConditions(t, acr.Request.WriteRequest, &conditionSet)
+		allowed, denied := celEvaluateConditions(t, acr.Request.WriteRequest, &decision)
 		acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
 			SubjectAccessReviewAuthorizationDecision: authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{
 				Allowed: allowed,
@@ -992,27 +852,43 @@ func acrEvaluateCEL(t *testing.T, expectedConditionsType string) func(acr *autho
 	}
 }
 
+// celConditionalTestCases creates three webhook behavior variants for the same
+// conditional authorization test, asserting the same outcome regardless of
+// whether conditions are evaluated out-of-tree (via the webhook) or in-tree
+// (via the built-in CEL evaluator):
+//
+//   - "using-webhook-only": conditions use an opaque type that only the webhook
+//     can evaluate. Verifies the out-of-tree evaluation path.
+//   - "in-process-eval-only": conditions use "k8s.io/authorization-cel" so the
+//     built-in evaluator handles them. The ACR handler is set to panic if called,
+//     verifying that the webhook is NOT consulted.
+//   - "if-in-process-fails-call-webhook": conditions use "k8s.io/authorization-cel"
+//     but are prefixed with invalid syntax so in-tree evaluation fails. Verifies
+//     that the kube-apiserver falls back to the webhook, which strips the prefix
+//     and evaluates successfully.
 func celConditionalTestCases(processSAR func(sar *authorizationv1.SubjectAccessReview, conditionsType string)) map[string]func(*webhookServerHandler) {
 	return map[string]func(*webhookServerHandler){
-		// when the condition type is opaque, the webhook should be called to resolve the condition
+		// When the condition type is opaque, the webhook should be called to resolve the condition.
 		"using-webhook-only": func(ws *webhookServerHandler) {
 			ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
-				// Return a conditional decision with conditions that should evaluate to allow
 				processSAR(sar, "opaque-cel-condition-type")
 			}
 			ws.acrHandler = acrEvaluateCEL(ws.t, "opaque-cel-condition-type")
 		},
+		// When the condition type is k8s.io/authorization-cel, in-tree evaluation handles it.
 		"in-process-eval-only": func(ws *webhookServerHandler) {
 			ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
 				processSAR(sar, "k8s.io/authorization-cel")
 			}
 			// Ensure no calls to ACR are made, as the above should be handled in-tree only.
-			// If Kubernetes did webhook out to us, the test panics as the conditions type does not match
+			// If Kubernetes did webhook out to us, the test panics as the conditions type does not match.
 			ws.acrHandler = acrEvaluateCEL(ws.t, "nonexistent-panic-on-ACR-webhook")
 		},
+		// When in-tree evaluation fails (e.g. newer CEL syntax), it falls back to the webhook.
 		"if-in-process-fails-call-webhook": func(ws *webhookServerHandler) {
 			ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
 				processSAR(sar, "k8s.io/authorization-cel")
+
 				if len(sar.Status.ConditionalDecisionChain) != 0 {
 					if len(sar.Status.ConditionalDecisionChain) != 1 {
 						ws.t.Fatal("current test expects exactly 0 or 1 conditional decision")
@@ -1021,21 +897,21 @@ func celConditionalTestCases(processSAR func(sar *authorizationv1.SubjectAccessR
 					if len(d.Conditions) == 0 {
 						ws.t.Fatal("current test expects a conditionset in the first conditional decision")
 					}
-					for i := range d.Conditions {
-						d.Conditions[i].Condition = "unsupported-in-tree && " + d.Conditions[i].Condition
+					// Corrupt each condition with an invalid prefix so in-tree evaluation fails.
+					for j := range d.Conditions {
+						d.Conditions[j].Condition = "unsupported_in_tree && " + d.Conditions[j].Condition
 					}
 				}
 			}
-			// Ensure that a call to the webhook is made, even though in-tree evaluation failed, and that
-			// the webhook answer is the one that matters in the end
-			// This simulates the case where the webhook would use a newer CEL expression syntax version than the
-			// kube-apiserver (such that in-tree evaluation fails). In this case the request must still succeed,
-			// as the kube-apiserver calls back to the webhook as if the condition type was opaque.
+			// The webhook should be called as fallback. Strip the prefix and evaluate.
 			ws.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
-				for i := range acr.Request.Decision.Conditions {
-					acr.Request.Decision.Conditions[i].Condition = strings.TrimPrefix(acr.Request.Decision.Conditions[i].Condition, "unsupported-in-tree &&")
+				decision := &acr.Request.Decision
+				if len(decision.Conditions) == 0 {
+					ws.t.Fatal("current test expects a conditionset")
 				}
-
+				for i := range decision.Conditions {
+					decision.Conditions[i].Condition = strings.TrimPrefix(decision.Conditions[i].Condition, "unsupported_in_tree && ")
+				}
 				acrEvaluateCEL(ws.t, "k8s.io/authorization-cel")(acr)
 			}
 		},
@@ -1153,8 +1029,8 @@ func safeResourceAttr(sar *authorizationv1.SubjectAccessReview, fn func(*authori
 	return "<non-resource>"
 }
 
-// celEvaluateConditions evaluates CEL conditions from an ACR request against
-// the objects in the write request. It follows the condition precedence:
+// celEvaluateConditions evaluates CEL conditions from a serialized decision
+// against the objects in the write request. It follows the condition precedence:
 // Deny > NoOpinion > Allow (matching EvaluateConditionSet semantics).
 // Returns (allowed, denied).
 func celEvaluateConditions(t *testing.T, wr *authorizationv1alpha1.AuthorizationConditionsWriteRequest, serializedDecision *authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision) (bool, bool) {
@@ -1233,20 +1109,6 @@ func celEvaluateConditions(t *testing.T, wr *authorizationv1alpha1.Authorization
 
 	// Default: NoOpinion
 	return false, false
-}
-
-// collectConditions recursively extracts all conditions from a decision.
-// When the decision comes through an aggregated API server, the conditions may
-// be nested inside ConditionalDecisionChain entries rather than at the top level.
-func collectConditions(decision authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision) []authorizationv1alpha1.SubjectAccessReviewCondition {
-	if len(decision.Conditions) > 0 {
-		return decision.Conditions
-	}
-	var conditions []authorizationv1alpha1.SubjectAccessReviewCondition
-	for _, subDecision := range decision.ConditionalDecisionChain {
-		conditions = append(conditions, collectConditions(subDecision)...)
-	}
-	return conditions
 }
 
 // evalCEL compiles and evaluates a single CEL expression, returning true/false.
