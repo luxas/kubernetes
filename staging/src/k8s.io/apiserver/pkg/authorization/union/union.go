@@ -92,7 +92,6 @@ func (authzHandler unionAuthzHandler) EvaluateConditions(ctx context.Context, un
 			continue
 		}
 
-		failClosedDecision := unevaluatedSubDecision.FailClosedDecision()
 		conditionsAuthorizer := authzHandler[i]
 		evalResult, err := conditionsAuthorizer.EvaluateConditions(ctx, unevaluatedSubDecision, data)
 		if evalResult.IsAllowed() || evalResult.IsDenied() {
@@ -112,6 +111,7 @@ func (authzHandler unionAuthzHandler) EvaluateConditions(ctx context.Context, un
 		if err != nil {
 			errlist = append(errlist, err)
 		}
+		failClosedDecision := unevaluatedSubDecision.FailClosedDecision()
 		if failClosedDecision.IsDenied() {
 			return failClosedDecision, err
 		}
