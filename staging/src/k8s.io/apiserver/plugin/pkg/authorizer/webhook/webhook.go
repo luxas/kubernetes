@@ -450,7 +450,8 @@ func deserializeDecision(attrs authorizer.Attributes, serializedDecision authori
 	}
 
 	if hasConditionSet {
-		return authorizer.DecisionConditional(attrs, serializedDecision.ConditionsType, toAuthorizerConditions(serializedDecision.Conditions))
+		ct := authorizer.ConditionType(serializedDecision.ConditionsType)
+		return authorizer.DecisionConditional(attrs, ct, toAuthorizerConditions(serializedDecision.Conditions))
 	}
 
 	if hasDecisionChain {
@@ -484,7 +485,7 @@ func conditionSetToInternalAPIDecision(conditionSet *authorizer.ConditionSet) au
 
 	return authorizationv1alpha1.SubjectAccessReviewAuthorizationDecision{
 		Conditions:     conds,
-		ConditionsType: conditionSet.Type(),
+		ConditionsType: string(conditionSet.Type()),
 	}
 }
 

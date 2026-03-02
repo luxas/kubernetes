@@ -23,7 +23,6 @@ import (
 	"net/http"
 	"strings"
 
-	"k8s.io/apimachinery/pkg/api/validate/content"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
@@ -88,14 +87,24 @@ type Attributes interface {
 	GetConditionsMode() ConditionsMode
 }
 
+type ConditionSetEvaluator interface {
+	// EvaluateConditions evaluates a condition set given more information in ConditionData.
+	// The resulting Decision may be concrete (Allow/Deny/NoOpinion), or again conditional, if the
+	// data in ConditionData is partial.
+	// If the evaluator does not know how to evaluate the given decision, the evaluator should just
+	// return decision, nil
+	// TODO: Change all no-op implementations to just return decision, nil.
+	EvaluateConditions(ctx context.Context, decision Decision, data ConditionData) (Decision, error)
+}
+
 // Authorizer makes an authorization decision based on information gained by making
 // zero or more calls to methods of the Attributes interface. It might return
 // an error together with any decision. It is then up to the caller to decide
 // whether that error is critical or not.
 type Authorizer interface {
-	ConditionSetEvaluator
-
 	Authorize(ctx context.Context, a Attributes) (Decision, error)
+
+	ConditionSetEvaluator
 }
 
 // AuthorizerFunc implements Authorizer using a function.
@@ -277,7 +286,7 @@ func DecisionNoOpinion(reasons ...string) Decision {
 // TODO: Should reason be encoded on the Decision struct in the SAR API?
 
 // TODO: How to build the Decision type from the serialized SAR when one needs to provide the authorizer?
-func DecisionConditional(attrs Attributes, conditionType string, conditionsIter iter.Seq2[string, Condition], reasons ...string) (Decision, error) {
+func DecisionConditional(attrs Attributes, conditionType ConditionType, conditionsIter iter.Seq2[string, Condition], reasons ...string) (Decision, error) {
 	conditionSet := map[string]Condition{}
 	seenIDs := sets.New[string]()
 	errlist := []error{}
@@ -290,7 +299,7 @@ func DecisionConditional(attrs Attributes, conditionType string, conditionsIter 
 			errlist = append(errlist, fmt.Errorf("duplicate condition ID %q", id))
 			continue
 		}
-		if err := validateCondition(id, condition); err != nil {
+		if err := condition.Validate(id); err != nil {
 			errlist = append(errlist, err)
 			continue
 		}
@@ -320,8 +329,8 @@ func DecisionConditional(attrs Attributes, conditionType string, conditionsIter 
 		return DecisionNoOpinion("empty ConditionSet"), nil
 	}
 
-	if errs := content.IsLabelKey(conditionType); len(errs) > 0 {
-		return failClosedError, fmt.Errorf("invalid condition type %q: %s", conditionType, strings.Join(errs, "; "))
+	if err := conditionType.Validate(); err != nil {
+		return failClosedError, err
 	}
 
 	// Protect against authorizers that forget to fail closed for clients that aren't conditions-aware
@@ -380,6 +389,7 @@ func (chain ConditionalDecisionChain) HasConcreteResponse() bool {
 	return false
 }
 
+// TODO: Make sure one cannot build a cyclic graph here.
 func DecisionConditionalChain(decisions ...Decision) Decision {
 	if len(decisions) == 0 {
 		return DecisionNoOpinion()
@@ -477,6 +487,11 @@ func (d Decision) IsDenied() bool {
 	// is not enough to check d.unconditionalDecision == decisionDeny
 	// This is because the zero value of the struct must be a Deny
 	return !d.IsAllowed() && !d.IsNoOpinion() && !d.IsConditional() && !d.IsConditionalChain()
+}
+
+// IsConcrete is true if d is Allowed, Denied or NoOpinion.
+func (d Decision) IsConcrete() bool {
+	return d.IsAllowed() || d.IsDenied() || d.IsNoOpinion()
 }
 
 func (d Decision) FailClosedDecision() Decision {

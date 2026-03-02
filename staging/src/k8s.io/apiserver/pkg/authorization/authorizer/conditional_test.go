@@ -441,7 +441,7 @@ func TestEvaluateConditionSet(t *testing.T) {
 	tests := []struct {
 		name          string
 		conditionSet  *ConditionSet
-		supportedType string
+		supportedType ConditionType
 		eval          func(string) (bool, error)
 		wantDecision  string
 		wantErr       bool

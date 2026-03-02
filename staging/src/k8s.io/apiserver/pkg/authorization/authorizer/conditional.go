@@ -17,7 +17,6 @@ limitations under the License.
 package authorizer
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"iter"
@@ -28,7 +27,6 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
-	"k8s.io/apimachinery/pkg/util/sets"
 )
 
 // ErrorConditionEvaluationNotSupported is returned by authorizer implementations
@@ -39,7 +37,7 @@ var ErrorConditionEvaluationNotSupported = errors.New("condition evaluation not 
 const (
 	// MaxConditionsPerSet is the maximum number of conditions allowed in a single ConditionSet.
 	MaxConditionsPerSet = 128
-	// MaxConditionBytes is the maximum size in bytes for a single Condition.Condition string.
+	// MaxConditionBytes is the maximum size in bytes for a single Condition.Condition and Condition.Description string.
 	MaxConditionBytes = 10240
 )
 
@@ -68,9 +66,6 @@ const (
 	ConditionEffectAllow ConditionEffect = "Allow"
 )
 
-// reservedConditionIDPrefix is the prefix reserved for Kubernetes-defined condition IDs.
-const reservedConditionIDPrefix = "k8s.io/"
-
 // Condition represents a single condition to be evaluated against ConditionData.
 // A condition is a pure, deterministic function from ConditionData to a Boolean.
 type Condition struct {
@@ -87,13 +82,42 @@ type Condition struct {
 	Description string
 }
 
+// validateCondition validates a single Condition.
+func (cond Condition) Validate(id string) error {
+	// Validate ID as a label key.
+	if errs := content.IsLabelKey(id); len(errs) > 0 {
+		return fmt.Errorf("invalid condition ID %q: %s", id, strings.Join(errs, "; "))
+	}
+
+	// Validate Condition strings length.
+	if len(cond.Condition) == 0 {
+		return fmt.Errorf("condition %q has empty Condition string", id)
+	}
+	if len(cond.Condition) > MaxConditionBytes {
+		return fmt.Errorf("condition %q exceeds maximum length of %d bytes (saw %d bytes)", id, MaxConditionBytes, len(cond.Condition))
+	}
+	if len(cond.Description) > MaxConditionBytes {
+		return fmt.Errorf("condition description %q exceeds maximum length of %d bytes (saw %d bytes)", id, MaxConditionBytes, len(cond.Condition))
+	}
+
+	// Validate Effect.
+	switch cond.Effect {
+	case ConditionEffectAllow, ConditionEffectDeny, ConditionEffectNoOpinion:
+		// valid
+	default:
+		return fmt.Errorf("condition %q has invalid effect %q", id, cond.Effect)
+	}
+
+	return nil
+}
+
 // ConditionSet represents a conditional response from an authorizer.
 // It must be constructed through DecisionConditional.
 type ConditionSet struct {
 	// conditionType is the format/encoding/language of the conditions in this set.
 	// Any type starting with `k8s.io/` is reserved for Kubernetes condition types.
 	// Validated as a label key.
-	conditionType string
+	conditionType ConditionType
 
 	// conditions is the set of conditions to evaluate.
 	// The string ID uniquely identifies the condition within the scope of the authorizer
@@ -105,7 +129,7 @@ type ConditionSet struct {
 
 // Type returns the condition type (format/encoding/language) of the conditions
 // in this set.
-func (c *ConditionSet) Type() string {
+func (c *ConditionSet) Type() ConditionType {
 	return c.conditionType
 }
 
@@ -195,48 +219,10 @@ func (c *ConditionSet) FailClosedDecision() Decision {
 	return DecisionNoOpinion()
 }
 
-// validateCondition validates a single Condition.
-func validateCondition(id string, cond Condition) error {
-	// Validate ID as a label key.
-	if errs := content.IsLabelKey(id); len(errs) > 0 {
-		return fmt.Errorf("invalid condition ID %q: %s", id, strings.Join(errs, "; "))
-	}
-
-	// Reject reserved k8s.io/ prefix.
-	if strings.HasPrefix(id, reservedConditionIDPrefix) {
-		return fmt.Errorf("condition ID %q uses reserved prefix %q", id, reservedConditionIDPrefix)
-	}
-
-	// Validate Condition string length.
-	if len(cond.Condition) == 0 {
-		return fmt.Errorf("condition %q has empty Condition string", id)
-	}
-	if len(cond.Condition) > MaxConditionBytes {
-		return fmt.Errorf("condition %q exceeds maximum length of %d bytes (%d bytes)", id, MaxConditionBytes, len(cond.Condition))
-	}
-
-	// Validate Effect.
-	switch cond.Effect {
-	case ConditionEffectAllow, ConditionEffectDeny, ConditionEffectNoOpinion:
-		// valid
-	default:
-		return fmt.Errorf("condition %q has invalid effect %q", id, cond.Effect)
-	}
-
-	return nil
-}
-
-// ConditionSetEvaluator evaluates a condition set given more information in ConditionData.
-// The resulting Decision may be concrete (Allow/Deny/NoOpinion), or again conditional, if the
-// data in ConditionData is partial.
-type ConditionSetEvaluator interface {
-	EvaluateConditions(ctx context.Context, decision Decision, data ConditionData) (Decision, error)
-}
-
 // EvaluateConditionSet evaluates the conditions in the set into a concrete Allow/Deny/NoOpinion Decision, given an
 // evaluation function with a given supported condition type.
 // This is a reference implementation that other conditional authorizers can use if convenient.
-func EvaluateConditionSet(conditionSet *ConditionSet, supportedConditionType string, eval func(string) (bool, error)) (Decision, error) {
+func EvaluateConditionSet(conditionSet *ConditionSet, supportedConditionType ConditionType, eval func(string) (bool, error)) (Decision, error) {
 	if conditionSet == nil {
 		return DecisionNoOpinion(), nil
 	}
@@ -295,15 +281,35 @@ func EvaluateConditionSet(conditionSet *ConditionSet, supportedConditionType str
 	return DecisionNoOpinion("no conditions matched"), utilerrors.NewAggregate(errlist)
 }
 
+// ConditionType represents a type of authorization conditions
+// Should be formatted as a Kubernetes label.
+// Any domain suffix of *.k8s.io or *.kubernetes.io is reserved
+// TODO: Should this be a private struct that must be instantiated through the constructor
+type ConditionType string
+
+func (ct ConditionType) Validate() error {
+	if errs := content.IsLabelKey(string(ct)); len(errs) > 0 {
+		return fmt.Errorf("invalid condition type %q: %s", ct, strings.Join(errs, "; "))
+	}
+	return nil
+}
+
 // BuiltinConditionSetEvaluator is a ConditionSetEvaluator that can evaluate
 // conditions of a specific type in-process, without requiring a webhook call.
-type BuiltinConditionSetEvaluator interface {
-	ConditionSetEvaluator
+/*type BuiltinConditionSetEvaluator interface {
+	// BuiltinEvaluateConditions evaluates a decision given more information in ConditionData.
+	// If the evaluator does not know how to evaluate the given Decision, it MUST return the
+	// same decision as return decision, nil. TODO: add a boolean?
+	// The resulting Decision may be concrete (Allow/Deny/NoOpinion), or again conditional, if the
+	// data in ConditionData is partial.
+	BuiltinEvaluateConditions(ctx context.Context, decision Decision, data ConditionData) (Decision, error)
 
-	// SupportedConditionType returns the condition type that this evaluator
+	// SupportedConditionTypes returns the condition type that this evaluator
 	// supports (e.g. "k8s.io/cel").
-	SupportedConditionType() sets.Set[string]
-}
+	// SupportedConditionTypes() sets.Set[ConditionType]
+}*/
+
+// TODO: Provide a recursive decision (de)serialization function, to avoid duplication?
 
 // ConditionData provides the data that was unknown at authorization time but
 // is now available for condition evaluation. This includes the request object,

@@ -2,11 +2,11 @@ package conditionsenforcer
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apiserver/pkg/admission"
 	genericadmissioninit "k8s.io/apiserver/pkg/admission/initializer"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
@@ -14,7 +14,6 @@ import (
 	"k8s.io/apiserver/pkg/endpoints/handlers/responsewriters"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	genericfeatures "k8s.io/apiserver/pkg/features"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/component-base/featuregate"
 	"k8s.io/klog/v2"
 )
@@ -37,44 +36,47 @@ func Register(plugins *admission.Plugins) {
 	schema.GroupVersionResource{Group: authorizationv1.SchemeGroupVersion.Group, Version: authorizationv1.SchemeGroupVersion.Version, Resource: "selfsubjectaccessreviews"},
 )*/
 
+// TODO: Add an integration test that it's not possible to intercept SAR or ACR using this admission controller
+
 var _ admission.Interface = &ConditionalAuthorizationEnforcer{}
 var _ admission.ValidationInterface = &ConditionalAuthorizationEnforcer{}
-var _ genericadmissioninit.WantsExternalKubeClientSet = &ConditionalAuthorizationEnforcer{}
+
+// var _ genericadmissioninit.WantsExternalKubeClientSet = &ConditionalAuthorizationEnforcer{}
 var _ genericadmissioninit.WantsFeatures = &ConditionalAuthorizationEnforcer{}
 
 func NewConditionalAuthorizationEnforcer() *ConditionalAuthorizationEnforcer {
 	return &ConditionalAuthorizationEnforcer{
-		enableBuiltinCEL: true,
+		builtinConditionSetEvaluators: []authorizer.ConditionSetEvaluator{&celConditionsEnforcer{}},
 	}
 }
 
 type ConditionalAuthorizationEnforcer struct {
-	builtinConditionSetEvaluators  []authorizer.BuiltinConditionSetEvaluator
-	featureEnabled                 bool
-	setExternalKubeClientSetCalled bool
-	enableBuiltinCEL               bool
+	builtinConditionSetEvaluators []authorizer.ConditionSetEvaluator
+	featureEnabled                bool
+	//setExternalKubeClientSetCalled bool
+	//enableBuiltinCEL               bool
 }
 
 func (c *ConditionalAuthorizationEnforcer) InspectFeatureGates(features featuregate.FeatureGate) {
 	c.featureEnabled = features.Enabled(genericfeatures.ConditionalAuthorization)
 }
 
-func (c *ConditionalAuthorizationEnforcer) SetExternalKubeClientSet(cs kubernetes.Interface) {
-	/*if c.enableBuiltinCEL {
+/*func (c *ConditionalAuthorizationEnforcer) SetExternalKubeClientSet(cs kubernetes.Interface) {
+	if c.enableBuiltinCEL {
 		c.builtinConditionSetEvaluators = append(c.builtinConditionSetEvaluators, &celConditionsEnforcer{
 			conditionCompiler: &ConditionCompiler{
 				SchemaResolver: resolver.NewDefinitionsSchemaResolver(openapi.GetOpenAPIDefinitions).
 					Combine(&resolver.ClientDiscoveryResolver{Discovery: cs.Discovery()}),
 			},
 		})
-	}*/
+	}
 	c.setExternalKubeClientSetCalled = true
-}
+}*/
 
 func (c *ConditionalAuthorizationEnforcer) ValidateInitialization() error {
-	if c.enableBuiltinCEL && !c.setExternalKubeClientSetCalled {
+	/*if c.enableBuiltinCEL && !c.setExternalKubeClientSetCalled {
 		return errors.New("SetExternalKubeClientSet was not called on the ConditionalAuthorizationEnforcer")
-	}
+	}*/
 	return nil
 }
 
@@ -99,25 +101,45 @@ func (c *ConditionalAuthorizationEnforcer) Validate(ctx context.Context, a admis
 	return EnforceConditions(ctx, a, o, authorizer, authzAttrs, unevaluatedDecision)
 }
 
-func EnforceConditions(ctx context.Context, admissionAttrs admission.Attributes, o admission.ObjectInterfaces, authorizer authorizer.Authorizer, authzAttrs authorizer.Attributes, unevaluatedDecision authorizer.Decision) error {
+// TODO(luxas): This function should probably be under the authorizer package, and then this concrete admission plugin just returns it?
+func EnforceConditions(ctx context.Context, admissionAttrs admission.Attributes, o admission.ObjectInterfaces, authorizer authorizer.Authorizer, authzAttrs authorizer.Attributes, unevaluatedDecision authorizer.Decision, builtinEvaluators ...authorizer.ConditionSetEvaluator) error {
+	// TODO: Does this convert to the request GVR version?
 	versionedAttributes, err := admission.NewVersionedAttributes(admissionAttrs, admissionAttrs.GetKind(), o)
 	if err != nil {
 		return fmt.Errorf("failed to convert object version: %w", err)
 	}
 
 	data := conditionsData{
-		unionedAttributes: unionedAttributes{
+		attrsShim: attrsShim{
 			VersionedAttributes: versionedAttributes,
-			authorizationVerb:   authzAttrs.GetVerb(),
 		},
 	}
 
-	// The logic here should match the WithAuthorization filter logic.
-	evaluatedDecision, err := authorizer.EvaluateConditions(ctx, unevaluatedDecision, data)
+	errlist := []error{}
+	evaluatedDecision := unevaluatedDecision
+	// TODO: This logic should also exist in the union authorizer, so we should probably share the code.
+	for _, builtinEvaluator := range builtinEvaluators {
+		evaluatedDecisionAfter, err := builtinEvaluator.EvaluateConditions(ctx, evaluatedDecision, data)
+		if err != nil {
+			errlist = append(errlist, err)
+		}
+		if evaluatedDecisionAfter.IsConcrete() {
+			break
+		}
+		evaluatedDecision = evaluatedDecisionAfter
+	}
+
+	if !evaluatedDecision.IsConcrete() {
+		evaluatedDecision, err = authorizer.EvaluateConditions(ctx, unevaluatedDecision, data)
+		errlist = append(errlist, err)
+	}
+
+	// At this point, we require an unconditional allow in order to proceed.
 	if evaluatedDecision.IsAllowed() {
 		return nil
 	}
 
+	err = utilerrors.NewAggregate(errlist)
 	if err != nil {
 		//audit.AddAuditAnnotation(ctx, reasonAnnotationKey, reasonError)
 		return apierrors.NewInternalError(err) // TODO: Check if this is the same as responsewriters.InternalError(w, req, err)
@@ -133,27 +155,22 @@ func EnforceConditions(ctx context.Context, admissionAttrs admission.Attributes,
 }
 
 type conditionsData struct {
-	unionedAttributes
+	attrsShim
 }
 
 func (d conditionsData) WriteRequest() authorizer.WriteRequestConditionData {
-	return &d.unionedAttributes
+	return &d.attrsShim
 }
 
 func (d conditionsData) ImpersonationRequest() authorizer.ImpersonationRequestConditionData {
 	return nil
 }
 
-// TODO(luxas): If we do not provide the union of authz + admission, but just unseen data, we can remove this
-type unionedAttributes struct {
+type attrsShim struct {
 	*admission.VersionedAttributes
-	authorizationVerb string
 }
 
-func (u *unionedAttributes) GetAuthorizationVerb() string {
-	return u.authorizationVerb
-}
-
-func (u *unionedAttributes) GetOperation() string {
+// TODO: Can the authorizer package depend on the admission package? If not, we need to add this cast.
+func (u *attrsShim) GetOperation() string {
 	return string(u.Attributes.GetOperation())
 }
