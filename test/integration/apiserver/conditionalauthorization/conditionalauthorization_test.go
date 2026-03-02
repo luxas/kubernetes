@@ -992,51 +992,38 @@ func acrEvaluateCEL(t *testing.T, expectedConditionsType string) func(acr *autho
 	}
 }
 
-func celConditionalTestCases(conditions []authorizationv1.SubjectAccessReviewCondition) map[string]func(*webhookServerHandler) {
+func celConditionalTestCases(processSAR func(sar *authorizationv1.SubjectAccessReview, conditionsType string)) map[string]func(*webhookServerHandler) {
 	return map[string]func(*webhookServerHandler){
 		// when the condition type is opaque, the webhook should be called to resolve the condition
 		"using-webhook-only": func(ws *webhookServerHandler) {
 			ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
 				// Return a conditional decision with conditions that should evaluate to allow
-				sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
-					{
-						ConditionsType: "opaque-cel-condition-type",
-						Conditions:     conditions,
-					},
-				}
+				processSAR(sar, "opaque-cel-condition-type")
 			}
 			ws.acrHandler = acrEvaluateCEL(ws.t, "opaque-cel-condition-type")
 		},
 		"in-process-eval-only": func(ws *webhookServerHandler) {
 			ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
-				sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
-					{
-						ConditionsType: "k8s.io/authorization-cel",
-						Conditions:     conditions,
-					},
-				}
+				processSAR(sar, "k8s.io/authorization-cel")
 			}
 			// Ensure no calls to ACR are made, as the above should be handled in-tree only.
 			// If Kubernetes did webhook out to us, the test panics as the conditions type does not match
 			ws.acrHandler = acrEvaluateCEL(ws.t, "nonexistent-panic-on-ACR-webhook")
 		},
 		"if-in-process-fails-call-webhook": func(ws *webhookServerHandler) {
-			unsupportedIntreeConditions := make([]authorizationv1.SubjectAccessReviewCondition, len(conditions))
-			for i, condition := range conditions {
-				unsupportedIntreeConditions[i] = authorizationv1.SubjectAccessReviewCondition{
-					ID:          condition.ID,
-					Effect:      condition.Effect,
-					Condition:   "unsupported-in-tree && " + condition.Condition,
-					Description: condition.Description,
-				}
-			}
-
 			ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
-				sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
-					{
-						ConditionsType: "k8s.io/authorization-cel",
-						Conditions:     unsupportedIntreeConditions,
-					},
+				processSAR(sar, "k8s.io/authorization-cel")
+				if len(sar.Status.ConditionalDecisionChain) != 0 {
+					if len(sar.Status.ConditionalDecisionChain) != 1 {
+						ws.t.Fatal("current test expects exactly 0 or 1 conditional decision")
+					}
+					d := &sar.Status.ConditionalDecisionChain[0]
+					if len(d.Conditions) == 0 {
+						ws.t.Fatal("current test expects a conditionset in the first conditional decision")
+					}
+					for i := range d.Conditions {
+						d.Conditions[i].Condition = "unsupported-in-tree && " + d.Conditions[i].Condition
+					}
 				}
 			}
 			// Ensure that a call to the webhook is made, even though in-tree evaluation failed, and that
