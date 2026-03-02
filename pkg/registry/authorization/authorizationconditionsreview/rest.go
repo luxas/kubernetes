@@ -243,7 +243,8 @@ func deserializeDecision(attrs authorizer.Attributes, serializedDecision authori
 	}
 
 	if hasConditionSet {
-		condResp, err := authorizer.DecisionConditional(attrs, serializedDecision.ConditionsType, toAuthorizerConditions(serializedDecision.Conditions))
+		ct := authorizer.ConditionType(serializedDecision.ConditionsType)
+		condResp, err := authorizer.DecisionConditional(attrs, ct, toAuthorizerConditions(serializedDecision.Conditions))
 		if err != nil {
 			allErrs = append(allErrs, field.Invalid(fldPath, serializedDecision, err.Error()))
 		}
@@ -281,7 +282,7 @@ func conditionSetToInternalAPIDecision(conditionSet *authorizer.ConditionSet) au
 
 	return authorizationapi.SubjectAccessReviewAuthorizationDecision{
 		Conditions:     conds,
-		ConditionsType: conditionSet.Type(),
+		ConditionsType: string(conditionSet.Type()),
 	}
 }
 

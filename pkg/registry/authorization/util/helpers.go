@@ -268,7 +268,7 @@ func conditionSetToInternalAPIDecision(conditionSet *authorizer.ConditionSet) au
 
 	return authorizationapi.SubjectAccessReviewAuthorizationDecision{
 		Conditions:     conds,
-		ConditionsType: conditionSet.Type(),
+		ConditionsType: string(conditionSet.Type()),
 	}
 }
 
