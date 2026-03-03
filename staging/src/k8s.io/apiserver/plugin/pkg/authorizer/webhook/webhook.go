@@ -685,9 +685,9 @@ func authorizationConditionsReviewInterfaceFromConfig(config *rest.Config, versi
 		return &authorizationConditionsClientGW{gw.RestClient}, nil
 	default:
 		return nil, fmt.Errorf(
-			"unsupported webhook conditions review version %q, supported versions are %q, %q",
+			"unsupported webhook conditions review version %q, supported versions are %v",
 			version,
-			authorizationv1alpha1.SchemeGroupVersion.Version,
+			[]string{authorizationv1alpha1.SchemeGroupVersion.Version},
 		)
 	}
 }
@@ -726,10 +726,12 @@ func subjectAccessReviewInterfaceFromConfig(config *rest.Config, version string,
 
 	default:
 		return nil, fmt.Errorf(
-			"unsupported webhook authorizer version %q, supported versions are %q, %q",
+			"unsupported webhook authorizer version %q, supported versions are %v",
 			version,
-			authorizationv1.SchemeGroupVersion.Version,
-			authorizationv1beta1.SchemeGroupVersion.Version,
+			[]string{
+				authorizationv1.SchemeGroupVersion.Version,
+				authorizationv1beta1.SchemeGroupVersion.Version,
+			},
 		)
 	}
 }
