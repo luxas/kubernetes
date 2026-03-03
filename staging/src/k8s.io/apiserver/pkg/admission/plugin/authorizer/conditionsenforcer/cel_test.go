@@ -37,6 +37,10 @@ var (
 	podGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
 )
 
+func newTestCELEnforcer() *celConditionsEnforcer {
+	return NewCELBuiltinConditionSetEvaluator(nil, nil, nil).(*celConditionsEnforcer)
+}
+
 func newObjectInterfacesForTest() admission.ObjectInterfaces {
 	scheme := runtime.NewScheme()
 	corev1.AddToScheme(scheme)
@@ -93,7 +97,7 @@ func makeVersionedAttrs(t *testing.T, attrs admission.Attributes) *admission.Ver
 	return va
 }
 
-func makeConditionalDecision(t *testing.T, conditionType authorizer.ConditionType, conditions map[string]authorizer.Condition) authorizer.Decision {
+func makeConditionSet(t *testing.T, conditionType authorizer.ConditionType, conditions map[string]authorizer.Condition) *authorizer.ConditionSet {
 	t.Helper()
 	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ConditionalAuthorization, true)
 	attrs := authorizer.AttributesRecord{
@@ -103,7 +107,11 @@ func makeConditionalDecision(t *testing.T, conditionType authorizer.ConditionTyp
 	if err != nil {
 		t.Fatalf("failed to create conditional decision: %v", err)
 	}
-	return d
+	cs := d.ConditionSet()
+	if cs == nil {
+		t.Fatal("expected non-nil ConditionSet from conditional decision")
+	}
+	return cs
 }
 
 // noWriteRequestData is a ConditionData that returns nil for WriteRequest.
@@ -122,95 +130,48 @@ func (d *fakeWriteRequestData) GetOperationOptions() runtime.Object { return nil
 func (d *fakeWriteRequestData) GetObject() runtime.Object           { return nil }
 func (d *fakeWriteRequestData) GetOldObject() runtime.Object        { return nil }
 
-// TestCelConditionsEnforcer_NoOp tests all cases where the enforcer is a no-op
-// and returns the unevaluated decision unchanged: nil WriteRequest, concrete
-// decisions (Allow/Deny/NoOpinion), and non-attrsShim WriteRequest data.
-func TestCelConditionsEnforcer_NoOp(t *testing.T) {
-	enforcer := &celConditionsEnforcer{}
-	va := makeVersionedAttrs(t, podCreateAttributes())
-	writeRequestData := conditionsData{attrsShim: attrsShim{VersionedAttributes: va}}
+// TestCelConditionsEnforcer_Skip tests all cases where the enforcer returns nil
+// (signaling it cannot handle the input): nil WriteRequest, unsupported condition
+// type, and non-attrsShim WriteRequest data.
+func TestCelConditionsEnforcer_Skip(t *testing.T) {
+	enforcer := newTestCELEnforcer()
+	conditionSet := makeConditionSet(t, ConditionTypeAuthorizationCEL, map[string]authorizer.Condition{
+		"test-cond": {Condition: "true", Effect: authorizer.ConditionEffectAllow},
+	})
 
-	tests := []struct {
-		name         string
-		decision     authorizer.Decision
-		data         authorizer.ConditionData
-		wantDecision string
-	}{
-		{
-			name:         "nil WriteRequest returns unevaluated decision",
-			decision:     authorizer.DecisionAllow("test"),
-			data:         &noWriteRequestData{},
-			wantDecision: "Allow",
-		},
-		{
-			name:         "Allow passes through",
-			decision:     authorizer.DecisionAllow("already allowed"),
-			data:         writeRequestData,
-			wantDecision: "Allow",
-		},
-		{
-			name:         "Deny passes through",
-			decision:     authorizer.DecisionDeny("already denied"),
-			data:         writeRequestData,
-			wantDecision: "Deny",
-		},
-		{
-			name:         "NoOpinion passes through",
-			decision:     authorizer.DecisionNoOpinion("no opinion"),
-			data:         writeRequestData,
-			wantDecision: "NoOpinion",
-		},
-		{
-			name: "Conditional of the wrong type cannot be simplified",
-			decision: makeConditionalDecision(t, "some.io/unsupported-type", map[string]authorizer.Condition{
-				"test-cond": {
-					Condition: "true",
-					Effect:    authorizer.ConditionEffectAllow,
-				},
-			}),
-			data:         writeRequestData,
-			wantDecision: `Conditional(type="some.io/unsupported-type", len=1)`,
-		},
-		{
-			name: "Conditional of the supported CEL type simplifies to Allow",
-			decision: makeConditionalDecision(t, ConditionTypeAuthorizationCEL, map[string]authorizer.Condition{
-				"test-cond": {
-					Condition: "true",
-					Effect:    authorizer.ConditionEffectAllow,
-				},
-			}),
-			data:         writeRequestData,
-			wantDecision: `Allow`,
-		},
-		// TODO(luxas): Add tests for ConditionalChain here too.
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			result, err := enforcer.EvaluateConditions(t.Context(), tc.decision, tc.data)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if got := result.String(); got != tc.wantDecision {
-				t.Errorf("got %s, want %s", got, tc.wantDecision)
-			}
-		})
-	}
-
-	// TODO(luxas): Hopefully we can remove this test/check in the future, and just use data given.
-	t.Run("non-attrsShim WriteRequest passes through conditional", func(t *testing.T) {
-		conditionalDecision := makeConditionalDecision(t, ConditionTypeAuthorizationCEL, map[string]authorizer.Condition{
-			"test-cond": {
-				Condition: "true",
-				Effect:    authorizer.ConditionEffectAllow,
-			},
-		})
-		result, err := enforcer.evaluateWriteRequest(t.Context(), conditionalDecision, &fakeWriteRequestData{}, celconfig.RuntimeCELCostBudget)
+	t.Run("nil WriteRequest returns nil", func(t *testing.T) {
+		result, err := enforcer.BuiltinEvaluateConditions(t.Context(), conditionSet, &noWriteRequestData{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if !result.IsConditional() {
-			t.Errorf("got %s, want Conditional (pass-through)", result.String())
+		if result != nil {
+			t.Errorf("expected nil decision, got %s", result.String())
+		}
+	})
+
+	t.Run("unsupported condition type returns nil", func(t *testing.T) {
+		unsupportedCS := makeConditionSet(t, "some.io/unsupported-type", map[string]authorizer.Condition{
+			"test-cond": {Condition: "true", Effect: authorizer.ConditionEffectAllow},
+		})
+		va := makeVersionedAttrs(t, podCreateAttributes())
+		data := conditionsData{attrsShim: attrsShim{VersionedAttributes: va}}
+		result, err := enforcer.BuiltinEvaluateConditions(t.Context(), unsupportedCS, data)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result != nil {
+			t.Errorf("expected nil decision, got %s", result.String())
+		}
+	})
+
+	// TODO(luxas): Hopefully we can remove this test in the future, and just use the data given.
+	t.Run("non-attrsShim WriteRequest returns nil", func(t *testing.T) {
+		result, err := enforcer.evaluateWriteRequest(t.Context(), conditionSet, &fakeWriteRequestData{}, celconfig.RuntimeCELCostBudget)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result != nil {
+			t.Errorf("expected nil decision, got %s", result.String())
 		}
 	})
 }
@@ -221,7 +182,7 @@ func TestCelConditionsEnforcer_EvaluateWriteRequest(t *testing.T) {
 		attrs        admission.Attributes
 		conditions   map[string]authorizer.Condition
 		costBudget   int64
-		wantDecision string
+		wantDecision string // expected Decision.String(); empty when wantErr is true (nil decision)
 		wantErr      bool
 	}{
 		{
@@ -381,7 +342,7 @@ func TestCelConditionsEnforcer_EvaluateWriteRequest(t *testing.T) {
 			wantDecision: "NoOpinion",
 		},
 		{
-			name:  "invalid CEL expression returns error",
+			name:  "invalid CEL expression returns error with nil decision",
 			attrs: podCreateAttributes(),
 			conditions: map[string]authorizer.Condition{
 				"bad-cond": {
@@ -389,11 +350,10 @@ func TestCelConditionsEnforcer_EvaluateWriteRequest(t *testing.T) {
 					Effect:    authorizer.ConditionEffectAllow,
 				},
 			},
-			wantDecision: "NoOpinion",
-			wantErr:      true,
+			wantErr: true,
 		},
 		{
-			name:  "cost budget exceeded on allow condition",
+			name:  "cost budget exceeded on allow condition returns error with nil decision",
 			attrs: podCreateAttributes(),
 			conditions: map[string]authorizer.Condition{
 				"allow-cond": {
@@ -401,12 +361,11 @@ func TestCelConditionsEnforcer_EvaluateWriteRequest(t *testing.T) {
 					Effect:    authorizer.ConditionEffectAllow,
 				},
 			},
-			costBudget:   1,
-			wantDecision: "NoOpinion",
-			wantErr:      true,
+			costBudget: 1,
+			wantErr:    true,
 		},
 		{
-			name:  "cost budget exceeded on deny condition",
+			name:  "cost budget exceeded on deny condition returns error with nil decision",
 			attrs: podCreateAttributes(),
 			conditions: map[string]authorizer.Condition{
 				"deny-cond": {
@@ -414,17 +373,16 @@ func TestCelConditionsEnforcer_EvaluateWriteRequest(t *testing.T) {
 					Effect:    authorizer.ConditionEffectDeny,
 				},
 			},
-			costBudget:   1,
-			wantDecision: "Deny",
-			wantErr:      true,
+			costBudget: 1,
+			wantErr:    true,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			decision := makeConditionalDecision(t, ConditionTypeAuthorizationCEL, tc.conditions)
+			conditionSet := makeConditionSet(t, ConditionTypeAuthorizationCEL, tc.conditions)
 
-			enforcer := &celConditionsEnforcer{}
+			enforcer := newTestCELEnforcer()
 			va := makeVersionedAttrs(t, tc.attrs)
 			wr := &attrsShim{VersionedAttributes: va}
 
@@ -433,12 +391,73 @@ func TestCelConditionsEnforcer_EvaluateWriteRequest(t *testing.T) {
 				budget = celconfig.RuntimeCELCostBudget
 			}
 
-			result, err := enforcer.evaluateWriteRequest(t.Context(), decision, wr, budget)
-			if tc.wantErr && err == nil {
-				t.Fatalf("expected error, got nil")
+			result, err := enforcer.evaluateWriteRequest(t.Context(), conditionSet, wr, budget)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				if result != nil {
+					t.Errorf("expected nil decision on error, got %s", result.String())
+				}
+				return
 			}
-			if !tc.wantErr && err != nil {
+			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
+			}
+			if result == nil {
+				t.Fatal("expected non-nil decision, got nil")
+			}
+			if got := result.String(); got != tc.wantDecision {
+				t.Errorf("got decision %s, want %s", got, tc.wantDecision)
+			}
+		})
+	}
+}
+
+func TestCelConditionsEnforcer_BuiltinEvaluateConditions(t *testing.T) {
+	tests := []struct {
+		name         string
+		attrs        admission.Attributes
+		conditions   map[string]authorizer.Condition
+		wantDecision string
+	}{
+		{
+			name:  "create allow",
+			attrs: podCreateAttributes(),
+			conditions: map[string]authorizer.Condition{
+				"allow-cond": {
+					Condition: "object.metadata.name == 'test-pod'",
+					Effect:    authorizer.ConditionEffectAllow,
+				},
+			},
+			wantDecision: "Allow",
+		},
+		{
+			name:  "update with old and new object comparison",
+			attrs: podUpdateAttributes(),
+			conditions: map[string]authorizer.Condition{
+				"allow-cond": {
+					Condition: "object != null && oldObject != null && object.metadata.name == oldObject.metadata.name",
+					Effect:    authorizer.ConditionEffectAllow,
+				},
+			},
+			wantDecision: "Allow",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			enforcer := newTestCELEnforcer()
+			conditionSet := makeConditionSet(t, ConditionTypeAuthorizationCEL, tc.conditions)
+			va := makeVersionedAttrs(t, tc.attrs)
+			data := conditionsData{attrsShim: attrsShim{VersionedAttributes: va}}
+
+			result, err := enforcer.BuiltinEvaluateConditions(t.Context(), conditionSet, data)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result == nil {
+				t.Fatal("expected non-nil decision, got nil")
 			}
 			if got := result.String(); got != tc.wantDecision {
 				t.Errorf("got decision %s, want %s", got, tc.wantDecision)
