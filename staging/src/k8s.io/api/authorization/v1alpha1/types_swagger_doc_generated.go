@@ -38,8 +38,6 @@ func (AuthorizationConditionsRequest) SwaggerDoc() map[string]string {
 var map_AuthorizationConditionsResponse = map[string]string{
 	"":                 "AuthorizationConditionsResponse describes an authorization conditions response.",
 	"uid":              "UID is an identifier for the individual request/response. This must be copied over from the corresponding AuthorizationConditionsRequest.",
-	"allowed":          "Allowed indicates whether or not the request is authorized according to the authorization conditions. Mutually exclusive with Denied. Allowed=false and Denied=false means that the authorizer has no NoOpinion on the request.",
-	"denied":           "Denied indicates whether or not the request is denied according to the authorization conditions. Mutually exclusive with Allowed. Allowed=false and Denied=false means that the authorizer has no NoOpinion on the request.",
 	"status":           "Result contains extra details into why an authorization conditions request was denied. This field IS NOT consulted in any way if \"Allowed\" is \"true\".",
 	"auditAnnotations": "AuditAnnotations is an unstructured key value map set by remote admission controller (e.g. error=image-blacklisted). MutatingAdmissionWebhook and ValidatingAdmissionWebhook admission controller will prefix the keys with admission webhook name (e.g. imagepolicy.example.com/error=image-blacklisted). AuditAnnotations will be provided by the admission webhook to add additional context to the audit log for this request.",
 	"warnings":         "warnings is a list of warning messages to return to the requesting API client. Warning messages describe a problem the client making the API request should correct or be aware of. Limit warnings to 120 characters if possible. Warnings over 256 characters and large numbers of warnings may be truncated.",
@@ -80,6 +78,32 @@ var map_AuthorizationConditionsWriteRequest = map[string]string{
 
 func (AuthorizationConditionsWriteRequest) SwaggerDoc() map[string]string {
 	return map_AuthorizationConditionsWriteRequest
+}
+
+var map_SubjectAccessReviewAuthorizationDecision = map[string]string{
+	"":                         "SubjectAccessReviewAuthorizationDecision represents one authorizer's decision in the authorizer chain. It models a single authorization decision, which must be as follows: Exactly one of the following groups of fields must be set: - allowed (unconditional allow) - denied (unconditional deny) - conditionsType + conditions (conditional decision) - conditionalDecisionChain (composite/nested decisions)",
+	"allowed":                  "allowed specifies whether this element is unconditionally allowed. Mutually exclusive with denied, conditions, and conditionalDecisionChain.",
+	"denied":                   "denied specifies whether this element is unconditionally denied. Mutually exclusive with allowed, conditions, and conditionalDecisionChain.",
+	"conditionsType":           "conditionsType describes the type (format/encoding/language) of all conditions in the conditions slice. It does not apply to nested conditions in conditionalDecisionChain. Mutually exclusive with allowed, denied, and conditionalDecisionChain.",
+	"conditions":               "conditions is an unordered set of conditions that should be evaluated against admission attributes, to determine whether this authorizer allows the request. Mutually exclusive with allowed, denied, and conditionalDecisionChain.",
+	"conditionalDecisionChain": "conditionalDecisionChain is an ordered list of Decisions from a chain of authorizers. At least one of the Decisions is known to be Conditional, that is, have non-null Conditions. When evaluating the conditions, the first condition set must be evaluated as a whole first, and only if that condition set evaluates to NoOpinion, can the subsequent condition sets be evaluated.\n\nMutually exclusive with allowed, denied and conditions.",
+	"reason":                   "reason is optional. It indicates why a request was allowed or denied by this authorizer.",
+}
+
+func (SubjectAccessReviewAuthorizationDecision) SwaggerDoc() map[string]string {
+	return map_SubjectAccessReviewAuthorizationDecision
+}
+
+var map_SubjectAccessReviewCondition = map[string]string{
+	"":            "SubjectAccessReviewCondition represents a single condition to be evaluated against admission attributes.",
+	"id":          "ID uniquely identifies this condition within the scope of the authorizer that authored it. Validated as a Kubernetes label key.",
+	"effect":      "Effect specifies how the condition evaluating to \"true\" should be treated.",
+	"condition":   "Condition is an opaque string that represents the condition to be evaluated. It is a pure, deterministic function from condition data to a Boolean.",
+	"description": "Description is an optional human-friendly description that can be shown as an error message or for debugging.",
+}
+
+func (SubjectAccessReviewCondition) SwaggerDoc() map[string]string {
+	return map_SubjectAccessReviewCondition
 }
 
 // AUTO-GENERATED FUNCTIONS END HERE
