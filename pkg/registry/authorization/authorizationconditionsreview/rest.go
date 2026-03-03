@@ -33,12 +33,19 @@ import (
 )
 
 type REST struct {
-	authorizer authorizer.Authorizer
-	serializer runtime.Serializer
+	authorizer  authorizer.Authorizer
+	jsonDecoder runtime.Decoder
 }
 
-func NewREST(authorizer authorizer.Authorizer, serializer runtime.Serializer) *REST {
-	return &REST{authorizer, serializer}
+func NewREST(authorizer authorizer.Authorizer, negotiatedSerializer runtime.NegotiatedSerializer) (*REST, error) {
+	jsonInfo, ok := runtime.SerializerInfoForMediaType(negotiatedSerializer.SupportedMediaTypes(), runtime.ContentTypeJSON)
+	if !ok || jsonInfo.Serializer == nil {
+		return nil, fmt.Errorf("could not find JSON serializer")
+	}
+	return &REST{
+		authorizer:  authorizer,
+		jsonDecoder: negotiatedSerializer.DecoderToVersion(jsonInfo.Serializer, runtime.InternalGroupVersioner),
+	}, nil
 }
 
 func (r *REST) NamespaceScoped() bool {
@@ -98,7 +105,7 @@ func (r *REST) Create(ctx context.Context, acr runtime.Object, createValidation 
 		return nil, err
 	}
 
-	// TODO: Should we set acr.Request to nil, or keep it?
+	// TODO: Should we set acr.Request to nil, or keep it? Keeping it yields more data to write back unnecessarily.
 	serializedDecision := serializeDecision(evaluatedDecision)
 	authorizationConditionsReview.Response = &authorizationapi.AuthorizationConditionsResponse{
 		SubjectAccessReviewAuthorizationDecision: serializedDecision,
@@ -108,7 +115,9 @@ func (r *REST) Create(ctx context.Context, acr runtime.Object, createValidation 
 }
 
 func (r *REST) toConditionsData(req *authorizationapi.AuthorizationConditionsRequest) (authorizer.ConditionData, error) {
-	// TODO: nil pointer for WriteRequest
+	if req.WriteRequest == nil {
+		return nil, fmt.Errorf("unsupported conditions data: request.writeRequest == nil")
+	}
 
 	wr := &conditionsDataWriteRequest{
 		operation: string(req.WriteRequest.Operation),
@@ -137,7 +146,7 @@ func (r *REST) toConditionsData(req *authorizationapi.AuthorizationConditionsReq
 // If the type is not registered (e.g., objects from aggregated API servers), it falls
 // back to decoding as unstructured.
 func (r *REST) decodeObject(raw []byte) (runtime.Object, error) {
-	obj, _, err := r.serializer.Decode(raw, nil, nil)
+	obj, _, err := r.jsonDecoder.Decode(raw, nil, nil)
 	if err == nil {
 		return obj, nil
 	}

@@ -369,10 +369,15 @@ type WriteRequestConditionData interface {
 
 	// GetObject returns the object from the incoming request prior to default
 	// values being applied. Only populated for CREATE and UPDATE requests.
+	// If the object of a code type (e.g. a Pod), it should be given in its internal
+	// form, that is, *api.Pod. Otherwise, the object should be *unstructured.Unstructured.
+	// TODO(luxas): Verify that CRs are *unstructured.Unstructured in admission.
 	GetObject() runtime.Object
 
 	// GetOldObject returns the existing object. Only populated for UPDATE and
 	// DELETE requests.
+	// If the object of a code type (e.g. a Pod), it should be given in its internal
+	// form, that is, *api.Pod. Otherwise, the object should be *unstructured.Unstructured.
 	GetOldObject() runtime.Object
 }
 

@@ -20,6 +20,7 @@ import (
 	authorizationv1 "k8s.io/api/authorization/v1"
 	authorizationv1alpha1 "k8s.io/api/authorization/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	genericfeatures "k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/registry/generic"
@@ -39,7 +40,7 @@ import (
 type RESTStorageProvider struct {
 	Authorizer   authorizer.Authorizer
 	RuleResolver authorizer.RuleResolver
-	Serializer   runtime.Serializer
+	Serializer   runtime.NegotiatedSerializer
 }
 
 func (p RESTStorageProvider) NewRESTStorage(apiResourceConfigSource serverstorage.APIResourceConfigSource, restOptionsGetter generic.RESTOptionsGetter) (genericapiserver.APIGroupInfo, error) {
@@ -55,7 +56,9 @@ func (p RESTStorageProvider) NewRESTStorage(apiResourceConfigSource serverstorag
 		apiGroupInfo.VersionedResourcesStorageMap[authorizationv1.SchemeGroupVersion.Version] = storageMap
 	}
 
-	if storageMap := p.v1alpha1Storage(apiResourceConfigSource, restOptionsGetter); len(storageMap) > 0 {
+	if storageMap, err := p.v1alpha1Storage(apiResourceConfigSource, restOptionsGetter); err != nil {
+		utilruntime.HandleError(err) // TODO: Or should we silently just ignore?
+	} else if len(storageMap) > 0 {
 		apiGroupInfo.VersionedResourcesStorageMap[authorizationv1alpha1.SchemeGroupVersion.Version] = storageMap
 	}
 
@@ -88,17 +91,21 @@ func (p RESTStorageProvider) v1Storage(apiResourceConfigSource serverstorage.API
 	return storage
 }
 
-func (p RESTStorageProvider) v1alpha1Storage(apiResourceConfigSource serverstorage.APIResourceConfigSource, restOptionsGetter generic.RESTOptionsGetter) map[string]rest.Storage {
+func (p RESTStorageProvider) v1alpha1Storage(apiResourceConfigSource serverstorage.APIResourceConfigSource, restOptionsGetter generic.RESTOptionsGetter) (map[string]rest.Storage, error) {
 	storage := map[string]rest.Storage{}
 
 	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
 		// authorizationconditionsreviews
 		if resource := "authorizationconditionsreviews"; apiResourceConfigSource.ResourceEnabled(authorizationv1alpha1.SchemeGroupVersion.WithResource(resource)) {
-			storage[resource] = authorizationconditionsreview.NewREST(p.Authorizer, p.Serializer)
+			var err error
+			storage[resource], err = authorizationconditionsreview.NewREST(p.Authorizer, p.Serializer)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
-	return storage
+	return storage, nil
 }
 
 func (p RESTStorageProvider) GroupName() string {

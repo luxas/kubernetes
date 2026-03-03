@@ -772,7 +772,8 @@ authorizers:
 			},
 			expectAllowed: false,
 		},
-		// TODO: Test the builtin authorizer function in k8s authorization CEL.
+		// TODO: Test the builtin authorizer function and ns variable in k8s authorization CEL.
+		// TODO: Test sending requests with both HPA v1 and v2, and checking they are evaluated correctly.
 	}
 
 	for _, tc := range testCases {
