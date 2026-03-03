@@ -905,25 +905,16 @@ authorizers:
 			expectAllowed: false,
 		},
 
-		// Tests for HPA v1 and v2 with compound authorization.
-		// The authorizer returns conditions based on the API version of the HPA.
-		// Both versions use compound authorization (authorizer CEL function) to
-		// require the "use protectedlabels" permission when the "protected-label" is set.
+		// Tests for HPA v1 and v2 with CPU utilization conditions.
+		// The authorizer returns version-specific CEL conditions that require
+		// the target CPU utilization to be at most 80%.
 		{
-			name: "hpa v1 compound authorization - allow",
-			user: "hpa-authz-allow-user",
-			webhookBehaviors: map[string]func(ws *webhookServerHandler){
-				"in-process-eval-only": func(ws *webhookServerHandler) {
-					ws.sarHandler = compoundAuthzSARHandler("horizontalpodautoscalers")
-					ws.acrHandler = acrEvaluateCEL(ws.t, "nonexistent-panic-on-ACR-webhook")
-				},
-			},
+			name:             "hpa v1 cpu utilization - allow",
+			user:             "hpa-cpu-allow-user",
+			webhookBehaviors: celConditionalTestCases(hpaCPUUtilizationSARHandler),
 			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.AutoscalingV1().HorizontalPodAutoscalers("test-ns").Create(context.TODO(), &autoscalingv1.HorizontalPodAutoscaler{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:   "hpa-v1-allow" + suffix,
-						Labels: map[string]string{"protected-label": "yes"},
-					},
+					ObjectMeta: metav1.ObjectMeta{Name: "hpa-v1-allow" + suffix},
 					Spec: autoscalingv1.HorizontalPodAutoscalerSpec{
 						ScaleTargetRef: autoscalingv1.CrossVersionObjectReference{
 							Kind:       "Deployment",
@@ -940,20 +931,12 @@ authorizers:
 			expectAllowedWhenDisabled: boolPtr(false),
 		},
 		{
-			name: "hpa v1 compound authorization - deny",
-			user: "hpa-authz-deny-user",
-			webhookBehaviors: map[string]func(ws *webhookServerHandler){
-				"in-process-eval-only": func(ws *webhookServerHandler) {
-					ws.sarHandler = compoundAuthzSARHandler("horizontalpodautoscalers")
-					ws.acrHandler = acrEvaluateCEL(ws.t, "nonexistent-panic-on-ACR-webhook")
-				},
-			},
+			name:             "hpa v1 cpu utilization - deny",
+			user:             "hpa-cpu-deny-user",
+			webhookBehaviors: celConditionalTestCases(hpaCPUUtilizationSARHandler),
 			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.AutoscalingV1().HorizontalPodAutoscalers("test-ns").Create(context.TODO(), &autoscalingv1.HorizontalPodAutoscaler{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:   "hpa-v1-deny" + suffix,
-						Labels: map[string]string{"protected-label": "yes"},
-					},
+					ObjectMeta: metav1.ObjectMeta{Name: "hpa-v1-deny" + suffix},
 					Spec: autoscalingv1.HorizontalPodAutoscalerSpec{
 						ScaleTargetRef: autoscalingv1.CrossVersionObjectReference{
 							Kind:       "Deployment",
@@ -961,7 +944,7 @@ authorizers:
 							APIVersion: "apps/v1",
 						},
 						MaxReplicas:                    10,
-						TargetCPUUtilizationPercentage: int32Ptr(80),
+						TargetCPUUtilizationPercentage: int32Ptr(90),
 					},
 				}, metav1.CreateOptions{})
 				return err
@@ -969,20 +952,12 @@ authorizers:
 			expectAllowed: false,
 		},
 		{
-			name: "hpa v2 compound authorization - allow",
-			user: "hpa-authz-allow-user",
-			webhookBehaviors: map[string]func(ws *webhookServerHandler){
-				"in-process-eval-only": func(ws *webhookServerHandler) {
-					ws.sarHandler = compoundAuthzSARHandler("horizontalpodautoscalers")
-					ws.acrHandler = acrEvaluateCEL(ws.t, "nonexistent-panic-on-ACR-webhook")
-				},
-			},
+			name:             "hpa v2 cpu utilization - allow",
+			user:             "hpa-cpu-allow-user",
+			webhookBehaviors: celConditionalTestCases(hpaCPUUtilizationSARHandler),
 			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.AutoscalingV2().HorizontalPodAutoscalers("test-ns").Create(context.TODO(), &autoscalingv2.HorizontalPodAutoscaler{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:   "hpa-v2-allow" + suffix,
-						Labels: map[string]string{"protected-label": "yes"},
-					},
+					ObjectMeta: metav1.ObjectMeta{Name: "hpa-v2-allow" + suffix},
 					Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
 						ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
 							Kind:       "Deployment",
@@ -1010,20 +985,12 @@ authorizers:
 			expectAllowedWhenDisabled: boolPtr(false),
 		},
 		{
-			name: "hpa v2 compound authorization - deny",
-			user: "hpa-authz-deny-user",
-			webhookBehaviors: map[string]func(ws *webhookServerHandler){
-				"in-process-eval-only": func(ws *webhookServerHandler) {
-					ws.sarHandler = compoundAuthzSARHandler("horizontalpodautoscalers")
-					ws.acrHandler = acrEvaluateCEL(ws.t, "nonexistent-panic-on-ACR-webhook")
-				},
-			},
+			name:             "hpa v2 cpu utilization - deny",
+			user:             "hpa-cpu-deny-user",
+			webhookBehaviors: celConditionalTestCases(hpaCPUUtilizationSARHandler),
 			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.AutoscalingV2().HorizontalPodAutoscalers("test-ns").Create(context.TODO(), &autoscalingv2.HorizontalPodAutoscaler{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:   "hpa-v2-deny" + suffix,
-						Labels: map[string]string{"protected-label": "yes"},
-					},
+					ObjectMeta: metav1.ObjectMeta{Name: "hpa-v2-deny" + suffix},
 					Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
 						ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
 							Kind:       "Deployment",
@@ -1038,7 +1005,7 @@ authorizers:
 									Name: corev1.ResourceCPU,
 									Target: autoscalingv2.MetricTarget{
 										Type:               autoscalingv2.UtilizationMetricType,
-										AverageUtilization: int32Ptr(80),
+										AverageUtilization: int32Ptr(90),
 									},
 								},
 							},
@@ -1081,7 +1048,7 @@ authorizers:
 						)
 					}
 					// For compound authorization tests: grant the "use" permission on protectedlabels
-					if tc.user == "compound-authz-allow-user" || tc.user == "hpa-authz-allow-user" {
+					if tc.user == "compound-authz-allow-user" {
 						authutil.GrantUserAuthorization(t, t.Context(), adminClient, userName,
 							rbacv1.PolicyRule{
 								Verbs:         []string{"use"},
@@ -1128,14 +1095,14 @@ func int32Ptr(i int32) *int32 {
 }
 
 // compoundAuthzSARHandler returns a SAR handler that implements compound
-// authorization for HPAs: creating an HPA with the "protected-label" label
+// authorization: creating a resource with the "protected-label" label
 // requires the additional "use protectedlabels" permission, checked via the
-// authorizer CEL function. The handler returns NoOpinion for non-HPA SARs
+// authorizer CEL function. The handler returns NoOpinion for non-matching SARs
 // (e.g. the authorizer function's internal permission check).
 func compoundAuthzSARHandler(matchResource string) func(sar *authorizationv1.SubjectAccessReview) {
 	return func(sar *authorizationv1.SubjectAccessReview) {
 		if sar.Spec.ResourceAttributes == nil || sar.Spec.ResourceAttributes.Resource != matchResource {
-			return // NoOpinion for non-HPA SARs (e.g. the authorizer function's internal check)
+			return // NoOpinion for non-matching SARs (e.g. the authorizer function's internal check)
 		}
 		sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
 			{
@@ -1151,6 +1118,46 @@ func compoundAuthzSARHandler(matchResource string) func(sar *authorizationv1.Sub
 				},
 			},
 		}
+	}
+}
+
+// hpaCPUUtilizationSARHandler returns a processSAR function for use with
+// celConditionalTestCases. It sets CEL conditions on HPA SARs that require
+// CPU utilization to be at most 80%. The CEL expression is version-specific:
+// for v1 it checks spec.targetCPUUtilizationPercentage, for v2 it iterates
+// spec.metrics to find the CPU resource metric and checks averageUtilization.
+func hpaCPUUtilizationSARHandler(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
+	if sar.Spec.ResourceAttributes == nil || sar.Spec.ResourceAttributes.Resource != "horizontalpodautoscalers" {
+		return
+	}
+
+	var condition string
+	switch sar.Spec.ResourceAttributes.Version {
+	case "v1":
+		condition = `has(object.spec.targetCPUUtilizationPercentage) && object.spec.targetCPUUtilizationPercentage <= 80`
+	default: // v2, v2beta2, etc.
+		condition = `has(object.spec.metrics) && object.spec.metrics.exists(m, ` +
+			`m.type == "Resource" && ` +
+			`has(m.resource) && ` +
+			`m.resource.name == "cpu" && ` +
+			`has(m.resource.target) && ` +
+			`m.resource.target.type == "Utilization" && ` +
+			`has(m.resource.target.averageUtilization) && ` +
+			`m.resource.target.averageUtilization <= 80)`
+	}
+
+	sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+		{
+			ConditionsType: conditionsType,
+			Conditions: []authorizationv1.SubjectAccessReviewCondition{
+				{
+					ID:          "limit-cpu-utilization",
+					Effect:      authorizationv1.SubjectAccessReviewConditionEffectAllow,
+					Condition:   condition,
+					Description: "only allow HPAs with CPU utilization at most 80%",
+				},
+			},
+		},
 	}
 }
 
