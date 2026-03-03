@@ -87,14 +87,16 @@ type Attributes interface {
 	GetConditionsMode() ConditionsMode
 }
 
-type ConditionSetEvaluator interface {
-	// EvaluateConditions evaluates a condition set given more information in ConditionData.
+type BuiltinConditionSetEvaluator interface {
+	// BuiltinEvaluateConditions evaluates a condition set given more information in ConditionData.
 	// The resulting Decision may be concrete (Allow/Deny/NoOpinion), or again conditional, if the
 	// data in ConditionData is partial.
-	// If the evaluator does not know how to evaluate the given decision, the evaluator should just
-	// return decision, nil
-	// TODO: Change all no-op implementations to just return decision, nil.
-	EvaluateConditions(ctx context.Context, decision Decision, data ConditionData) (Decision, error)
+	// If the builtin evaluator does not know how to evaluate the given decision, it should just
+	// return unevaluated, false, nil.
+	// A builtin evaluator might also evaluate the decision DAG partially, in which it can return
+	// evaluated != unevaluated, but fullyEvaluated == false.
+	// TODO: Change all no-op implementations to just return decision, false, nil.
+	BuiltinEvaluateConditions(ctx context.Context, conditionSet *ConditionSet, data ConditionData) (fullyEvaluatedDecision *Decision, err error)
 }
 
 // Authorizer makes an authorization decision based on information gained by making
@@ -104,7 +106,8 @@ type ConditionSetEvaluator interface {
 type Authorizer interface {
 	Authorize(ctx context.Context, a Attributes) (Decision, error)
 
-	ConditionSetEvaluator
+	// TODO: Should this also return a boolean, or I guess the assumption is that fullyEvaluated == true always?
+	EvaluateConditions(ctx context.Context, decision Decision, data ConditionData) (Decision, error)
 }
 
 // AuthorizerFunc implements Authorizer using a function.

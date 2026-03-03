@@ -222,52 +222,73 @@ func (c *ConditionSet) FailClosedDecision() Decision {
 // EvaluateConditionSet evaluates the conditions in the set into a concrete Allow/Deny/NoOpinion Decision, given an
 // evaluation function with a given supported condition type.
 // This is a reference implementation that other conditional authorizers can use if convenient.
-func EvaluateConditionSet(conditionSet *ConditionSet, supportedConditionType ConditionType, eval func(string) (bool, error)) (Decision, error) {
+func EvaluateConditionSet(conditionSet *ConditionSet, supportedConditionType ConditionType, eval func(string) (bool, error)) (Decision, []error, error) {
 	if conditionSet == nil {
-		return DecisionNoOpinion(), nil
+		return DecisionNoOpinion(), nil, nil
 	}
 
 	if conditionSet.Type() != supportedConditionType {
-		return conditionSet.FailClosedDecision(), fmt.Errorf("unsupported condition type: %q", conditionSet.Type())
+		return conditionSet.FailClosedDecision(), nil, fmt.Errorf("unsupported condition type: %q", conditionSet.Type())
 	}
 
+	denyErrors := []error{}
+	appliedDenyReasons := []string{}
 	for id, cond := range conditionSet.DenyConditions() {
 		applies, err := eval(cond.Condition)
 		if err != nil {
-			// TODO: should we leak the error to the user?
-			return DecisionDeny("an error occurred"), err
+			denyErrors = append(denyErrors, fmt.Errorf("Deny condition %q produced error: %w", id, err))
+			continue
 		}
 		if applies {
 			reason := fmt.Sprintf("condition %q denied the request", id)
 			if len(cond.Description) != 0 {
 				reason += fmt.Sprintf(" with description %q", cond.Description)
 			}
-			return DecisionDeny(reason), nil
+			appliedDenyReasons = append(appliedDenyReasons, reason)
+			continue
 		}
 	}
+	// If any deny errors were encountered, fail closed
+	if len(denyErrors) != 0 {
+		return DecisionDeny("one or more conditional evaluation errors occurred"), nil, utilerrors.NewAggregate(denyErrors)
+	}
+	// If any deny conditions evaluated to true, return Deny
+	if len(appliedDenyReasons) != 0 {
+		return DecisionDeny(appliedDenyReasons...), nil, nil
+	}
 
+	noOpinionErrors := []error{}
+	appliedNoOpinionReasons := []string{}
 	for id, cond := range conditionSet.NoOpinionConditions() {
 		applies, err := eval(cond.Condition)
 		if err != nil {
-			// TODO: should we leak the error to the user?
-			return DecisionNoOpinion("an error occurred"), err
+			noOpinionErrors = append(noOpinionErrors, fmt.Errorf("NoOpinion condition %q produced error: %w", id, err))
+			continue
 		}
 		if applies {
 			reason := fmt.Sprintf("condition %q evaluated to NoOpinion", id)
 			if len(cond.Description) != 0 {
 				reason += fmt.Sprintf(" with description %q", cond.Description)
 			}
-			return DecisionNoOpinion(reason), nil
+			appliedNoOpinionReasons = append(appliedNoOpinionReasons, reason)
+			continue
 		}
 	}
+	// If any NoOpinion errors were encountered, fail closed to NoOpinion as if the conditions would have matched
+	if len(noOpinionErrors) != 0 {
+		return DecisionNoOpinion("one or more conditional evaluation errors occurred"), nil, utilerrors.NewAggregate(noOpinionErrors)
+	}
+	// If any NoOpinion conditions evaluated to true, return NoOpinion
+	if len(appliedNoOpinionReasons) != 0 {
+		return DecisionNoOpinion(appliedNoOpinionReasons...), nil, nil
+	}
 
-	var errlist []error
+	allowErrors := []error{}
+	appliedAllowReasons := []string{}
 	for id, cond := range conditionSet.AllowConditions() {
 		applies, err := eval(cond.Condition)
 		if err != nil {
-			// errors from Allow conditions don't affect the Decision, but
-			// are returned as the non-critical error in aggregate form
-			errlist = append(errlist, err)
+			allowErrors = append(allowErrors, fmt.Errorf("Allow condition %q produced error: %w", id, err))
 			continue
 		}
 		if applies {
@@ -275,10 +296,21 @@ func EvaluateConditionSet(conditionSet *ConditionSet, supportedConditionType Con
 			if len(cond.Description) != 0 {
 				reason += fmt.Sprintf(" with description %q", cond.Description)
 			}
-			return DecisionAllow(reason), utilerrors.NewAggregate(errlist)
+			appliedAllowReasons = append(appliedAllowReasons, reason)
+			continue
 		}
 	}
-	return DecisionNoOpinion("no conditions matched"), utilerrors.NewAggregate(errlist)
+	// If there were at least one Allow condition that applied, ignore any evaluation errors, return those as
+	// non-critical warnings.
+	if len(appliedAllowReasons) != 0 {
+		return DecisionAllow(appliedAllowReasons...), allowErrors, nil
+	}
+	// However, if no Allow condition evaluated to true, but at least one errored, return that as an error to the caller
+	if len(allowErrors) != 0 {
+		return DecisionNoOpinion("one or more conditional evaluation errors occurred"), nil, utilerrors.NewAggregate(allowErrors)
+	}
+	// Otherwise, no condition evaluated to true, and no condition errored. This means a simple NoOpinion.
+	return DecisionNoOpinion("no conditions matched"), nil, nil
 }
 
 // ConditionType represents a type of authorization conditions

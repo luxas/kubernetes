@@ -26,8 +26,15 @@ const (
 // Register registers a plugin
 func Register(plugins *admission.Plugins) {
 	plugins.Register(PluginName, func(config io.Reader) (admission.Interface, error) {
-		return NewConditionalAuthorizationEnforcer(), nil
+		return NewConditionalAuthorizationEnforcer(DefaultBuiltinConditionEvaluators()), nil
 	})
+}
+
+// defaultBuiltinEvaluators is the default set of in-tree condition evaluators.
+// Used when callers of EnforceConditions don't provide their own evaluators
+// (e.g. the secondary create authorization in update-to-create flows).
+func DefaultBuiltinConditionEvaluators() []authorizer.BuiltinConditionSetEvaluator {
+	return []authorizer.BuiltinConditionSetEvaluator{NewCELBuiltinConditionSetEvaluator()}
 }
 
 // TODO: Should we opt out of enforcing conditions for authorization-related resources?
@@ -43,22 +50,28 @@ var _ admission.ValidationInterface = &ConditionalAuthorizationEnforcer{}
 
 // var _ genericadmissioninit.WantsExternalKubeClientSet = &ConditionalAuthorizationEnforcer{}
 var _ genericadmissioninit.WantsFeatures = &ConditionalAuthorizationEnforcer{}
+var _ genericadmissioninit.WantsAuthorizer = &ConditionalAuthorizationEnforcer{}
 
-func NewConditionalAuthorizationEnforcer() *ConditionalAuthorizationEnforcer {
+func NewConditionalAuthorizationEnforcer(builtinEvaluators []authorizer.BuiltinConditionSetEvaluator) *ConditionalAuthorizationEnforcer {
 	return &ConditionalAuthorizationEnforcer{
-		builtinConditionSetEvaluators: []authorizer.ConditionSetEvaluator{&celConditionsEnforcer{}},
+		builtinConditionSetEvaluators: builtinEvaluators,
 	}
 }
 
 type ConditionalAuthorizationEnforcer struct {
-	builtinConditionSetEvaluators []authorizer.ConditionSetEvaluator
+	builtinConditionSetEvaluators []authorizer.BuiltinConditionSetEvaluator
 	featureEnabled                bool
+	authorizer                    authorizer.Authorizer
 	//setExternalKubeClientSetCalled bool
 	//enableBuiltinCEL               bool
 }
 
 func (c *ConditionalAuthorizationEnforcer) InspectFeatureGates(features featuregate.FeatureGate) {
 	c.featureEnabled = features.Enabled(genericfeatures.ConditionalAuthorization)
+}
+
+func (c *ConditionalAuthorizationEnforcer) SetAuthorizer(authorizer authorizer.Authorizer) {
+	c.authorizer = authorizer
 }
 
 /*func (c *ConditionalAuthorizationEnforcer) SetExternalKubeClientSet(cs kubernetes.Interface) {
@@ -96,13 +109,99 @@ func (c *ConditionalAuthorizationEnforcer) Validate(ctx context.Context, a admis
 		return fmt.Errorf("failed to get authorizer attributes: %w", err)
 	}
 
-	//admissionRequest := plugincel.CreateAdmissionRequest(a, metav1.GroupVersionResource(a.GetResource()), metav1.GroupVersionKind(a.GetKind()))
-	// TODO(luxas): CEL evaluation
-	return EnforceConditions(ctx, a, o, authorizer, authzAttrs, unevaluatedDecision)
+	return EnforceConditions(ctx, a, o, authorizer, authzAttrs, unevaluatedDecision, c.builtinConditionSetEvaluators...)
+}
+
+func EvaluateConditionsWithBuiltins(ctx context.Context, authorizer authorizer.Authorizer, unevaluatedDecision authorizer.Decision, data authorizer.ConditionData, builtinEvaluators ...authorizer.BuiltinConditionSetEvaluator) (authorizer.Decision, error) {
+	if unevaluatedDecision.IsConcrete() {
+		return unevaluatedDecision, nil
+	}
+
+	possiblyEvaluatedUsingPlugins, fullyEvaluated, err := tryEvaluateUsingBuiltins(ctx, unevaluatedDecision, data, builtinEvaluators...)
+	if unevaluatedDecision.IsConcrete() || fullyEvaluated {
+		return possiblyEvaluatedUsingPlugins, err
+	}
+
+	// Defer to the authorizer for the rest of the evaluation
+	// TODO(luxas): Make sure that evaluatedDecisionAfter > evaluatedDecision before returning
+	return authorizer.EvaluateConditions(ctx, possiblyEvaluatedUsingPlugins, data)
+}
+
+func tryEvaluateUsingBuiltins(ctx context.Context, unevaluatedDecision authorizer.Decision, data authorizer.ConditionData, builtinEvaluators ...authorizer.BuiltinConditionSetEvaluator) (authorizer.Decision, bool, error) {
+	if unevaluatedDecision.IsConcrete() {
+		return unevaluatedDecision, true, nil
+	}
+
+	if unevaluatedDecision.IsConditionalChain() {
+		var newDecisionChain authorizer.ConditionalDecisionChain
+		errlist := []error{}
+		// Recursively walk through the decision DAG in a depth-first manner.
+		for i, unevaluatedSubDecision := range unevaluatedDecision.ConditionalChain() {
+			evaluatedSubDecision, fullyEvaluated, err := tryEvaluateUsingBuiltins(ctx, unevaluatedSubDecision, data, builtinEvaluators...)
+			if err != nil {
+				errlist = append(errlist, err)
+			}
+
+			if evaluatedSubDecision.IsAllowed() || evaluatedSubDecision.IsDenied() {
+				return evaluatedSubDecision, true, utilerrors.NewAggregate(errlist)
+			}
+
+			newDecisionChain = append(newDecisionChain, evaluatedSubDecision)
+			if evaluatedSubDecision.IsNoOpinion() {
+				continue
+			}
+			// Either Conditional or ConditionChain. If it is considered "fully evaluated",
+			// then we're ok to return it as a success, otherwise we return a pruned prefix
+			// of the original chain, now with possible more NoOpinions in the beginning
+			// of the chain than before (until the i-th position).
+			// TODO(luxas): Make sure that evaluatedDecisionAfter > evaluatedDecision before assigning
+			if fullyEvaluated {
+				return evaluatedSubDecision, true, utilerrors.NewAggregate(errlist)
+			}
+
+			// Preserve the tail of the chain if we exit greedy builtin evaluation early
+			// TODO(luxas): Make a unit test for this
+			if i+1 < len(unevaluatedDecision.ConditionalChain()) {
+				newDecisionChain = append(newDecisionChain, unevaluatedDecision.ConditionalChain()[i+1:]...)
+			}
+
+			return authorizer.DecisionConditionalChain(newDecisionChain...), false, utilerrors.NewAggregate(errlist)
+		}
+		// To get here, all evaluated decisions must have been NoOpinions, which aggregate to NoOpinion
+		return authorizer.DecisionNoOpinion(), true, utilerrors.NewAggregate(errlist)
+	}
+
+	// Otherwise, the decision is a ConditionSet. Try to evaluate it using the builtin ones.
+	conditionSet := unevaluatedDecision.ConditionSet()
+	errlist := []error{}
+	for _, builtinEvaluator := range builtinEvaluators {
+		possiblyEvaluatedDecision, err := builtinEvaluator.BuiltinEvaluateConditions(ctx, conditionSet, data)
+		if err != nil {
+			errlist = append(errlist, err)
+		}
+
+		// The builtin evaluator could not evaluate this conditionset, try the next one
+		if possiblyEvaluatedDecision == nil {
+			continue
+		}
+
+		if possiblyEvaluatedDecision.IsConditionalChain() {
+			err = fmt.Errorf("builtin ConditionSet evaluator %T returned ConditionalChain, that is invalid behavior", builtinEvaluator)
+			errlist = append(errlist, err)
+			continue
+		}
+
+		// possiblyEvaluatedDecision is an Allow, Deny, NoOpinion or other ConditionSet (against another target),
+		// which the evaluator claims is fully evaluated. We can thus return this resolved result.
+		// TODO(luxas): Make sure that evaluatedDecisionAfter > evaluatedDecision before returning
+		return *possiblyEvaluatedDecision, true, utilerrors.NewAggregate(errlist)
+	}
+	// None of the evaluators could (fully) evaluate the ConditionSet, thus return the original
+	return unevaluatedDecision, false, utilerrors.NewAggregate(errlist)
 }
 
 // TODO(luxas): This function should probably be under the authorizer package, and then this concrete admission plugin just returns it?
-func EnforceConditions(ctx context.Context, admissionAttrs admission.Attributes, o admission.ObjectInterfaces, authorizer authorizer.Authorizer, authzAttrs authorizer.Attributes, unevaluatedDecision authorizer.Decision, builtinEvaluators ...authorizer.ConditionSetEvaluator) error {
+func EnforceConditions(ctx context.Context, admissionAttrs admission.Attributes, o admission.ObjectInterfaces, authorizer authorizer.Authorizer, authzAttrs authorizer.Attributes, unevaluatedDecision authorizer.Decision, builtinEvaluators ...authorizer.BuiltinConditionSetEvaluator) error {
 	// TODO: Does this convert to the request GVR version?
 	versionedAttributes, err := admission.NewVersionedAttributes(admissionAttrs, admissionAttrs.GetKind(), o)
 	if err != nil {
@@ -115,31 +214,12 @@ func EnforceConditions(ctx context.Context, admissionAttrs admission.Attributes,
 		},
 	}
 
-	errlist := []error{}
-	evaluatedDecision := unevaluatedDecision
-	// TODO: This logic should also exist in the union authorizer, so we should probably share the code.
-	for _, builtinEvaluator := range builtinEvaluators {
-		evaluatedDecisionAfter, err := builtinEvaluator.EvaluateConditions(ctx, evaluatedDecision, data)
-		if err != nil {
-			errlist = append(errlist, err)
-		}
-		if evaluatedDecisionAfter.IsConcrete() {
-			break
-		}
-		evaluatedDecision = evaluatedDecisionAfter
-	}
-
-	if !evaluatedDecision.IsConcrete() {
-		evaluatedDecision, err = authorizer.EvaluateConditions(ctx, unevaluatedDecision, data)
-		errlist = append(errlist, err)
-	}
-
+	evaluatedDecision, err := EvaluateConditionsWithBuiltins(ctx, authorizer, unevaluatedDecision, data, builtinEvaluators...)
 	// At this point, we require an unconditional allow in order to proceed.
 	if evaluatedDecision.IsAllowed() {
 		return nil
 	}
 
-	err = utilerrors.NewAggregate(errlist)
 	if err != nil {
 		//audit.AddAuditAnnotation(ctx, reasonAnnotationKey, reasonError)
 		return apierrors.NewInternalError(err) // TODO: Check if this is the same as responsewriters.InternalError(w, req, err)

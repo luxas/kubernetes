@@ -162,8 +162,10 @@ authorizers:
 		// webhook evaluation vs in-tree CEL evaluation).
 		webhookBehaviors map[string]func(ws *webhookServerHandler)
 		// makeRequest creates a client with the given user and performs an API request.
-		// Returns an error if the request fails.
-		makeRequest func(t *testing.T, client *clientset.Clientset) error
+		// Returns an error if the request fails. The suffix parameter is derived from
+		// the webhook behavior name and must be used in resource names to avoid
+		// conflicts between subtests that share the same API server.
+		makeRequest func(t *testing.T, client *clientset.Clientset, suffix string) error
 		// expectAllowed is true if the request should be allowed
 		expectAllowed bool
 		// expectAllowedWhenDisabled overrides expectAllowed when the feature is disabled.
@@ -182,9 +184,9 @@ authorizers:
 					}
 				},
 			},
-			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
+			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
-					ObjectMeta: metav1.ObjectMeta{Name: "test-allowed"},
+					ObjectMeta: metav1.ObjectMeta{Name: "test-allowed" + suffix},
 				}, metav1.CreateOptions{})
 				return err
 			},
@@ -202,9 +204,9 @@ authorizers:
 					}
 				},
 			},
-			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
+			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
-					ObjectMeta: metav1.ObjectMeta{Name: "test-denied"},
+					ObjectMeta: metav1.ObjectMeta{Name: "test-denied" + suffix},
 				}, metav1.CreateOptions{})
 				return err
 			},
@@ -222,7 +224,7 @@ authorizers:
 					}
 				},
 			},
-			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
+			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").List(context.TODO(), metav1.ListOptions{})
 				return err
 			},
@@ -251,9 +253,9 @@ authorizers:
 					},
 				}
 			}),
-			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
+			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
-					ObjectMeta: metav1.ObjectMeta{Name: "test-conditional-allow"},
+					ObjectMeta: metav1.ObjectMeta{Name: "test-conditional-allow" + suffix},
 				}, metav1.CreateOptions{})
 				return err
 			},
@@ -286,9 +288,9 @@ authorizers:
 					},
 				}
 			}),
-			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
+			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
-					ObjectMeta: metav1.ObjectMeta{Name: "test-conditional-deny"},
+					ObjectMeta: metav1.ObjectMeta{Name: "test-conditional-deny" + suffix},
 				}, metav1.CreateOptions{})
 				return err
 			},
@@ -312,7 +314,7 @@ authorizers:
 					},
 				}
 			}),
-			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
+			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").List(context.TODO(), metav1.ListOptions{})
 				return err
 			},
@@ -346,9 +348,9 @@ authorizers:
 					},
 				}
 			}),
-			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
+			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
-					ObjectMeta: metav1.ObjectMeta{Name: "safe-configmap"},
+					ObjectMeta: metav1.ObjectMeta{Name: "safe-configmap" + suffix},
 				}, metav1.CreateOptions{})
 				return err
 			},
@@ -373,9 +375,9 @@ authorizers:
 					},
 				}
 			}),
-			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
+			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
-					ObjectMeta: metav1.ObjectMeta{Name: "unsafe-configmap"},
+					ObjectMeta: metav1.ObjectMeta{Name: "unsafe-configmap" + suffix},
 				}, metav1.CreateOptions{})
 				return err
 			},
@@ -407,10 +409,10 @@ authorizers:
 					},
 				}
 			}),
-			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
+			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
 					ObjectMeta: metav1.ObjectMeta{
-						Name:   "cel-restricted-cm",
+						Name:   "cel-restricted-cm" + suffix,
 						Labels: map[string]string{"restricted": "true"},
 					},
 				}, metav1.CreateOptions{})
@@ -438,9 +440,9 @@ authorizers:
 					},
 				}
 			}),
-			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
+			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
-					ObjectMeta: metav1.ObjectMeta{Name: "cel-approved-cm"},
+					ObjectMeta: metav1.ObjectMeta{Name: "cel-approved-cm" + suffix},
 					Data:       map[string]string{"approved": "yes"},
 				}, metav1.CreateOptions{})
 				return err
@@ -468,9 +470,9 @@ authorizers:
 					},
 				}
 			}),
-			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
+			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
-					ObjectMeta: metav1.ObjectMeta{Name: "cel-unapproved-cm"},
+					ObjectMeta: metav1.ObjectMeta{Name: "cel-unapproved-cm" + suffix},
 					Data:       map[string]string{"approved": "no"},
 				}, metav1.CreateOptions{})
 				return err
@@ -501,10 +503,10 @@ authorizers:
 					},
 				}
 			}),
-			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
+			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				// Create should succeed (CEL allows CREATE)
 				cm, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
-					ObjectMeta: metav1.ObjectMeta{Name: "cel-op-cm"},
+					ObjectMeta: metav1.ObjectMeta{Name: "cel-op-cm" + suffix},
 					Data:       map[string]string{"key": "value"},
 				}, metav1.CreateOptions{})
 				if err != nil {
@@ -548,9 +550,9 @@ authorizers:
 					},
 				}
 			}),
-			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
+			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
-					ObjectMeta: metav1.ObjectMeta{Name: "cel-priority-cm"},
+					ObjectMeta: metav1.ObjectMeta{Name: "cel-priority-cm" + suffix},
 				}, metav1.CreateOptions{})
 				return err
 			},
@@ -582,10 +584,10 @@ authorizers:
 					},
 				}
 			}),
-			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
+			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
 					ObjectMeta: metav1.ObjectMeta{
-						Name:   "cel-noop-cm",
+						Name:   "cel-noop-cm" + suffix,
 						Labels: map[string]string{"review": "pending"},
 					},
 				}, metav1.CreateOptions{})
@@ -630,13 +632,13 @@ authorizers:
 					}
 				}
 			}),
-			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
+			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				// PUT a non-existent lease with creator=update-create-allow-user.
 				// Since Leases support AllowCreateOnUpdate, this becomes a create.
 				// The create authorization should succeed because the condition is met.
 				_, err := client.CoordinationV1().Leases("test-ns").Update(context.TODO(), &coordinationv1.Lease{
 					ObjectMeta: metav1.ObjectMeta{
-						Name:   "update-create-allowed",
+						Name:   "update-create-allowed" + suffix,
 						Labels: map[string]string{"creator": "update-create-allow-user"},
 					},
 				}, metav1.UpdateOptions{})
@@ -685,12 +687,12 @@ authorizers:
 					}
 				}
 			}),
-			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
+			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				// PUT a non-existent lease with creator=not-authorized-user.
 				// The create authorization should fail because the condition is not met.
 				_, err := client.CoordinationV1().Leases("test-ns").Update(context.TODO(), &coordinationv1.Lease{
 					ObjectMeta: metav1.ObjectMeta{
-						Name:   "update-create-denied",
+						Name:   "update-create-denied" + suffix,
 						Labels: map[string]string{"creator": "not-authorized-user"},
 					},
 				}, metav1.UpdateOptions{})
@@ -749,12 +751,12 @@ authorizers:
 					}
 				}
 			}),
-			makeRequest: func(t *testing.T, client *clientset.Clientset) error {
+			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				// PUT a non-existent lease with creator=update-create-deny-user but no classified label.
 				// The create authorization should fail because the update condition (classified=false) is not met.
 				_, err := client.CoordinationV1().Leases("test-ns").Update(context.TODO(), &coordinationv1.Lease{
 					ObjectMeta: metav1.ObjectMeta{
-						Name:   "update-create-denied-by-update-condition",
+						Name:   "update-create-denied-by-update-condition" + suffix,
 						Labels: map[string]string{"creator": "update-create-deny-user"},
 					},
 				}, metav1.UpdateOptions{})
@@ -780,9 +782,20 @@ authorizers:
 					// Configure the webhook behavior for this test case
 					webhookBehavior(webhookServer.handler)
 
+					// Compute the user name and resource suffix. Append the webhook
+					// behavior name so the webhook response cache (keyed on the SAR
+					// spec including user) doesn't return stale entries from a
+					// sibling subtest with a different webhook configuration.
+					userName := tc.user
+					suffix := webhookBehaviorName
+					if suffix != "" {
+						userName += "-" + suffix
+						suffix = "-" + suffix
+					}
+
 					// For tests that need RBAC fallthrough, grant RBAC access
 					if tc.user == "conditional-noop-rbac-user" || tc.user == "webhook-noop-rbac-user" {
-						authutil.GrantUserAuthorization(t, context.TODO(), adminClient, tc.user,
+						authutil.GrantUserAuthorization(t, context.TODO(), adminClient, userName,
 							rbacv1.PolicyRule{
 								Verbs:     []string{"list", "get"},
 								APIGroups: []string{""},
@@ -790,14 +803,10 @@ authorizers:
 							},
 						)
 					}
-
-					// Create an impersonated client for the test user
 					impersonationConfig := rest.CopyConfig(server.ClientConfig)
-					impersonationConfig.Impersonate.UserName = tc.user
+					impersonationConfig.Impersonate.UserName = userName
 					userClient := clientset.NewForConfigOrDie(impersonationConfig)
-
-					// Execute the request
-					err := tc.makeRequest(t, userClient)
+					err := tc.makeRequest(t, userClient, suffix)
 
 					expected := tc.expectAllowed
 					if !featureEnabled && tc.expectAllowedWhenDisabled != nil {
