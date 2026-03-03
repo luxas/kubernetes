@@ -18,23 +18,26 @@ package authorizationconditionsreview
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
+	genericfeatures "k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/registry/rest"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
+	"k8s.io/kubernetes/pkg/api/legacyscheme"
+	_ "k8s.io/kubernetes/pkg/api/testing"
 	"k8s.io/kubernetes/pkg/apis/admission"
+	authorizationapi "k8s.io/kubernetes/pkg/apis/authorization"
 	autoscalingapi "k8s.io/kubernetes/pkg/apis/autoscaling"
 	api "k8s.io/kubernetes/pkg/apis/core"
 	"k8s.io/utils/ptr"
-
-	"github.com/google/go-cmp/cmp"
-	"k8s.io/kubernetes/pkg/api/legacyscheme"
-	_ "k8s.io/kubernetes/pkg/api/testing"
-	authorizationapi "k8s.io/kubernetes/pkg/apis/authorization"
 )
 
 type fakeAuthorizer struct {
@@ -55,456 +58,387 @@ func (f *fakeAuthorizer) EvaluateConditions(ctx context.Context, decision author
 	return f.evaluateDecision, f.evaluateErr
 }
 
-func TestDecodeObject_HPA(t *testing.T) {
-	r, err := NewREST(&fakeAuthorizer{}, legacyscheme.Codecs)
-	if err != nil {
-		t.Fatalf("unexpected error creating REST: %v", err)
-	}
+type expectedConditionData struct {
+	writeOperation string
+	writeObject    runtime.Object
+	writeOldObject runtime.Object
+}
+
+func TestCreate(t *testing.T) {
+	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ConditionalAuthorization, true)
+	podJSON := []byte(`{
+		"apiVersion": "v1",
+		"kind": "Pod",
+		"metadata": {"name": "test-pod", "namespace": "default"},
+		"spec": {"containers": [{"name": "nginx", "image": "nginx:latest"}]}
+	}`)
+
+	newPodJSON := []byte(`{
+		"apiVersion": "v1",
+		"kind": "Pod",
+		"metadata": {"name": "new-pod", "namespace": "default"},
+		"spec": {"containers": [{"name": "nginx", "image": "nginx:latest"}]}
+	}`)
+
+	oldPodJSON := []byte(`{
+		"apiVersion": "v1",
+		"kind": "Pod",
+		"metadata": {"name": "old-pod", "namespace": "default"},
+		"spec": {"containers": [{"name": "nginx", "image": "nginx:latest"}]}
+	}`)
 
 	hpaJSON := []byte(`{
 		"apiVersion": "autoscaling/v1",
 		"kind": "HorizontalPodAutoscaler",
-		"metadata": {
-			"name": "test-hpa",
-			"namespace": "default"
-		},
-		"spec": {
-			"maxReplicas": 10,
-			"targetCPUUtilizationPercentage": 80
-		}
+		"metadata": {"name": "test-hpa", "namespace": "default"},
+		"spec": {"maxReplicas": 10, "targetCPUUtilizationPercentage": 80}
 	}`)
 
-	obj, err := r.decodeObject(hpaJSON)
-	if err != nil {
-		t.Fatalf("decodeObject returned error: %v", err)
-	}
-
-	hpa, ok := obj.(*autoscalingapi.HorizontalPodAutoscaler)
-	if !ok {
-		t.Fatalf("expected *autoscalingapi.HorizontalPodAutoscaler, got %T", obj)
-	}
-
-	expected := &autoscalingapi.HorizontalPodAutoscaler{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-hpa",
-			Namespace: "default",
-		},
-		Spec: autoscalingapi.HorizontalPodAutoscalerSpec{
-			MinReplicas: ptr.To(int32(1)), // from v1 defaults
-			MaxReplicas: 10,
-			// from v1 -> internal conversion
-			Metrics: []autoscalingapi.MetricSpec{
-				{
-					Type: autoscalingapi.ResourceMetricSourceType,
-					Resource: &autoscalingapi.ResourceMetricSource{
-						Name: api.ResourceCPU,
-						Target: autoscalingapi.MetricTarget{
-							Type:               autoscalingapi.UtilizationMetricType,
-							AverageUtilization: ptr.To(int32(80)),
-						},
-					},
-				},
-			},
-		},
-	}
-
-	if diff := cmp.Diff(expected, hpa); diff != "" {
-		t.Errorf("HPA not as expected, diff=%s", diff)
-	}
-}
-
-func TestDecodeObject_UnregisteredType(t *testing.T) {
-	r, err := NewREST(&fakeAuthorizer{}, legacyscheme.Codecs)
-	if err != nil {
-		t.Fatalf("unexpected error creating REST: %v", err)
-	}
-
-	// A CRD-like object not registered in legacyscheme
 	unregisteredJSON := []byte(`{
 		"apiVersion": "example.com/v1",
 		"kind": "Foo",
-		"metadata": {
-			"name": "my-foo",
-			"namespace": "bar"
-		},
-		"spec": {
-			"field1": "value1"
-		}
+		"metadata": {"name": "my-foo", "namespace": "bar"},
+		"spec": {"field1": "value1"}
 	}`)
 
-	obj, err := r.decodeObject(unregisteredJSON)
-	if err != nil {
-		t.Fatalf("decodeObject returned error for unregistered type: %v", err)
-	}
-
-	expected := &unstructured.Unstructured{
-		Object: map[string]any{
-			"apiVersion": "example.com/v1",
-			"kind":       "Foo",
-			"metadata": map[string]any{
-				"name":      "my-foo",
-				"namespace": "bar",
+	expectedPod := func(name, namespace string) *api.Pod {
+		return &api.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+			Spec: api.PodSpec{
+				Containers: []api.Container{{
+					Name:                     "nginx",
+					Image:                    "nginx:latest",
+					TerminationMessagePath:   "/dev/termination-log",
+					TerminationMessagePolicy: api.TerminationMessageReadFile,
+					ImagePullPolicy:          api.PullAlways,
+				}},
+				RestartPolicy:                 api.RestartPolicyAlways,
+				TerminationGracePeriodSeconds: ptr.To(int64(30)),
+				DNSPolicy:                     api.DNSClusterFirst,
+				SecurityContext:               &api.PodSecurityContext{},
+				SchedulerName:                 "default-scheduler",
+				EnableServiceLinks:            ptr.To(true),
 			},
-			"spec": map[string]any{
-				"field1": "value1",
-			},
-		},
+		}
 	}
 
-	if diff := cmp.Diff(expected, obj); diff != "" {
-		t.Errorf("HPA not as expected, diff=%s", diff)
-	}
-}
-
-func TestDecodeObject_InvalidJSON(t *testing.T) {
-	r, err := NewREST(&fakeAuthorizer{}, legacyscheme.Codecs)
-	if err != nil {
-		t.Fatalf("unexpected error creating REST: %v", err)
-	}
-
-	_, err = r.decodeObject([]byte(`{not valid json`))
-	if err == nil {
-		t.Fatal("expected error for invalid JSON, got nil")
-	}
-}
-
-func TestToConditionsData(t *testing.T) {
-	r, err := NewREST(&fakeAuthorizer{}, legacyscheme.Codecs)
-	if err != nil {
-		t.Fatalf("unexpected error creating REST: %v", err)
-	}
-
-	podJSON, err := json.Marshal(map[string]interface{}{
-		"apiVersion": "v1",
-		"kind":       "Pod",
-		"metadata":   map[string]interface{}{"name": "test-pod", "namespace": "default"},
-		"spec": map[string]interface{}{
-			"containers": []interface{}{
-				map[string]interface{}{"name": "nginx", "image": "nginx:latest"},
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("failed to marshal pod JSON: %v", err)
-	}
-
-	req := &authorizationapi.AuthorizationConditionsRequest{
-		WriteRequest: &authorizationapi.AuthorizationConditionsWriteRequest{
-			Operation: admission.Create,
-			Object:    runtime.RawExtension{Raw: podJSON},
-		},
-	}
-
-	data, err := r.toConditionsData(req)
-	if err != nil {
-		t.Fatalf("toConditionsData returned error: %v", err)
-	}
-
-	wr := data.WriteRequest()
-	if wr == nil {
-		t.Fatal("expected non-nil WriteRequest")
-	}
-	if wr.GetOperation() != "CREATE" {
-		t.Errorf("expected operation %q, got %q", "CREATE", wr.GetOperation())
-	}
-
-	obj := wr.GetObject()
-	if obj == nil {
-		t.Fatal("expected non-nil object")
-	}
-	pod, ok := obj.(*api.Pod)
-	if !ok {
-		t.Fatalf("expected *api.Pod, got %T", obj)
-	}
-	if pod.Name != "test-pod" {
-		t.Errorf("expected pod name %q, got %q", "test-pod", pod.Name)
-	}
-
-	if wr.GetOldObject() != nil {
-		t.Errorf("expected nil old object, got %v", wr.GetOldObject())
-	}
-}
-
-func TestToConditionsData_NilWriteRequest(t *testing.T) {
-	r, err := NewREST(&fakeAuthorizer{}, legacyscheme.Codecs)
-	if err != nil {
-		t.Fatalf("unexpected error creating REST: %v", err)
-	}
-
-	req := &authorizationapi.AuthorizationConditionsRequest{
-		WriteRequest: nil,
-	}
-
-	_, err = r.toConditionsData(req)
-	if err == nil {
-		t.Fatal("expected error for nil WriteRequest, got nil")
-	}
-}
-
-func TestToConditionsData_ObjectAndOldObject(t *testing.T) {
-	r, err := NewREST(&fakeAuthorizer{}, legacyscheme.Codecs)
-	if err != nil {
-		t.Fatalf("unexpected error creating REST: %v", err)
-	}
-
-	makePodJSON := func(name string) []byte {
-		data, err := json.Marshal(map[string]interface{}{
-			"apiVersion": "v1",
-			"kind":       "Pod",
-			"metadata":   map[string]interface{}{"name": name, "namespace": "default"},
-			"spec": map[string]interface{}{
-				"containers": []interface{}{
-					map[string]interface{}{"name": "nginx", "image": "nginx:latest"},
+	serializedConditionSet := func(conditionsType, id, cond string, effect authorizationapi.SubjectAccessReviewConditionEffect) authorizationapi.SubjectAccessReviewAuthorizationDecision {
+		return authorizationapi.SubjectAccessReviewAuthorizationDecision{
+			ConditionsType: conditionsType,
+			Conditions: []authorizationapi.SubjectAccessReviewCondition{
+				{
+					ID:        id,
+					Condition: cond,
+					Effect:    effect,
 				},
 			},
-		})
-		if err != nil {
-			t.Fatalf("failed to marshal pod JSON: %v", err)
 		}
-		return data
 	}
 
-	req := &authorizationapi.AuthorizationConditionsRequest{
-		WriteRequest: &authorizationapi.AuthorizationConditionsWriteRequest{
-			Operation: admission.Update,
-			Object:    runtime.RawExtension{Raw: makePodJSON("new-pod")},
-			OldObject: runtime.RawExtension{Raw: makePodJSON("old-pod")},
-		},
-	}
-
-	data, err := r.toConditionsData(req)
-	if err != nil {
-		t.Fatalf("toConditionsData returned error: %v", err)
-	}
-
-	wr := data.WriteRequest()
-	if wr == nil {
-		t.Fatal("expected non-nil WriteRequest")
-	}
-	if wr.GetOperation() != "UPDATE" {
-		t.Errorf("expected operation %q, got %q", "UPDATE", wr.GetOperation())
-	}
-
-	newPod, ok := wr.GetObject().(*api.Pod)
-	if !ok {
-		t.Fatalf("expected *api.Pod for object, got %T", wr.GetObject())
-	}
-	if newPod.Name != "new-pod" {
-		t.Errorf("expected object pod name %q, got %q", "new-pod", newPod.Name)
-	}
-
-	oldPod, ok := wr.GetOldObject().(*api.Pod)
-	if !ok {
-		t.Fatalf("expected *api.Pod for old object, got %T", wr.GetOldObject())
-	}
-	if oldPod.Name != "old-pod" {
-		t.Errorf("expected old object pod name %q, got %q", "old-pod", oldPod.Name)
-	}
-}
-
-func TestCreate_AllowedDecision(t *testing.T) {
-	auth := &fakeAuthorizer{
-		evaluateDecision: authorizer.DecisionAllow("allowed"),
-	}
-	r, err := NewREST(auth, legacyscheme.Codecs)
-	if err != nil {
-		t.Fatalf("unexpected error creating REST: %v", err)
-	}
-
-	podJSON, _ := json.Marshal(map[string]interface{}{
-		"apiVersion": "v1",
-		"kind":       "Pod",
-		"metadata":   map[string]interface{}{"name": "test-pod"},
-		"spec": map[string]interface{}{
-			"containers": []interface{}{
-				map[string]interface{}{"name": "nginx", "image": "nginx:latest"},
-			},
-		},
-	})
-
-	fakeAttrs := &authorizer.AttributesRecord{
-		ConditionsMode: authorizer.ConditionsModeOptimized,
-	}
-	inputDecision, errs := deserializeDecision(fakeAttrs, authorizationapi.SubjectAccessReviewAuthorizationDecision{
-		Allowed: true,
-	}, nil)
-	if len(errs) > 0 {
-		t.Fatalf("unexpected errors from deserializeDecision: %v", errs)
-	}
-	_ = inputDecision
-
-	acr := &authorizationapi.AuthorizationConditionsReview{
-		Request: &authorizationapi.AuthorizationConditionsRequest{
-			Decision: authorizationapi.SubjectAccessReviewAuthorizationDecision{
-				Allowed: true,
-			},
-			WriteRequest: &authorizationapi.AuthorizationConditionsWriteRequest{
-				Operation: admission.Create,
-				Object:    runtime.RawExtension{Raw: podJSON},
-			},
-		},
-	}
-
-	result, err := r.Create(context.Background(), acr, rest.ValidateAllObjectFunc, &metav1.CreateOptions{})
-	if err != nil {
-		t.Fatalf("Create returned error: %v", err)
-	}
-
-	review, ok := result.(*authorizationapi.AuthorizationConditionsReview)
-	if !ok {
-		t.Fatalf("expected *AuthorizationConditionsReview, got %T", result)
-	}
-	if review.Response == nil {
-		t.Fatal("expected non-nil response")
-	}
-	if !review.Response.Allowed {
-		t.Error("expected response to be allowed")
-	}
-
-	// Verify the authorizer received the decoded Pod as condition data
-	if auth.gotData == nil {
-		t.Fatal("expected authorizer to receive condition data")
-	}
-	wr := auth.gotData.WriteRequest()
-	if wr == nil {
-		t.Fatal("expected non-nil WriteRequest in condition data")
-	}
-	pod, ok := wr.GetObject().(*api.Pod)
-	if !ok {
-		t.Fatalf("expected *api.Pod passed to authorizer, got %T", wr.GetObject())
-	}
-	if pod.Name != "test-pod" {
-		t.Errorf("expected pod name %q, got %q", "test-pod", pod.Name)
-	}
-}
-
-func TestCreate_InvalidRequest(t *testing.T) {
-	auth := &fakeAuthorizer{
-		evaluateDecision: authorizer.DecisionAllow(),
-	}
-	r, err := NewREST(auth, legacyscheme.Codecs)
-	if err != nil {
-		t.Fatalf("unexpected error creating REST: %v", err)
-	}
-
-	// nil Request should fail validation
-	acr := &authorizationapi.AuthorizationConditionsReview{
-		Request: nil,
-	}
-	_, err = r.Create(context.Background(), acr, rest.ValidateAllObjectFunc, &metav1.CreateOptions{})
-	if err == nil {
-		t.Fatal("expected error for nil request")
-	}
-}
-
-func TestCreate_WrongObjectType(t *testing.T) {
-	auth := &fakeAuthorizer{
-		evaluateDecision: authorizer.DecisionAllow(),
-	}
-	r, err := NewREST(auth, legacyscheme.Codecs)
-	if err != nil {
-		t.Fatalf("unexpected error creating REST: %v", err)
-	}
-
-	// Pass a non-AuthorizationConditionsReview object
-	_, err = r.Create(context.Background(), &api.Pod{}, rest.ValidateAllObjectFunc, &metav1.CreateOptions{})
-	if err == nil {
-		t.Fatal("expected error for wrong object type")
-	}
-}
-
-func TestCreate_MutuallyExclusiveDecision(t *testing.T) {
-	auth := &fakeAuthorizer{
-		evaluateDecision: authorizer.DecisionAllow(),
-	}
-	r, err := NewREST(auth, legacyscheme.Codecs)
-	if err != nil {
-		t.Fatalf("unexpected error creating REST: %v", err)
-	}
-
-	acr := &authorizationapi.AuthorizationConditionsReview{
-		Request: &authorizationapi.AuthorizationConditionsRequest{
-			Decision: authorizationapi.SubjectAccessReviewAuthorizationDecision{
-				Allowed: true,
-				Denied:  true, // mutually exclusive with Allowed
-			},
-			WriteRequest: &authorizationapi.AuthorizationConditionsWriteRequest{
-				Operation: admission.Create,
-			},
-		},
-	}
-
-	_, err = r.Create(context.Background(), acr, rest.ValidateAllObjectFunc, &metav1.CreateOptions{})
-	if err == nil {
-		t.Fatal("expected error for mutually exclusive Allowed+Denied")
-	}
-}
-
-func TestSerializeDeserializeRoundTrip(t *testing.T) {
-	fakeAttrs := &authorizer.AttributesRecord{
-		ConditionsMode: authorizer.ConditionsModeOptimized,
-	}
+	sampleConditionSet := serializedConditionSet("foo", "test-cond-id", "object.metadata.labels.foo == 'bar'", authorizationapi.SubjectAccessReviewConditionEffectAllow)
 
 	tests := []struct {
-		name     string
-		decision authorizationapi.SubjectAccessReviewAuthorizationDecision
-		check    func(t *testing.T, d authorizer.Decision)
+		name             string
+		input            runtime.Object
+		evaluateDecision authorizer.Decision
+		evaluateErr      error
+
+		expectedErr           string
+		expectedConditionData *expectedConditionData
+		expectedResponse      *authorizationapi.AuthorizationConditionsResponse
 	}{
 		{
-			name: "allowed",
-			decision: authorizationapi.SubjectAccessReviewAuthorizationDecision{
-				Allowed: true,
-				Reason:  "ok",
+			name:        "wrong object type",
+			input:       &api.Pod{},
+			expectedErr: "not a AuthorizationConditionsReview",
+		},
+		{
+			name:        "nil request",
+			input:       &authorizationapi.AuthorizationConditionsReview{},
+			expectedErr: "must be set",
+		},
+		{
+			name: "nil write request",
+			input: &authorizationapi.AuthorizationConditionsReview{
+				Request: &authorizationapi.AuthorizationConditionsRequest{
+					Decision: sampleConditionSet,
+				},
 			},
-			check: func(t *testing.T, d authorizer.Decision) {
-				if !d.IsAllowed() {
-					t.Error("expected allowed")
-				}
-				if d.Reason() != "ok" {
-					t.Errorf("expected reason %q, got %q", "ok", d.Reason())
-				}
+			expectedErr: "at least one type of conditions data",
+		},
+		{
+			name: "mutually exclusive allowed and denied",
+			input: &authorizationapi.AuthorizationConditionsReview{
+				Request: &authorizationapi.AuthorizationConditionsRequest{
+					Decision: authorizationapi.SubjectAccessReviewAuthorizationDecision{
+						Allowed: true,
+						Denied:  true,
+					},
+					WriteRequest: &authorizationapi.AuthorizationConditionsWriteRequest{
+						Operation: admission.Create,
+					},
+				},
+			},
+			expectedErr: "mutually exclusive",
+		},
+		{
+			name: "invalid JSON in object",
+			input: &authorizationapi.AuthorizationConditionsReview{
+				Request: &authorizationapi.AuthorizationConditionsRequest{
+					Decision: sampleConditionSet,
+					WriteRequest: &authorizationapi.AuthorizationConditionsWriteRequest{
+						Operation: admission.Create,
+						Object:    runtime.RawExtension{Raw: []byte(`{not valid`)},
+					},
+				},
+			},
+			expectedErr: "invalid character",
+		},
+		{
+			name: "create pod, evaluate allows",
+			input: &authorizationapi.AuthorizationConditionsReview{
+				Request: &authorizationapi.AuthorizationConditionsRequest{
+					Decision: sampleConditionSet,
+					WriteRequest: &authorizationapi.AuthorizationConditionsWriteRequest{
+						Operation: admission.Create,
+						Object:    runtime.RawExtension{Raw: podJSON},
+					},
+				},
+			},
+			evaluateDecision: authorizer.DecisionAllow("allowed"),
+			expectedConditionData: &expectedConditionData{
+				writeOperation: "CREATE",
+				writeObject:    expectedPod("test-pod", "default"),
+			},
+			expectedResponse: &authorizationapi.AuthorizationConditionsResponse{
+				SubjectAccessReviewAuthorizationDecision: authorizationapi.SubjectAccessReviewAuthorizationDecision{
+					Allowed: true,
+					Reason:  "allowed",
+				},
 			},
 		},
 		{
-			name: "denied",
-			decision: authorizationapi.SubjectAccessReviewAuthorizationDecision{
-				Denied: true,
-				Reason: "nope",
+			name: "create HPA with v1 defaulting and conversion",
+			input: &authorizationapi.AuthorizationConditionsReview{
+				Request: &authorizationapi.AuthorizationConditionsRequest{
+					Decision: sampleConditionSet,
+					WriteRequest: &authorizationapi.AuthorizationConditionsWriteRequest{
+						Operation: admission.Create,
+						Object:    runtime.RawExtension{Raw: hpaJSON},
+					},
+				},
 			},
-			check: func(t *testing.T, d authorizer.Decision) {
-				if !d.IsDenied() {
-					t.Error("expected denied")
-				}
-				if d.Reason() != "nope" {
-					t.Errorf("expected reason %q, got %q", "nope", d.Reason())
-				}
+			evaluateDecision: authorizer.DecisionAllow("ok"),
+			expectedConditionData: &expectedConditionData{
+				writeOperation: "CREATE",
+				writeObject: &autoscalingapi.HorizontalPodAutoscaler{
+					ObjectMeta: metav1.ObjectMeta{Name: "test-hpa", Namespace: "default"},
+					Spec: autoscalingapi.HorizontalPodAutoscalerSpec{
+						MinReplicas: ptr.To(int32(1)), // from v1 defaults
+						MaxReplicas: 10,
+						// from v1 -> internal conversion
+						Metrics: []autoscalingapi.MetricSpec{{
+							Type: autoscalingapi.ResourceMetricSourceType,
+							Resource: &autoscalingapi.ResourceMetricSource{
+								Name: api.ResourceCPU,
+								Target: autoscalingapi.MetricTarget{
+									Type:               autoscalingapi.UtilizationMetricType,
+									AverageUtilization: ptr.To(int32(80)),
+								},
+							},
+						}},
+					},
+				},
+			},
+			expectedResponse: &authorizationapi.AuthorizationConditionsResponse{
+				SubjectAccessReviewAuthorizationDecision: authorizationapi.SubjectAccessReviewAuthorizationDecision{
+					Allowed: true,
+					Reason:  "ok",
+				},
 			},
 		},
 		{
-			name:     "no opinion",
-			decision: authorizationapi.SubjectAccessReviewAuthorizationDecision{},
-			check: func(t *testing.T, d authorizer.Decision) {
-				if !d.IsNoOpinion() {
-					t.Error("expected no opinion")
-				}
+			name: "unregistered type falls back to unstructured",
+			input: &authorizationapi.AuthorizationConditionsReview{
+				Request: &authorizationapi.AuthorizationConditionsRequest{
+					Decision: sampleConditionSet,
+					WriteRequest: &authorizationapi.AuthorizationConditionsWriteRequest{
+						Operation: admission.Create,
+						Object:    runtime.RawExtension{Raw: unregisteredJSON},
+					},
+				},
 			},
+			evaluateDecision: authorizer.DecisionDeny("not ok"),
+			expectedConditionData: &expectedConditionData{
+				writeOperation: "CREATE",
+				writeObject: &unstructured.Unstructured{
+					Object: map[string]any{
+						"apiVersion": "example.com/v1",
+						"kind":       "Foo",
+						"metadata":   map[string]any{"name": "my-foo", "namespace": "bar"},
+						"spec":       map[string]any{"field1": "value1"},
+					},
+				},
+			},
+			expectedResponse: &authorizationapi.AuthorizationConditionsResponse{
+				SubjectAccessReviewAuthorizationDecision: authorizationapi.SubjectAccessReviewAuthorizationDecision{
+					Denied: true,
+					Reason: "not ok",
+				},
+			},
+		},
+		{
+			name: "update pod with object and old object, evaluate denies",
+			input: &authorizationapi.AuthorizationConditionsReview{
+				Request: &authorizationapi.AuthorizationConditionsRequest{
+					Decision: sampleConditionSet,
+					WriteRequest: &authorizationapi.AuthorizationConditionsWriteRequest{
+						Operation: admission.Update,
+						Object:    runtime.RawExtension{Raw: newPodJSON},
+						OldObject: runtime.RawExtension{Raw: oldPodJSON},
+					},
+				},
+			},
+			evaluateDecision: authorizer.DecisionDeny("denied"),
+			expectedConditionData: &expectedConditionData{
+				writeOperation: "UPDATE",
+				writeObject:    expectedPod("new-pod", "default"),
+				writeOldObject: expectedPod("old-pod", "default"),
+			},
+			expectedResponse: &authorizationapi.AuthorizationConditionsResponse{
+				SubjectAccessReviewAuthorizationDecision: authorizationapi.SubjectAccessReviewAuthorizationDecision{
+					Denied: true,
+					Reason: "denied",
+				},
+			},
+		},
+		{
+			name: "evaluate returns no opinion from a union authorizer",
+			input: &authorizationapi.AuthorizationConditionsReview{
+				Request: &authorizationapi.AuthorizationConditionsRequest{
+					Decision: authorizationapi.SubjectAccessReviewAuthorizationDecision{
+						ConditionalDecisionChain: []authorizationapi.SubjectAccessReviewAuthorizationDecision{
+							sampleConditionSet,
+							sampleConditionSet,
+						},
+					},
+					WriteRequest: &authorizationapi.AuthorizationConditionsWriteRequest{
+						Operation: admission.Create,
+						Object:    runtime.RawExtension{Raw: podJSON},
+					},
+				},
+			},
+			evaluateDecision: authorizer.DecisionNoOpinion("unsure"),
+			expectedConditionData: &expectedConditionData{
+				writeOperation: "CREATE",
+				writeObject:    expectedPod("test-pod", "default"),
+			},
+			expectedResponse: &authorizationapi.AuthorizationConditionsResponse{
+				SubjectAccessReviewAuthorizationDecision: authorizationapi.SubjectAccessReviewAuthorizationDecision{
+					Reason: "unsure",
+				},
+			},
+		},
+		{
+			name: "evaluate returns error",
+			input: &authorizationapi.AuthorizationConditionsReview{
+				Request: &authorizationapi.AuthorizationConditionsRequest{
+					Decision: sampleConditionSet,
+					WriteRequest: &authorizationapi.AuthorizationConditionsWriteRequest{
+						Operation: admission.Create,
+						Object:    runtime.RawExtension{Raw: podJSON},
+					},
+				},
+			},
+			evaluateErr: errors.New("evaluate failed"),
+			expectedConditionData: &expectedConditionData{
+				writeOperation: "CREATE",
+				writeObject:    expectedPod("test-pod", "default"),
+			},
+			expectedErr: "evaluate failed",
+		},
+		{
+			name: "failed to parse conditiontype",
+			input: &authorizationapi.AuthorizationConditionsReview{
+				Request: &authorizationapi.AuthorizationConditionsRequest{
+					Decision: serializedConditionSet("has whitespace", "test-cond-id", "object.metadata.labels.foo == 'bar'", authorizationapi.SubjectAccessReviewConditionEffectAllow),
+					WriteRequest: &authorizationapi.AuthorizationConditionsWriteRequest{
+						Operation: admission.Create,
+						Object:    runtime.RawExtension{Raw: podJSON},
+					},
+				},
+			},
+			expectedErr: "invalid condition type",
+		},
+		{
+			name: "failed to parse conditiontype",
+			input: &authorizationapi.AuthorizationConditionsReview{
+				Request: &authorizationapi.AuthorizationConditionsRequest{
+					Decision: serializedConditionSet("test-cond-type", "invalid id", "object.metadata.labels.foo == 'bar'", authorizationapi.SubjectAccessReviewConditionEffectAllow),
+					WriteRequest: &authorizationapi.AuthorizationConditionsWriteRequest{
+						Operation: admission.Create,
+						Object:    runtime.RawExtension{Raw: podJSON},
+					},
+				},
+			},
+			expectedErr: "invalid condition ID",
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			d, errs := deserializeDecision(fakeAttrs, tc.decision, nil)
-			if len(errs) > 0 {
-				t.Fatalf("unexpected errors: %v", errs)
+			auth := &fakeAuthorizer{
+				evaluateDecision: tc.evaluateDecision,
+				evaluateErr:      tc.evaluateErr,
 			}
-			tc.check(t, d)
+			r, err := NewREST(auth, legacyscheme.Codecs)
+			if err != nil {
+				t.Fatalf("NewREST failed: %v", err)
+			}
 
-			serialized := serializeDecision(d)
-			d2, errs := deserializeDecision(fakeAttrs, serialized, nil)
-			if len(errs) > 0 {
-				t.Fatalf("unexpected errors on re-deserialize: %v", errs)
+			result, err := r.Create(t.Context(), tc.input, rest.ValidateAllObjectFunc, &metav1.CreateOptions{})
+
+			// Check condition data passed to EvaluateConditions (before error check,
+			// since EvaluateConditions may have been called even when it returns an error).
+			if tc.expectedConditionData != nil {
+				if auth.gotData == nil {
+					t.Fatal("expected EvaluateConditions to be called, but it was not")
+				}
+				wr := auth.gotData.WriteRequest()
+				if wr == nil {
+					t.Fatal("expected non-nil WriteRequest in condition data")
+				}
+				if wr.GetOperation() != tc.expectedConditionData.writeOperation {
+					t.Errorf("condition data operation: got %q, want %q", wr.GetOperation(), tc.expectedConditionData.writeOperation)
+				}
+				if diff := cmp.Diff(tc.expectedConditionData.writeObject, wr.GetObject()); diff != "" {
+					t.Errorf("condition data object mismatch (-want +got):\n%s", diff)
+				}
+				if diff := cmp.Diff(tc.expectedConditionData.writeOldObject, wr.GetOldObject()); diff != "" {
+					t.Errorf("condition data old object mismatch (-want +got):\n%s", diff)
+				}
 			}
-			tc.check(t, d2)
+
+			if tc.expectedErr != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tc.expectedErr)
+				}
+				if !strings.Contains(err.Error(), tc.expectedErr) {
+					t.Errorf("error mismatch: got %q, want containing %q", err.Error(), tc.expectedErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			review, ok := result.(*authorizationapi.AuthorizationConditionsReview)
+			if !ok {
+				t.Fatalf("expected *AuthorizationConditionsReview, got %T", result)
+			}
+			if diff := cmp.Diff(tc.expectedResponse, review.Response); diff != "" {
+				t.Errorf("response mismatch (-want +got):\n%s", diff)
+			}
 		})
 	}
 }
