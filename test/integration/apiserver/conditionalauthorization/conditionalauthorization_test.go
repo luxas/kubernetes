@@ -32,6 +32,8 @@ import (
 
 	authorizationv1 "k8s.io/api/authorization/v1"
 	authorizationv1alpha1 "k8s.io/api/authorization/v1alpha1"
+	autoscalingv1 "k8s.io/api/autoscaling/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -143,9 +145,12 @@ authorizers:
 
 	adminClient := clientset.NewForConfigOrDie(server.ClientConfig)
 
-	// Create the "test-ns" namespace for tests
+	// Create the "test-ns" namespace for tests, with labels for namespaceObject tests
 	_, err := adminClient.CoreV1().Namespaces().Create(context.TODO(), &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{Name: "test-ns"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   "test-ns",
+			Labels: map[string]string{"env": "production", "team": "platform"},
+		},
 	}, metav1.CreateOptions{})
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		t.Fatal(err)
@@ -772,8 +777,278 @@ authorizers:
 			},
 			expectAllowed: false,
 		},
-		// TODO: Test the builtin authorizer function and ns variable in k8s authorization CEL.
-		// TODO: Test sending requests with both HPA v1 and v2, and checking they are evaluated correctly.
+		// Tests for the builtin authorizer function in k8s authorization CEL.
+		// The "compound authorization" pattern: creating an object with the "protected-label"
+		// label requires the additional permission "verb=use apigroup=example.com
+		// resource=protectedlabels name=protected-label", which is checked via the
+		// authorizer CEL function.
+		{
+			name: "cel authorizer compound authorization - allow",
+			user: "compound-authz-allow-user",
+			webhookBehaviors: map[string]func(ws *webhookServerHandler){
+				"in-process-eval-only": func(ws *webhookServerHandler) {
+					ws.sarHandler = compoundAuthzSARHandler("configmaps")
+					ws.acrHandler = acrEvaluateCEL(ws.t, "nonexistent-panic-on-ACR-webhook")
+				},
+			},
+			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
+				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:   "protected-cm-allow" + suffix,
+						Labels: map[string]string{"protected-label": "yes"},
+					},
+				}, metav1.CreateOptions{})
+				return err
+			},
+			expectAllowed:             true,
+			expectAllowedWhenDisabled: boolPtr(false),
+		},
+		{
+			name: "cel authorizer compound authorization - deny",
+			user: "compound-authz-deny-user",
+			webhookBehaviors: map[string]func(ws *webhookServerHandler){
+				"in-process-eval-only": func(ws *webhookServerHandler) {
+					ws.sarHandler = compoundAuthzSARHandler("configmaps")
+					ws.acrHandler = acrEvaluateCEL(ws.t, "nonexistent-panic-on-ACR-webhook")
+				},
+			},
+			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
+				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:   "protected-cm-deny" + suffix,
+						Labels: map[string]string{"protected-label": "yes"},
+					},
+				}, metav1.CreateOptions{})
+				return err
+			},
+			expectAllowed: false,
+		},
+
+		// Tests for the namespaceObject variable in k8s authorization CEL.
+		// The "test-ns" namespace is created with labels {env: production, team: platform}.
+		{
+			name: "cel namespaceObject - positive match",
+			user: "ns-label-match-user",
+			webhookBehaviors: map[string]func(ws *webhookServerHandler){
+				"in-process-eval-only": func(ws *webhookServerHandler) {
+					ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
+						if sar.Spec.ResourceAttributes == nil || sar.Spec.ResourceAttributes.Resource != "configmaps" {
+							return
+						}
+						sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+							{
+								ConditionsType: "k8s.io/authorization-cel",
+								Conditions: []authorizationv1.SubjectAccessReviewCondition{
+									{
+										ID:     "require-production-namespace",
+										Effect: authorizationv1.SubjectAccessReviewConditionEffectAllow,
+										Condition: `namespaceObject != null && ` +
+											`has(namespaceObject.metadata) && ` +
+											`has(namespaceObject.metadata.labels) && ` +
+											`'env' in namespaceObject.metadata.labels && ` +
+											`namespaceObject.metadata.labels['env'] == 'production'`,
+										Description: "only allow in production namespaces",
+									},
+								},
+							},
+						}
+					}
+					ws.acrHandler = acrEvaluateCEL(ws.t, "nonexistent-panic-on-ACR-webhook")
+				},
+			},
+			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
+				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{Name: "ns-match-cm" + suffix},
+				}, metav1.CreateOptions{})
+				return err
+			},
+			expectAllowed:             true,
+			expectAllowedWhenDisabled: boolPtr(false),
+		},
+		{
+			name: "cel namespaceObject - negative match",
+			user: "ns-label-nomatch-user",
+			webhookBehaviors: map[string]func(ws *webhookServerHandler){
+				"in-process-eval-only": func(ws *webhookServerHandler) {
+					ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
+						if sar.Spec.ResourceAttributes == nil || sar.Spec.ResourceAttributes.Resource != "configmaps" {
+							return
+						}
+						sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+							{
+								ConditionsType: "k8s.io/authorization-cel",
+								Conditions: []authorizationv1.SubjectAccessReviewCondition{
+									{
+										ID:     "require-staging-namespace",
+										Effect: authorizationv1.SubjectAccessReviewConditionEffectAllow,
+										Condition: `namespaceObject != null && ` +
+											`has(namespaceObject.metadata) && ` +
+											`has(namespaceObject.metadata.labels) && ` +
+											`'env' in namespaceObject.metadata.labels && ` +
+											`namespaceObject.metadata.labels['env'] == 'staging'`,
+										Description: "only allow in staging namespaces",
+									},
+								},
+							},
+						}
+					}
+					ws.acrHandler = acrEvaluateCEL(ws.t, "nonexistent-panic-on-ACR-webhook")
+				},
+			},
+			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
+				// test-ns has env=production, not staging, so this should be denied
+				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{Name: "ns-nomatch-cm" + suffix},
+				}, metav1.CreateOptions{})
+				return err
+			},
+			expectAllowed: false,
+		},
+
+		// Tests for HPA v1 and v2 with compound authorization.
+		// The authorizer returns conditions based on the API version of the HPA.
+		// Both versions use compound authorization (authorizer CEL function) to
+		// require the "use protectedlabels" permission when the "protected-label" is set.
+		{
+			name: "hpa v1 compound authorization - allow",
+			user: "hpa-authz-allow-user",
+			webhookBehaviors: map[string]func(ws *webhookServerHandler){
+				"in-process-eval-only": func(ws *webhookServerHandler) {
+					ws.sarHandler = compoundAuthzSARHandler("horizontalpodautoscalers")
+					ws.acrHandler = acrEvaluateCEL(ws.t, "nonexistent-panic-on-ACR-webhook")
+				},
+			},
+			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
+				_, err := client.AutoscalingV1().HorizontalPodAutoscalers("test-ns").Create(context.TODO(), &autoscalingv1.HorizontalPodAutoscaler{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:   "hpa-v1-allow" + suffix,
+						Labels: map[string]string{"protected-label": "yes"},
+					},
+					Spec: autoscalingv1.HorizontalPodAutoscalerSpec{
+						ScaleTargetRef: autoscalingv1.CrossVersionObjectReference{
+							Kind:       "Deployment",
+							Name:       "test-deploy",
+							APIVersion: "apps/v1",
+						},
+						MaxReplicas:                    10,
+						TargetCPUUtilizationPercentage: int32Ptr(80),
+					},
+				}, metav1.CreateOptions{})
+				return err
+			},
+			expectAllowed:             true,
+			expectAllowedWhenDisabled: boolPtr(false),
+		},
+		{
+			name: "hpa v1 compound authorization - deny",
+			user: "hpa-authz-deny-user",
+			webhookBehaviors: map[string]func(ws *webhookServerHandler){
+				"in-process-eval-only": func(ws *webhookServerHandler) {
+					ws.sarHandler = compoundAuthzSARHandler("horizontalpodautoscalers")
+					ws.acrHandler = acrEvaluateCEL(ws.t, "nonexistent-panic-on-ACR-webhook")
+				},
+			},
+			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
+				_, err := client.AutoscalingV1().HorizontalPodAutoscalers("test-ns").Create(context.TODO(), &autoscalingv1.HorizontalPodAutoscaler{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:   "hpa-v1-deny" + suffix,
+						Labels: map[string]string{"protected-label": "yes"},
+					},
+					Spec: autoscalingv1.HorizontalPodAutoscalerSpec{
+						ScaleTargetRef: autoscalingv1.CrossVersionObjectReference{
+							Kind:       "Deployment",
+							Name:       "test-deploy",
+							APIVersion: "apps/v1",
+						},
+						MaxReplicas:                    10,
+						TargetCPUUtilizationPercentage: int32Ptr(80),
+					},
+				}, metav1.CreateOptions{})
+				return err
+			},
+			expectAllowed: false,
+		},
+		{
+			name: "hpa v2 compound authorization - allow",
+			user: "hpa-authz-allow-user",
+			webhookBehaviors: map[string]func(ws *webhookServerHandler){
+				"in-process-eval-only": func(ws *webhookServerHandler) {
+					ws.sarHandler = compoundAuthzSARHandler("horizontalpodautoscalers")
+					ws.acrHandler = acrEvaluateCEL(ws.t, "nonexistent-panic-on-ACR-webhook")
+				},
+			},
+			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
+				_, err := client.AutoscalingV2().HorizontalPodAutoscalers("test-ns").Create(context.TODO(), &autoscalingv2.HorizontalPodAutoscaler{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:   "hpa-v2-allow" + suffix,
+						Labels: map[string]string{"protected-label": "yes"},
+					},
+					Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+						ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+							Kind:       "Deployment",
+							Name:       "test-deploy",
+							APIVersion: "apps/v1",
+						},
+						MaxReplicas: 10,
+						Metrics: []autoscalingv2.MetricSpec{
+							{
+								Type: autoscalingv2.ResourceMetricSourceType,
+								Resource: &autoscalingv2.ResourceMetricSource{
+									Name: corev1.ResourceCPU,
+									Target: autoscalingv2.MetricTarget{
+										Type:               autoscalingv2.UtilizationMetricType,
+										AverageUtilization: int32Ptr(80),
+									},
+								},
+							},
+						},
+					},
+				}, metav1.CreateOptions{})
+				return err
+			},
+			expectAllowed:             true,
+			expectAllowedWhenDisabled: boolPtr(false),
+		},
+		{
+			name: "hpa v2 compound authorization - deny",
+			user: "hpa-authz-deny-user",
+			webhookBehaviors: map[string]func(ws *webhookServerHandler){
+				"in-process-eval-only": func(ws *webhookServerHandler) {
+					ws.sarHandler = compoundAuthzSARHandler("horizontalpodautoscalers")
+					ws.acrHandler = acrEvaluateCEL(ws.t, "nonexistent-panic-on-ACR-webhook")
+				},
+			},
+			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
+				_, err := client.AutoscalingV2().HorizontalPodAutoscalers("test-ns").Create(context.TODO(), &autoscalingv2.HorizontalPodAutoscaler{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:   "hpa-v2-deny" + suffix,
+						Labels: map[string]string{"protected-label": "yes"},
+					},
+					Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+						ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+							Kind:       "Deployment",
+							Name:       "test-deploy",
+							APIVersion: "apps/v1",
+						},
+						MaxReplicas: 10,
+						Metrics: []autoscalingv2.MetricSpec{
+							{
+								Type: autoscalingv2.ResourceMetricSourceType,
+								Resource: &autoscalingv2.ResourceMetricSource{
+									Name: corev1.ResourceCPU,
+									Target: autoscalingv2.MetricTarget{
+										Type:               autoscalingv2.UtilizationMetricType,
+										AverageUtilization: int32Ptr(80),
+									},
+								},
+							},
+						},
+					},
+				}, metav1.CreateOptions{})
+				return err
+			},
+			expectAllowed: false,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -797,11 +1072,22 @@ authorizers:
 
 					// For tests that need RBAC fallthrough, grant RBAC access
 					if tc.user == "conditional-noop-rbac-user" || tc.user == "webhook-noop-rbac-user" {
-						authutil.GrantUserAuthorization(t, context.TODO(), adminClient, userName,
+						authutil.GrantUserAuthorization(t, t.Context(), adminClient, userName,
 							rbacv1.PolicyRule{
 								Verbs:     []string{"list", "get"},
 								APIGroups: []string{""},
 								Resources: []string{"configmaps"},
+							},
+						)
+					}
+					// For compound authorization tests: grant the "use" permission on protectedlabels
+					if tc.user == "compound-authz-allow-user" || tc.user == "hpa-authz-allow-user" {
+						authutil.GrantUserAuthorization(t, t.Context(), adminClient, userName,
+							rbacv1.PolicyRule{
+								Verbs:         []string{"use"},
+								APIGroups:     []string{"example.com"},
+								Resources:     []string{"protectedlabels"},
+								ResourceNames: []string{"protected-label"},
 							},
 						)
 					}
@@ -835,6 +1121,37 @@ authorizers:
 
 func boolPtr(b bool) *bool {
 	return &b
+}
+
+func int32Ptr(i int32) *int32 {
+	return &i
+}
+
+// compoundAuthzSARHandler returns a SAR handler that implements compound
+// authorization for HPAs: creating an HPA with the "protected-label" label
+// requires the additional "use protectedlabels" permission, checked via the
+// authorizer CEL function. The handler returns NoOpinion for non-HPA SARs
+// (e.g. the authorizer function's internal permission check).
+func compoundAuthzSARHandler(matchResource string) func(sar *authorizationv1.SubjectAccessReview) {
+	return func(sar *authorizationv1.SubjectAccessReview) {
+		if sar.Spec.ResourceAttributes == nil || sar.Spec.ResourceAttributes.Resource != matchResource {
+			return // NoOpinion for non-HPA SARs (e.g. the authorizer function's internal check)
+		}
+		sar.Status.ConditionalDecisionChain = []authorizationv1.SubjectAccessReviewAuthorizationDecision{
+			{
+				ConditionsType: "k8s.io/authorization-cel",
+				Conditions: []authorizationv1.SubjectAccessReviewCondition{
+					{
+						ID:     "require-protectedlabel-permission",
+						Effect: authorizationv1.SubjectAccessReviewConditionEffectAllow,
+						Condition: `!has(object.metadata.labels) || !('protected-label' in object.metadata.labels) || ` +
+							`authorizer.group('example.com').resource('protectedlabels').name('protected-label').check('use').allowed()`,
+						Description: "compound authorization: require 'use' permission on protectedlabels resource when protected-label is set",
+					},
+				},
+			},
+		}
+	}
 }
 
 // acrEvaluateCEL returns an ACR handler that reads conditions from the ACR
