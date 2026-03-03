@@ -122,7 +122,7 @@ func (a sampleAuthorizer) EvaluateConditions(ctx context.Context, d Decision, da
 		data.WriteRequest().GetObject(),
 	}
 
-	return EvaluateConditionSet(d.ConditionSet(), "labelSelectorApplies", func(condition string) (bool, error) {
+	decision, _, err := EvaluateConditionSet(d.ConditionSet(), "labelSelectorApplies", func(condition string) (bool, error) {
 		// condition is of form: "label-selector-for-oldobject|label-selector-for-object"
 		// if label-selector-for-oldobject is empty, it means "true"
 		selectorStrs := strings.Split(condition, "|")
@@ -152,6 +152,7 @@ func (a sampleAuthorizer) EvaluateConditions(ctx context.Context, d Decision, da
 		}
 		return true, nil
 	})
+	return decision, err
 }
 
 // testConditionData implements ConditionData for testing.
@@ -368,6 +369,48 @@ func TestSampleAuthorizer(t *testing.T) {
 			},
 		},
 		{
+			name: "dave create",
+			attrs: AttributesRecord{
+				User: &user.DefaultInfo{Name: "dave"},
+				Verb: "create",
+			},
+			cases: []evalCase{
+				{
+					name:              "create with supersecret",
+					object:            objWithLabels(map[string]string{"supersecret": "yes"}),
+					authorizeDecision: [2]string{"Deny", `Conditional(type="labelSelectorApplies", len=2)`},
+					finalDecision:     [2]string{"Deny", "Deny"},
+				},
+				{
+					name:              "create without supersecret",
+					object:            objWithLabels(map[string]string{"safe": "true"}),
+					authorizeDecision: [2]string{"Deny", `Conditional(type="labelSelectorApplies", len=2)`},
+					finalDecision:     [2]string{"Deny", "NoOpinion"},
+				},
+			},
+		},
+		{
+			name: "dave delete",
+			attrs: AttributesRecord{
+				User: &user.DefaultInfo{Name: "dave"},
+				Verb: "delete",
+			},
+			cases: []evalCase{
+				{
+					name:              "delete with supersecret on old object",
+					oldObject:         objWithLabels(map[string]string{"supersecret": "yes"}),
+					authorizeDecision: [2]string{"Deny", `Conditional(type="labelSelectorApplies", len=2)`},
+					finalDecision:     [2]string{"Deny", "Deny"},
+				},
+				{
+					name:              "delete without supersecret on old object",
+					oldObject:         objWithLabels(map[string]string{"safe": "true"}),
+					authorizeDecision: [2]string{"Deny", `Conditional(type="labelSelectorApplies", len=2)`},
+					finalDecision:     [2]string{"Deny", "NoOpinion"},
+				},
+			},
+		},
+		{
 			name: "dave unsupported verb",
 			attrs: AttributesRecord{
 				User: &user.DefaultInfo{Name: "dave"},
@@ -444,6 +487,7 @@ func TestEvaluateConditionSet(t *testing.T) {
 		supportedType ConditionType
 		eval          func(string) (bool, error)
 		wantDecision  string
+		wantWarnings  bool
 		wantErr       bool
 		wantReason    string
 	}{
@@ -526,18 +570,24 @@ func TestEvaluateConditionSet(t *testing.T) {
 			wantReason:    "no conditions matched",
 		},
 		{
-			name: "deny condition eval error",
+			name: "deny condition eval error; deny error trumps matching allow",
 			conditionSet: &ConditionSet{
 				conditionType: "test",
 				conditions: map[string]Condition{
-					"deny-cond": {Condition: "x", Effect: ConditionEffectDeny},
+					"deny-cond":  {Condition: "err", Effect: ConditionEffectDeny},
+					"allow-cond": {Condition: "ok", Effect: ConditionEffectAllow},
 				},
 			},
 			supportedType: "test",
-			eval:          func(string) (bool, error) { return false, evalErr },
-			wantDecision:  "Deny",
-			wantErr:       true,
-			wantReason:    "an error occurred",
+			eval: func(cond string) (bool, error) {
+				if cond == "err" {
+					return false, evalErr
+				}
+				return true, nil
+			},
+			wantDecision: "Deny",
+			wantErr:      true,
+			wantReason:   "one or more conditional evaluation errors occurred",
 		},
 		{
 			name: "first deny no match second deny matches",
@@ -584,18 +634,24 @@ func TestEvaluateConditionSet(t *testing.T) {
 			wantReason:    "no conditions matched",
 		},
 		{
-			name: "noopinion condition eval error",
+			name: "noopinion condition eval error, noopinion error trumps matching allow",
 			conditionSet: &ConditionSet{
 				conditionType: "test",
 				conditions: map[string]Condition{
-					"nop-cond": {Condition: "x", Effect: ConditionEffectNoOpinion},
+					"nop-cond":   {Condition: "err", Effect: ConditionEffectNoOpinion},
+					"allow-cond": {Condition: "ok", Effect: ConditionEffectAllow},
 				},
 			},
 			supportedType: "test",
-			eval:          func(string) (bool, error) { return false, evalErr },
-			wantDecision:  "NoOpinion",
-			wantErr:       true,
-			wantReason:    "an error occurred",
+			eval: func(cond string) (bool, error) {
+				if cond == "err" {
+					return false, evalErr
+				}
+				return true, nil
+			},
+			wantDecision: "NoOpinion",
+			wantErr:      true,
+			wantReason:   "one or more conditional evaluation errors occurred",
 		},
 		{
 			name: "first noopinion no match second noopinion matches",
@@ -646,14 +702,15 @@ func TestEvaluateConditionSet(t *testing.T) {
 			conditionSet: &ConditionSet{
 				conditionType: "test",
 				conditions: map[string]Condition{
-					"allow-cond": {Condition: "x", Effect: ConditionEffectAllow},
+					"allow-err1": {Condition: "x", Effect: ConditionEffectAllow},
+					"allow-err2": {Condition: "y", Effect: ConditionEffectAllow},
 				},
 			},
 			supportedType: "test",
 			eval:          func(string) (bool, error) { return false, evalErr },
 			wantDecision:  "NoOpinion",
 			wantErr:       true,
-			wantReason:    "no conditions matched",
+			wantReason:    "one or more conditional evaluation errors occurred",
 		},
 		{
 			name: "allow first errors second matches",
@@ -672,7 +729,7 @@ func TestEvaluateConditionSet(t *testing.T) {
 				return true, nil
 			},
 			wantDecision: "Allow",
-			wantErr:      true,
+			wantWarnings: true,
 			wantReason:   `condition "allow-ok" allowed the request`,
 		},
 
@@ -771,14 +828,52 @@ func TestEvaluateConditionSet(t *testing.T) {
 			wantDecision:  "NoOpinion",
 			wantReason:    "no conditions matched",
 		},
+
+		// Empty condition set (non-nil but no conditions)
+		{
+			name: "empty condition set with no conditions",
+			conditionSet: &ConditionSet{
+				conditionType: "test",
+				conditions:    map[string]Condition{},
+			},
+			supportedType: "test",
+			eval:          func(string) (bool, error) { panic("should not be called") },
+			wantDecision:  "NoOpinion",
+			wantReason:    "no conditions matched",
+		},
+
+		// Deny no match, noopinion errors: fail closed to NoOpinion
+		{
+			name: "deny no match noopinion errors",
+			conditionSet: &ConditionSet{
+				conditionType: "test",
+				conditions: map[string]Condition{
+					"deny-cond": {Condition: "deny-check", Effect: ConditionEffectDeny},
+					"nop-cond":  {Condition: "nop-check", Effect: ConditionEffectNoOpinion},
+				},
+			},
+			supportedType: "test",
+			eval: func(cond string) (bool, error) {
+				if cond == "nop-check" {
+					return false, evalErr
+				}
+				return false, nil
+			},
+			wantDecision: "NoOpinion",
+			wantErr:      true,
+			wantReason:   "one or more conditional evaluation errors occurred",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			decision, err := EvaluateConditionSet(tt.conditionSet, tt.supportedType, tt.eval)
+			decision, warnings, err := EvaluateConditionSet(tt.conditionSet, tt.supportedType, tt.eval)
 
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("EvaluateConditionSet() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if (len(warnings) > 0) != tt.wantWarnings {
+				t.Fatalf("EvaluateConditionSet() warnings = %v, wantWarnings %v", warnings, tt.wantWarnings)
 			}
 			if decision.String() != tt.wantDecision {
 				t.Errorf("got decision %s (reason: %q), want %s", decision.String(), decision.Reason(), tt.wantDecision)
