@@ -311,3 +311,333 @@ authorization support too.
 instead of specifying a conditionswebhookconfigfile in options, build the conditions client from the existing kubeconfig file, but take as a parameter in AuthorizationConfiguration the kubeconfig context name for the           
   conditionsreview, and also add a field for the API version of ACR to use. update the integration tests to use the AuthorizationConfiguration config file instead, and use this option. Wire it correctly as well in the            
   webhook authorizer. In the integration test, serve the SAR webhook on /authorize and the ACR on /conditionsreview.
+
+
+  Plan: Restructure Conditions Review Config via Kubeconfig Contexts
+
+ Context
+
+ The current implementation uses a separate --authorization-conditions-webhook-config-file flag in DelegatingAuthorizationOptions for the conditions review (ACR) webhook. The user wants to restructure this so that:
+ 1. The ACR client is built from the same kubeconfig file used for authorization, but with a different context name
+ 2. The AuthorizationConfiguration API types get new fields for conditions review context name and ACR API version
+ 3. Integration tests use the structured AuthorizationConfiguration config file (--authorization-configuration) instead of legacy flags
+ 4. The webhook test server serves SAR on /authorize and ACR on /conditionsreview (separate paths)
+
+ Production Code Changes
+
+ 1. API Types — Add ConditionsReview to WebhookConfiguration
+
+ Files:
+ - staging/src/k8s.io/apiserver/pkg/apis/apiserver/types.go (internal)
+ - staging/src/k8s.io/apiserver/pkg/apis/apiserver/v1beta1/types.go (versioned)
+ - staging/src/k8s.io/apiserver/pkg/apis/apiserver/v1alpha1/types.go (versioned)
+
+ Add new type and field to WebhookConfiguration:
+
+ // Internal types.go:
+ type WebhookConfiguration struct {
+     // ... existing fields ...
+     MatchConditions []WebhookMatchCondition
+
+     // ConditionsReview defines the configuration for evaluating authorization
+     // conditions via AuthorizationConditionsReview. When set, enables
+     // conditional authorization support for this webhook authorizer.
+     // The conditions review endpoint is reached via a different context
+     // within the same kubeconfig file specified in ConnectionInfo.
+     // +optional
+     ConditionsReview *ConditionsReviewConfiguration
+ }
+
+ // ConditionsReviewConfiguration configures the connection to the conditions
+ // review endpoint for conditional authorization.
+ type ConditionsReviewConfiguration struct {
+     // KubeConfigContextName is the name of the context within the webhook's
+     // kubeconfig file to use for conditions review requests.
+     // Required.
+     KubeConfigContextName string
+
+     // Version is the API version of AuthorizationConditionsReview to use.
+     // Valid values: v1alpha1
+     // Required.
+     Version string
+ }
+
+ For versioned types, add JSON tags:
+ // v1beta1/types.go and v1alpha1/types.go:
+ ConditionsReview *ConditionsReviewConfiguration `json:"conditionsReview,omitempty"`
+
+ type ConditionsReviewConfiguration struct {
+     KubeConfigContextName string `json:"kubeConfigContextName"`
+     Version               string `json:"version"`
+ }
+
+ Then run hack/update-codegen.sh to generate deepcopy.
+
+ 2. Kubeconfig Loading with Context — LoadKubeconfigWithContext
+
+ File: staging/src/k8s.io/apiserver/pkg/util/webhook/webhook.go
+
+ Add new function and refactor existing LoadKubeconfig:
+
+ func LoadKubeconfig(kubeConfigFile string, customDial utilnet.DialFunc) (*rest.Config, error) {
+     return LoadKubeconfigWithContext(kubeConfigFile, "", customDial)
+ }
+
+ func LoadKubeconfigWithContext(kubeConfigFile string, contextName string, customDial utilnet.DialFunc) (*rest.Config, error) {
+     loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+     loadingRules.ExplicitPath = kubeConfigFile
+     overrides := &clientcmd.ConfigOverrides{}
+     if contextName != "" {
+         overrides.CurrentContext = contextName
+     }
+     loader := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides)
+     // ... rest same as existing LoadKubeconfig ...
+ }
+
+ 3. webhook.New() — Accept separate conditions review config
+
+ File: staging/src/k8s.io/apiserver/plugin/pkg/authorizer/webhook/webhook.go
+
+ Add conditionsReviewConfig *rest.Config parameter to New():
+
+ func New(config *rest.Config, version string, authorizedTTL, unauthorizedTTL time.Duration,
+     retryBackoff wait.Backoff, decisionOnError authorizer.Decision,
+     matchConditions []apiserver.WebhookMatchCondition, name string,
+     metrics metrics.AuthorizerMetrics, compiler authorizationcel.Compiler,
+     conditionsReviewConfig *rest.Config,  // NEW
+ ) (*WebhookAuthorizer, error) {
+     subjectAccessReview, err := subjectAccessReviewInterfaceFromConfig(config, version, retryBackoff)
+     if err != nil {
+         return nil, err
+     }
+     acrConfig := config
+     if conditionsReviewConfig != nil {
+         acrConfig = conditionsReviewConfig
+     }
+     authorizationConditionsReview, err := buildAuthorizationConditionsClient(acrConfig, retryBackoff)
+     if err != nil {
+         return nil, err
+     }
+     return newWithBackoff(subjectAccessReview, authorizedTTL, unauthorizedTTL,
+         retryBackoff, decisionOnError, matchConditions, metrics, compiler, name,
+         authorizationConditionsReview)
+ }
+
+ 4. kube-apiserver authorizer — Load conditions config with context
+
+ File: pkg/kubeapiserver/authorizer/reload.go
+
+ In newForConfig(), after loading the webhook client config, load the conditions review config:
+
+ case authzconfig.AuthorizerType(modes.ModeWebhook):
+     clientConfig, err := webhookutil.LoadKubeconfig(
+         *configuredAuthorizer.Webhook.ConnectionInfo.KubeConfigFile,
+         r.initialConfig.CustomDial,
+     )
+     // ... existing TTL, failurePolicy setup ...
+
+     var conditionsReviewConfig *rest.Config
+     if cr := configuredAuthorizer.Webhook.ConditionsReview; cr != nil {
+         conditionsReviewConfig, err = webhookutil.LoadKubeconfigWithContext(
+             *configuredAuthorizer.Webhook.ConnectionInfo.KubeConfigFile,
+             cr.KubeConfigContextName,
+             r.initialConfig.CustomDial,
+         )
+         if err != nil {
+             return nil, nil, fmt.Errorf("failed to load conditions review kubeconfig context %q: %v",
+                 cr.KubeConfigContextName, err)
+         }
+     }
+
+     webhookAuthorizer, err := webhook.New(clientConfig, ..., conditionsReviewConfig)
+
+ 5. DelegatingAuthorizationOptions — Replace config file with context name
+
+ File: staging/src/k8s.io/apiserver/pkg/server/options/authorization.go
+
+ Replace ConditionsWebhookConfigFile with context-based fields:
+
+ type DelegatingAuthorizationOptions struct {
+     // ... existing fields ...
+
+     // ConditionsReviewKubeConfigContext is the context name within the
+     // authorization kubeconfig file to use for conditions review requests.
+     // When set, enables conditional authorization support.
+     ConditionsReviewKubeConfigContext string
+
+     // ConditionsReviewVersion is the API version of AuthorizationConditionsReview
+     // to use. Valid values: v1alpha1.
+     ConditionsReviewVersion string
+ }
+
+ Update AddFlags:
+ - Remove --authorization-conditions-webhook-config-file
+ - Add --authorization-conditions-review-kubeconfig-context
+ - Add --authorization-conditions-review-version
+
+ Update toAuthorizer():
+ if len(s.ConditionsReviewKubeConfigContext) > 0 {
+     conditionsConfig, err := loadKubeconfigWithContext(
+         s.RemoteKubeConfigFile, s.ConditionsReviewKubeConfigContext)
+     if err != nil {
+         return nil, fmt.Errorf("failed to load conditions review kubeconfig context: %v", err)
+     }
+     cfg.ConditionsWebhookConfig = conditionsConfig
+ }
+
+ Add loadKubeconfigWithContext helper:
+ func loadKubeconfigWithContext(kubeconfigFile, contextName string) (*rest.Config, error) {
+     loadingRules := &clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfigFile}
+     overrides := &clientcmd.ConfigOverrides{}
+     if contextName != "" {
+         overrides.CurrentContext = contextName
+     }
+     loader := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides)
+     return loader.ClientConfig()
+ }
+
+ Refactor existing loadKubeconfig to use it:
+ func loadKubeconfig(kubeconfigFile string) (*rest.Config, error) {
+     return loadKubeconfigWithContext(kubeconfigFile, "")
+ }
+
+ 6. DelegatingAuthorizerConfig — No changes needed
+
+ Keeps ConditionsWebhookConfig *rest.Config. The *rest.Config is now built from the kubeconfig+context in DelegatingAuthorizationOptions.
+
+ 7. webhook.NewFromInterface() — No signature changes needed
+
+ Already accepts conditionsWebhookConfig *rest.Config.
+
+ Integration Test Changes
+
+ Webhook Server — Separate SAR and ACR endpoints
+
+ File: test/integration/apiserver/conditionalauthorization/conditionalauthorization_test.go
+
+ Modify newWebhookServer() to register separate handlers:
+ func newWebhookServer(t *testing.T) *webhookServer {
+     handler := &webhookServerHandler{t: t}
+     mux := http.NewServeMux()
+     mux.HandleFunc("/authorize", handler.handleSAR)       // SAR only
+     mux.HandleFunc("/conditionsreview", handler.handleACR) // ACR only
+     server := httptest.NewTLSServer(mux)
+     return &webhookServer{server: server, handler: handler}
+ }
+
+ Add handleSAR and handleACR methods that handle just one type each (extracted from existing ServeHTTP).
+
+ Kubeconfig with Two Contexts
+
+ Write kubeconfigs with two contexts — one for SAR (default) and one for ACR (conditions):
+ apiVersion: v1
+ kind: Config
+ clusters:
+ - name: authorize
+   cluster:
+     server: "<webhook-url>/authorize"
+     insecure-skip-tls-verify: true
+ - name: conditions
+   cluster:
+     server: "<webhook-url>/conditionsreview"
+     insecure-skip-tls-verify: true
+ contexts:
+ - name: default
+   context:
+     cluster: authorize
+     user: test
+ - name: conditions
+   context:
+     cluster: conditions
+     user: test
+ current-context: default
+ users:
+ - name: test
+
+ conditionalauthorization_test.go — Use AuthorizationConfiguration
+
+ Replace legacy kube-apiserver flags with --authorization-configuration:
+
+ Write an AuthorizationConfiguration file:
+ apiVersion: apiserver.config.k8s.io/v1beta1
+ kind: AuthorizationConfiguration
+ authorizers:
+ - type: Webhook
+   name: conditional-webhook
+   webhook:
+     timeout: 10s
+     subjectAccessReviewVersion: v1
+     matchConditionSubjectAccessReviewVersion: v1
+     failurePolicy: NoOpinion
+     authorizedTTL: 1ms
+     unauthorizedTTL: 1ms
+     connectionInfo:
+       type: KubeConfigFile
+       kubeConfigFile: "<kubeconfig-path>"
+     conditionsReview:
+       kubeConfigContextName: conditions
+       version: v1alpha1
+ - type: RBAC
+   name: rbac
+
+ Replace flags:
+ // OLD:
+ "--authorization-mode=Webhook,RBAC",
+ "--authorization-webhook-config-file=" + kubeconfigPath,
+ "--authorization-webhook-version=v1",
+ "--authorization-webhook-cache-authorized-ttl=1ms",
+ "--authorization-webhook-cache-unauthorized-ttl=1ms",
+
+ // NEW:
+ "--authorization-configuration=" + authzConfigPath,
+
+ aggregated_test.go — Use AuthorizationConfiguration + context-based wardle config
+
+ kube-apiserver: Same --authorization-configuration approach as above.
+
+ wardle (aggregated server): Write a kubeconfig with two contexts:
+ - default context → cluster pointing to kube-apiserver (for SAR via --authorization-kubeconfig)
+ - conditions context → cluster pointing to webhook /conditionsreview (for ACR)
+
+ Replace wardle flags:
+ // OLD:
+ "--authorization-conditions-webhook-config-file", webhookKubeconfigPath,
+
+ // NEW:
+ "--authorization-conditions-review-kubeconfig-context", "conditions",
+ "--authorization-conditions-review-version", "v1alpha1",
+
+ The --authorization-kubeconfig flag remains but points to a kubeconfig that now has both contexts.
+
+ Files Modified (Summary)
+
+ ┌─────┬────────────────────────────────────────────────────────────────────┬─────────────────────────────────────────────────────────────────────────────────────────┐
+ │  #  │                                File                                │                                         Change                                          │
+ ├─────┼────────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
+ │ 1   │ staging/.../apis/apiserver/types.go                                │ Add ConditionsReviewConfiguration type, add field to WebhookConfiguration               │
+ ├─────┼────────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
+ │ 2   │ staging/.../apis/apiserver/v1beta1/types.go                        │ Same as above, with JSON tags                                                           │
+ ├─────┼────────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
+ │ 3   │ staging/.../apis/apiserver/v1alpha1/types.go                       │ Same as above, with JSON tags                                                           │
+ ├─────┼────────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
+ │ 4   │ staging/.../pkg/util/webhook/webhook.go                            │ Add LoadKubeconfigWithContext, refactor LoadKubeconfig                                  │
+ ├─────┼────────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
+ │ 5   │ staging/.../plugin/pkg/authorizer/webhook/webhook.go               │ Add conditionsReviewConfig param to New()                                               │
+ ├─────┼────────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
+ │ 6   │ pkg/kubeapiserver/authorizer/reload.go                             │ Load conditions config with context, pass to webhook.New()                              │
+ ├─────┼────────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
+ │ 7   │ staging/.../server/options/authorization.go                        │ Replace ConditionsWebhookConfigFile with context+version fields/flags                   │
+ ├─────┼────────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
+ │ 8   │ test/.../conditionalauthorization/conditionalauthorization_test.go │ Separate SAR/ACR handlers, use AuthorizationConfiguration, kubeconfig with two contexts │
+ ├─────┼────────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
+ │ 9   │ test/.../conditionalauthorization/aggregated_test.go               │ Use AuthorizationConfiguration for KAS, context-based kubeconfig for wardle             │
+ ├─────┼────────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
+ │ 10  │ Generated files via hack/update-codegen.sh                         │ Deepcopy for new types                                                                  │
+ └─────┴────────────────────────────────────────────────────────────────────┴─────────────────────────────────────────────────────────────────────────────────────────┘
+
+ Verification
+
+ 1. Run hack/update-codegen.sh — generate deepcopy for new types
+ 2. Run make — verify compilation
+ 3. Run go test -v -count=1 -timeout=300s ./test/integration/apiserver/conditionalauthorization/... — all tests pass
+ 4. Run hack/test-changed.sh — no regressions

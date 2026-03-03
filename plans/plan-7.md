@@ -1,0 +1,3 @@
+next, it is possible for Kubernetes update requests to turn into creates (see staging/src/k8s.io/apiserver/pkg/endpoints/handlers/update.go for reference). Make an integration test that verifies that an update request, which when  
+  applied is turned into a create, is properly conditionally authorized for the create permission. For example, say that a user can update freely, but only create when the object has the classifed=false label, and the update ->      
+  create object thus satisfies this.
