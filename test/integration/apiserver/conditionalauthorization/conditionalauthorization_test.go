@@ -772,6 +772,7 @@ authorizers:
 			},
 			expectAllowed: false,
 		},
+		// TODO: Test the builtin authorizer function in k8s authorization CEL.
 	}
 
 	for _, tc := range testCases {

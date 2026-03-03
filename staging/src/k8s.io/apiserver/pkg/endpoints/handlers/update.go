@@ -266,6 +266,11 @@ func UpdateResource(r rest.Updater, scope *RequestScope, admit admission.Interfa
 }
 
 func withAuthorization(validate rest.ValidateObjectFunc, a authorizer.Authorizer, authzAttrs authorizer.Attributes, admissionAttrs admission.Attributes, o admission.ObjectInterfaces) rest.ValidateObjectFunc {
+
+	builtinEvaluators := []authorizer.BuiltinConditionSetEvaluator{
+		conditionsenforcer.NewCELBuiltinConditionSetEvaluator(a, nil, nil),
+	}
+
 	var once sync.Once
 	var authorizerDecision authorizer.Decision
 	var authorizerErr error
@@ -293,7 +298,8 @@ func withAuthorization(validate rest.ValidateObjectFunc, a authorizer.Authorizer
 					admissionAttrs.GetOperation(), admissionAttrs.GetOperationOptions(),
 					admissionAttrs.IsDryRun(), admissionAttrs.GetUserInfo(),
 				)
-				err := conditionsenforcer.EnforceConditions(ctx, admissionAttrsWithObj, o, a, authzAttrs, authorizerDecision, conditionsenforcer.DefaultBuiltinConditionEvaluators()...)
+				// TODO(luxas): Should we wrap this in sync.Once too?
+				err := conditionsenforcer.EnforceConditions(ctx, admissionAttrsWithObj, o, a, authzAttrs, authorizerDecision, builtinEvaluators...)
 				if err != nil {
 					return err // Returns a Forbidden error with a clear reason why the create was not conditionally authorized
 				}

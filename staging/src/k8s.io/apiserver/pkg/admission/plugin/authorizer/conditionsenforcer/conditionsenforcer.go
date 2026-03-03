@@ -2,6 +2,7 @@ package conditionsenforcer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
@@ -14,6 +15,8 @@ import (
 	"k8s.io/apiserver/pkg/endpoints/handlers/responsewriters"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	genericfeatures "k8s.io/apiserver/pkg/features"
+	"k8s.io/client-go/informers"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/component-base/featuregate"
 	"k8s.io/klog/v2"
 )
@@ -26,15 +29,8 @@ const (
 // Register registers a plugin
 func Register(plugins *admission.Plugins) {
 	plugins.Register(PluginName, func(config io.Reader) (admission.Interface, error) {
-		return NewConditionalAuthorizationEnforcer(DefaultBuiltinConditionEvaluators()), nil
+		return NewConditionalAuthorizationEnforcer(true), nil
 	})
-}
-
-// defaultBuiltinEvaluators is the default set of in-tree condition evaluators.
-// Used when callers of EnforceConditions don't provide their own evaluators
-// (e.g. the secondary create authorization in update-to-create flows).
-func DefaultBuiltinConditionEvaluators() []authorizer.BuiltinConditionSetEvaluator {
-	return []authorizer.BuiltinConditionSetEvaluator{NewCELBuiltinConditionSetEvaluator()}
 }
 
 // TODO: Should we opt out of enforcing conditions for authorization-related resources?
@@ -45,59 +41,73 @@ func DefaultBuiltinConditionEvaluators() []authorizer.BuiltinConditionSetEvaluat
 
 // TODO: Add an integration test that it's not possible to intercept SAR or ACR using this admission controller
 
-var _ admission.Interface = &ConditionalAuthorizationEnforcer{}
-var _ admission.ValidationInterface = &ConditionalAuthorizationEnforcer{}
+var _ admission.Interface = &lazilyInitializedPlugin{}
+var _ admission.ValidationInterface = &lazilyInitializedPlugin{}
 
-// var _ genericadmissioninit.WantsExternalKubeClientSet = &ConditionalAuthorizationEnforcer{}
-var _ genericadmissioninit.WantsFeatures = &ConditionalAuthorizationEnforcer{}
-var _ genericadmissioninit.WantsAuthorizer = &ConditionalAuthorizationEnforcer{}
+var _ genericadmissioninit.WantsFeatures = &lazilyInitializedPlugin{}
+var _ genericadmissioninit.WantsAuthorizer = &lazilyInitializedPlugin{}
+var _ genericadmissioninit.WantsExternalKubeInformerFactory = &lazilyInitializedPlugin{}
+var _ genericadmissioninit.WantsExternalKubeClientSet = &lazilyInitializedPlugin{}
 
-func NewConditionalAuthorizationEnforcer(builtinEvaluators []authorizer.BuiltinConditionSetEvaluator) *ConditionalAuthorizationEnforcer {
-	return &ConditionalAuthorizationEnforcer{
-		builtinConditionSetEvaluators: builtinEvaluators,
+func NewConditionalAuthorizationEnforcer(enableBuiltinCEL bool) *lazilyInitializedPlugin {
+	return &lazilyInitializedPlugin{
+		enableBuiltinCEL: enableBuiltinCEL,
+		featureEnabled:   false, // Default, can be overridden by InspectFeatureGates
 	}
 }
 
-type ConditionalAuthorizationEnforcer struct {
+// TODO: Add VAP-related resources the exclusion list too?
+
+type lazilyInitializedPlugin struct {
 	builtinConditionSetEvaluators []authorizer.BuiltinConditionSetEvaluator
 	featureEnabled                bool
 	authorizer                    authorizer.Authorizer
-	//setExternalKubeClientSetCalled bool
-	//enableBuiltinCEL               bool
+	enableBuiltinCEL              bool
+	informerFactory               informers.SharedInformerFactory
+	client                        kubernetes.Interface
 }
 
-func (c *ConditionalAuthorizationEnforcer) InspectFeatureGates(features featuregate.FeatureGate) {
+func (c *lazilyInitializedPlugin) InspectFeatureGates(features featuregate.FeatureGate) {
 	c.featureEnabled = features.Enabled(genericfeatures.ConditionalAuthorization)
 }
 
-func (c *ConditionalAuthorizationEnforcer) SetAuthorizer(authorizer authorizer.Authorizer) {
+func (c *lazilyInitializedPlugin) SetAuthorizer(authorizer authorizer.Authorizer) {
 	c.authorizer = authorizer
 }
 
-/*func (c *ConditionalAuthorizationEnforcer) SetExternalKubeClientSet(cs kubernetes.Interface) {
-	if c.enableBuiltinCEL {
-		c.builtinConditionSetEvaluators = append(c.builtinConditionSetEvaluators, &celConditionsEnforcer{
-			conditionCompiler: &ConditionCompiler{
-				SchemaResolver: resolver.NewDefinitionsSchemaResolver(openapi.GetOpenAPIDefinitions).
-					Combine(&resolver.ClientDiscoveryResolver{Discovery: cs.Discovery()}),
-			},
-		})
-	}
-	c.setExternalKubeClientSetCalled = true
-}*/
+func (c *lazilyInitializedPlugin) SetExternalKubeInformerFactory(f informers.SharedInformerFactory) {
+	c.informerFactory = f
+}
 
-func (c *ConditionalAuthorizationEnforcer) ValidateInitialization() error {
-	/*if c.enableBuiltinCEL && !c.setExternalKubeClientSetCalled {
-		return errors.New("SetExternalKubeClientSet was not called on the ConditionalAuthorizationEnforcer")
-	}*/
+func (c *lazilyInitializedPlugin) SetExternalKubeClientSet(client kubernetes.Interface) {
+	c.client = client
+}
+
+func (c *lazilyInitializedPlugin) ValidateInitialization() error {
+	// Note: Whenever a new builtin evaluator is added here, it MUST also be added to withAuthorization in
+	// staging/src/k8s.io/apiserver/pkg/endpoints/handlers/update.go
+	if c.enableBuiltinCEL {
+		if c.authorizer == nil {
+			return errors.New("ConditionalAuthorizationEnforcer: authorizer must be given when enableBuiltinCEL == true")
+		}
+		if c.informerFactory == nil {
+			return errors.New("ConditionalAuthorizationEnforcer: informerFactory must be given when enableBuiltinCEL == true")
+		}
+		if c.client == nil {
+			return errors.New("ConditionalAuthorizationEnforcer: client must be given when enableBuiltinCEL == true")
+		}
+
+		c.builtinConditionSetEvaluators = append(c.builtinConditionSetEvaluators, NewCELBuiltinConditionSetEvaluator(c.authorizer, c.informerFactory, c.client))
+	}
+
 	return nil
 }
 
-func (c *ConditionalAuthorizationEnforcer) Handles(operation admission.Operation) bool {
+func (c *lazilyInitializedPlugin) Handles(operation admission.Operation) bool {
 	return c.featureEnabled
 }
 
-func (c *ConditionalAuthorizationEnforcer) Validate(ctx context.Context, a admission.Attributes, o admission.ObjectInterfaces) error {
+func (c *lazilyInitializedPlugin) Validate(ctx context.Context, a admission.Attributes, o admission.ObjectInterfaces) error {
 	authorizer, unevaluatedDecision, ok := request.ConditionallyAuthorizedDecisionFrom(ctx)
 	if !ok {
 		// In the unconditionally authorized path, nothing is added to the context, hence this means "directly authorized"
@@ -110,6 +120,40 @@ func (c *ConditionalAuthorizationEnforcer) Validate(ctx context.Context, a admis
 	}
 
 	return EnforceConditions(ctx, a, o, authorizer, authzAttrs, unevaluatedDecision, c.builtinConditionSetEvaluators...)
+}
+
+// TODO(luxas): This function should probably be under the authorizer package, and then this concrete admission plugin just returns it?
+func EnforceConditions(ctx context.Context, admissionAttrs admission.Attributes, o admission.ObjectInterfaces, authorizer authorizer.Authorizer, authzAttrs authorizer.Attributes, unevaluatedDecision authorizer.Decision, builtinEvaluators ...authorizer.BuiltinConditionSetEvaluator) error {
+	// TODO: Does this convert to the request GVR version?
+	versionedAttributes, err := admission.NewVersionedAttributes(admissionAttrs, admissionAttrs.GetKind(), o)
+	if err != nil {
+		return fmt.Errorf("failed to convert object version: %w", err)
+	}
+
+	data := conditionsData{
+		attrsShim: attrsShim{
+			VersionedAttributes: versionedAttributes,
+		},
+	}
+
+	evaluatedDecision, err := EvaluateConditionsWithBuiltins(ctx, authorizer, unevaluatedDecision, data, builtinEvaluators...)
+	// At this point, we require an unconditional allow in order to proceed.
+	if evaluatedDecision.IsAllowed() {
+		return nil
+	}
+
+	if err != nil {
+		//audit.AddAuditAnnotation(ctx, reasonAnnotationKey, reasonError)
+		return apierrors.NewInternalError(err) // TODO: Check if this is the same as responsewriters.InternalError(w, req, err)
+	}
+
+	reason := evaluatedDecision.Reason()
+	klog.V(4).InfoS("Forbidden (after conditional authorization)", "URI", authzAttrs.GetPath(), "reason", reason)
+	//audit.AddAuditAnnotations(ctx,
+	//	decisionAnnotationKey, decisionForbid,
+	//	reasonAnnotationKey, reason)
+
+	return apierrors.NewForbidden(versionedAttributes.GetResource().GroupResource(), versionedAttributes.GetName(), responsewriters.ForbiddenStatusError(authzAttrs, reason))
 }
 
 func EvaluateConditionsWithBuiltins(ctx context.Context, authorizer authorizer.Authorizer, unevaluatedDecision authorizer.Decision, data authorizer.ConditionData, builtinEvaluators ...authorizer.BuiltinConditionSetEvaluator) (authorizer.Decision, error) {
@@ -198,40 +242,6 @@ func tryEvaluateUsingBuiltins(ctx context.Context, unevaluatedDecision authorize
 	}
 	// None of the evaluators could (fully) evaluate the ConditionSet, thus return the original
 	return unevaluatedDecision, false, utilerrors.NewAggregate(errlist)
-}
-
-// TODO(luxas): This function should probably be under the authorizer package, and then this concrete admission plugin just returns it?
-func EnforceConditions(ctx context.Context, admissionAttrs admission.Attributes, o admission.ObjectInterfaces, authorizer authorizer.Authorizer, authzAttrs authorizer.Attributes, unevaluatedDecision authorizer.Decision, builtinEvaluators ...authorizer.BuiltinConditionSetEvaluator) error {
-	// TODO: Does this convert to the request GVR version?
-	versionedAttributes, err := admission.NewVersionedAttributes(admissionAttrs, admissionAttrs.GetKind(), o)
-	if err != nil {
-		return fmt.Errorf("failed to convert object version: %w", err)
-	}
-
-	data := conditionsData{
-		attrsShim: attrsShim{
-			VersionedAttributes: versionedAttributes,
-		},
-	}
-
-	evaluatedDecision, err := EvaluateConditionsWithBuiltins(ctx, authorizer, unevaluatedDecision, data, builtinEvaluators...)
-	// At this point, we require an unconditional allow in order to proceed.
-	if evaluatedDecision.IsAllowed() {
-		return nil
-	}
-
-	if err != nil {
-		//audit.AddAuditAnnotation(ctx, reasonAnnotationKey, reasonError)
-		return apierrors.NewInternalError(err) // TODO: Check if this is the same as responsewriters.InternalError(w, req, err)
-	}
-
-	reason := evaluatedDecision.Reason()
-	klog.V(4).InfoS("Forbidden (after conditional authorization)", "URI", authzAttrs.GetPath(), "reason", reason)
-	//audit.AddAuditAnnotations(ctx,
-	//	decisionAnnotationKey, decisionForbid,
-	//	reasonAnnotationKey, reason)
-
-	return apierrors.NewForbidden(versionedAttributes.GetResource().GroupResource(), versionedAttributes.GetName(), responsewriters.ForbiddenStatusError(authzAttrs, reason))
 }
 
 type conditionsData struct {
