@@ -1,0 +1,44 @@
+	// GetConditionsMode returns the client's request of how conditions should be returned
+	// by the authorizer (or not at all). An empty value means the client does not support
+	// conditional authorization.
+	GetConditionsMode() ConditionsMode
+
+
+// ConditionsMode specifies how the client wants conditions to be returned by the authorizer.
+type ConditionsMode string
+
+const (
+	// ConditionsModeNone indicates that the client does not support conditions.
+	ConditionsModeNone ConditionsMode = ""
+
+	// ConditionsModeHumanReadable indicates that the client wants a
+	// human-readable condition and description, if possible.
+	ConditionsModeHumanReadable ConditionsMode = "HumanReadable"
+
+	// ConditionsModeOptimized indicates that the client wants an
+	// optimized conditions encoding without description, if possible.
+	ConditionsModeOptimized ConditionsMode = "Optimized"
+)
+
+
+	// ConditionsMode indicates how, if any, the client wants conditions to be returned.
+	ConditionsMode ConditionsMode
+
+// impersonation
+    .addString(string(attributes.GetConditionsMode()))
+
+type SARStatus struct {
+	ConditionSets []ConditionSet
+}
+
+type ConditionSet struct {
+	AuthorizerName string
+
+	// Only one of the following can be active at once.
+	Allowed       bool
+	Denied        bool
+	Conditions    []Condition
+	ConditionSets []ConditionSet
+}
+
+type Condition struct{}

@@ -1,0 +1,225 @@
+# Update interfaces
+A	staging/src/k8s.io/apiserver/pkg/authorization/authorizer/conditional.go
+A	staging/src/k8s.io/apiserver/pkg/authorization/authorizer/conditional_test.go
+M	staging/src/k8s.io/apiserver/pkg/authorization/authorizer/interfaces.go
+
+# Update downstream users
+M	pkg/auth/authorizer/abac/abac.go
+M	pkg/registry/certificates/podcertificaterequest/storage/storage_test.go
+M	pkg/registry/certificates/podcertificaterequest/strategy_test.go
+M	pkg/registry/core/pod/rest/authorize.go
+M	pkg/registry/core/pod/rest/authorize_test.go
+M	plugin/pkg/admission/certificates/approval/admission_test.go
+M	plugin/pkg/admission/certificates/ctbattest/admission_test.go
+M	plugin/pkg/admission/certificates/signing/admission_test.go
+M	plugin/pkg/admission/gc/gc_admission_test.go
+M	plugin/pkg/admission/noderestriction/admission_test.go
+M	plugin/pkg/auth/authorizer/node/node_authorizer.go
+M	plugin/pkg/auth/authorizer/rbac/rbac.go
+M	plugin/pkg/auth/authorizer/rbac/rbac_test.go
+M	staging/src/k8s.io/apiextensions-apiserver/pkg/apiserver/customresource_handler_test.go
+M	staging/src/k8s.io/apiserver/pkg/admission/initializer/initializer_test.go
+M	staging/src/k8s.io/apiserver/pkg/admission/plugin/authorizer/caching_authorizer.go
+M	staging/src/k8s.io/apiserver/pkg/admission/plugin/cel/condition_test.go
+M	staging/src/k8s.io/apiserver/pkg/admission/plugin/policy/generic/policy_test_context.go
+M	staging/src/k8s.io/apiserver/pkg/admission/plugin/policy/mutating/compilation_test.go
+M	staging/src/k8s.io/apiserver/pkg/authorization/authorizerfactory/builtin.go
+M	staging/src/k8s.io/apiserver/pkg/authorization/authorizerfactory/delegating.go
+M	staging/src/k8s.io/apiserver/pkg/authorization/cel/compile.go
+M	staging/src/k8s.io/apiserver/pkg/authorization/cel/compile_test.go
+M	staging/src/k8s.io/apiserver/pkg/authorization/metrics/metrics.go
+M	staging/src/k8s.io/apiserver/pkg/authorization/metrics/metrics_test.go
+M	staging/src/k8s.io/apiserver/pkg/cel/environment/environment_test.go
+M	staging/src/k8s.io/apiserver/pkg/cel/library/cost_test.go
+M	staging/src/k8s.io/apiserver/pkg/endpoints/filters/impersonation/cache.go
+M	staging/src/k8s.io/apiserver/pkg/endpoints/filters/impersonation/constrained_impersonation_test.go
+M	staging/src/k8s.io/apiserver/pkg/endpoints/filters/impersonation/impersonation_test.go
+M	staging/src/k8s.io/apiserver/pkg/endpoints/handlers/delete_test.go
+M	test/integration/apiserver/flowcontrol/concurrency_util_test.go
+M	test/integration/auth/accessreview_test.go
+M	test/integration/auth/auth_test.go
+M	pkg/kubelet/server/server_test.go
+
+# Update union authorizer
+M	staging/src/k8s.io/apiserver/pkg/authorization/union/union.go
+M	staging/src/k8s.io/apiserver/pkg/authorization/union/union_test.go
+
+
+# Update WithAuthorization filter
+M	staging/src/k8s.io/apiserver/pkg/endpoints/filters/authorization.go
+M	staging/src/k8s.io/apiserver/pkg/endpoints/filters/authorization_test.go
+M	staging/src/k8s.io/apiserver/pkg/endpoints/handlers/patch.go
+M	staging/src/k8s.io/apiserver/pkg/endpoints/handlers/update.go
+M	staging/src/k8s.io/apiserver/pkg/endpoints/request/context.go
+
+
+# Update Webhook authorizer
+M	staging/src/k8s.io/apiserver/pkg/util/webhook/webhook.go
+M	staging/src/k8s.io/apiserver/plugin/pkg/authorizer/webhook/round_trip_test.go
+M	staging/src/k8s.io/apiserver/plugin/pkg/authorizer/webhook/webhook.go
+M	staging/src/k8s.io/apiserver/plugin/pkg/authorizer/webhook/webhook_v1_test.go
+M	staging/src/k8s.io/apiserver/plugin/pkg/authorizer/webhook/webhook_v1beta1_test.go
+M	staging/src/k8s.io/apiserver/pkg/apis/apiserver/types.go
+M	staging/src/k8s.io/apiserver/pkg/apis/apiserver/v1/types.go
+M	staging/src/k8s.io/apiserver/pkg/apis/apiserver/v1alpha1/types.go
+M	staging/src/k8s.io/apiserver/pkg/apis/apiserver/v1beta1/types.go
+
+
+
+# Adding the AuthorizationConditionsReview API
+M	hack/lib/init.sh
+M	pkg/api/testing/fuzzer.go
+M	pkg/apis/authorization/fuzzer/fuzzer.go
+M	pkg/apis/authorization/install/install.go
+M	pkg/apis/authorization/register.go
+M	pkg/apis/authorization/types.go
+A	pkg/apis/authorization/v1alpha1/defaults.go
+A	pkg/apis/authorization/v1alpha1/doc.go
+A	pkg/apis/authorization/v1alpha1/register.go
+M	pkg/apis/authorization/validation/validation.go
+M	staging/src/k8s.io/api/authorization/v1/types.go
+A	staging/src/k8s.io/api/authorization/v1alpha1/doc.go
+A	staging/src/k8s.io/api/authorization/v1alpha1/register.go
+A	staging/src/k8s.io/api/authorization/v1alpha1/types.go
+M	staging/src/k8s.io/api/authorization/v1beta1/types.go
+
+
+M	pkg/controlplane/apiserver/aggregator.go
+M	pkg/controlplane/apiserver/apis.go
+M	pkg/controlplane/apiserver/config.go
+M	pkg/controlplane/apiserver/samples/generic/server/admission.go
+M	pkg/controlplane/instance.go
+M	pkg/controlplane/instance_test.go
+M	pkg/features/kube_features.go
+
+M	pkg/kubeapiserver/admission/exclusion/resources.go
+M	pkg/kubeapiserver/authorizer/reload.go
+M	pkg/kubeapiserver/options/plugins.go
+M	pkg/kubeapiserver/options/plugins_test.go
+
+M	pkg/quota/v1/install/registry.go
+A	pkg/registry/authorization/authorizationconditionsreview/rest.go
+A	pkg/registry/authorization/authorizationconditionsreview/rest_test.go
+M	pkg/registry/authorization/localsubjectaccessreview/rest.go
+M	pkg/registry/authorization/rest/storage_authorization.go
+M	pkg/registry/authorization/selfsubjectaccessreview/rest.go
+M	pkg/registry/authorization/subjectaccessreview/rest.go
+M	pkg/registry/authorization/subjectaccessreview/rest_test.go
+M	pkg/registry/authorization/util/helpers.go
+M	pkg/registry/authorization/util/helpers_test.go
+
+
+
+M	plugin/pkg/auth/authorizer/rbac/bootstrappolicy/policy.go
+
+
+
+
+
+A	staging/src/k8s.io/apiserver/pkg/admission/plugin/authorizer/conditionsenforcer/cel.go
+A	staging/src/k8s.io/apiserver/pkg/admission/plugin/authorizer/conditionsenforcer/cel_test.go
+A	staging/src/k8s.io/apiserver/pkg/admission/plugin/authorizer/conditionsenforcer/conditionsenforcer.go
+
+
+
+
+
+M	staging/src/k8s.io/apiserver/pkg/endpoints/groupversion.go
+M	staging/src/k8s.io/apiserver/pkg/features/kube_features.go
+M	staging/src/k8s.io/apiserver/pkg/server/config.go
+M	staging/src/k8s.io/apiserver/pkg/server/genericapiserver_test.go
+M	staging/src/k8s.io/apiserver/pkg/server/options/admission.go
+M	staging/src/k8s.io/apiserver/pkg/server/options/authorization.go
+M	staging/src/k8s.io/apiserver/pkg/server/plugins.go
+
+M	staging/src/k8s.io/sample-apiserver/pkg/cmd/server/start.go
+A	test/integration/apiserver/conditionalauthorization/aggregated_test.go
+A	test/integration/apiserver/conditionalauthorization/conditionalauthorization_test.go
+A	test/integration/apiserver/conditionalauthorization/main_test.go
+
+# Autogenerated
+M	pkg/generated/openapi/zz_generated.openapi.go
+M	staging/src/k8s.io/api/authorization/v1/generated.pb.go
+M	staging/src/k8s.io/api/authorization/v1/generated.proto
+M	staging/src/k8s.io/api/authorization/v1/generated.protomessage.pb.go
+M	staging/src/k8s.io/api/authorization/v1beta1/types_swagger_doc_generated.go
+M	staging/src/k8s.io/api/authorization/v1beta1/zz_generated.deepcopy.go
+M	staging/src/k8s.io/api/testdata/HEAD/authorization.k8s.io.v1.LocalSubjectAccessReview.json
+M	staging/src/k8s.io/api/testdata/HEAD/authorization.k8s.io.v1.LocalSubjectAccessReview.pb
+M	staging/src/k8s.io/api/testdata/HEAD/authorization.k8s.io.v1.LocalSubjectAccessReview.yaml
+M	staging/src/k8s.io/api/testdata/HEAD/authorization.k8s.io.v1.SelfSubjectAccessReview.json
+M	staging/src/k8s.io/api/testdata/HEAD/authorization.k8s.io.v1.SelfSubjectAccessReview.pb
+M	staging/src/k8s.io/api/testdata/HEAD/authorization.k8s.io.v1.SelfSubjectAccessReview.yaml
+M	staging/src/k8s.io/api/testdata/HEAD/authorization.k8s.io.v1.SubjectAccessReview.json
+M	staging/src/k8s.io/api/testdata/HEAD/authorization.k8s.io.v1.SubjectAccessReview.pb
+M	staging/src/k8s.io/api/testdata/HEAD/authorization.k8s.io.v1.SubjectAccessReview.yaml
+M	staging/src/k8s.io/api/testdata/HEAD/authorization.k8s.io.v1beta1.LocalSubjectAccessReview.json
+M	staging/src/k8s.io/api/testdata/HEAD/authorization.k8s.io.v1beta1.LocalSubjectAccessReview.pb
+M	staging/src/k8s.io/api/testdata/HEAD/authorization.k8s.io.v1beta1.LocalSubjectAccessReview.yaml
+M	staging/src/k8s.io/api/testdata/HEAD/authorization.k8s.io.v1beta1.SelfSubjectAccessReview.json
+M	staging/src/k8s.io/api/testdata/HEAD/authorization.k8s.io.v1beta1.SelfSubjectAccessReview.pb
+M	staging/src/k8s.io/api/testdata/HEAD/authorization.k8s.io.v1beta1.SelfSubjectAccessReview.yaml
+M	staging/src/k8s.io/api/testdata/HEAD/authorization.k8s.io.v1beta1.SubjectAccessReview.json
+M	staging/src/k8s.io/api/testdata/HEAD/authorization.k8s.io.v1beta1.SubjectAccessReview.pb
+M	staging/src/k8s.io/api/testdata/HEAD/authorization.k8s.io.v1beta1.SubjectAccessReview.yaml
+M	staging/src/k8s.io/client-go/kubernetes/clientset.go
+M	staging/src/k8s.io/client-go/kubernetes/fake/clientset_generated.go
+M	staging/src/k8s.io/client-go/kubernetes/fake/register.go
+M	staging/src/k8s.io/client-go/kubernetes/scheme/register.go
+A	staging/src/k8s.io/client-go/kubernetes/typed/authorization/v1alpha1/authorization_client.go
+A	staging/src/k8s.io/client-go/kubernetes/typed/authorization/v1alpha1/authorizationconditionsreview.go
+A	staging/src/k8s.io/client-go/kubernetes/typed/authorization/v1alpha1/doc.go
+A	staging/src/k8s.io/client-go/kubernetes/typed/authorization/v1alpha1/fake/doc.go
+A	staging/src/k8s.io/client-go/kubernetes/typed/authorization/v1alpha1/fake/fake_authorization_client.go
+A	staging/src/k8s.io/client-go/kubernetes/typed/authorization/v1alpha1/fake/fake_authorizationconditionsreview.go
+A	staging/src/k8s.io/client-go/kubernetes/typed/authorization/v1alpha1/generated_expansion.go
+M	staging/src/k8s.io/apiserver/pkg/apis/apiserver/v1/zz_generated.conversion.go
+M	staging/src/k8s.io/apiserver/pkg/apis/apiserver/v1/zz_generated.deepcopy.go
+M	staging/src/k8s.io/apiserver/pkg/apis/apiserver/v1alpha1/zz_generated.conversion.go
+M	staging/src/k8s.io/apiserver/pkg/apis/apiserver/v1alpha1/zz_generated.deepcopy.go
+M	staging/src/k8s.io/apiserver/pkg/apis/apiserver/v1beta1/zz_generated.conversion.go
+M	staging/src/k8s.io/apiserver/pkg/apis/apiserver/v1beta1/zz_generated.deepcopy.go
+M	staging/src/k8s.io/apiserver/pkg/apis/apiserver/zz_generated.deepcopy.go
+M	staging/src/k8s.io/api/authorization/v1/types_swagger_doc_generated.go
+M	staging/src/k8s.io/api/authorization/v1/zz_generated.deepcopy.go
+M	staging/src/k8s.io/api/authorization/v1/zz_generated.model_name.go
+A	staging/src/k8s.io/api/authorization/v1alpha1/generated.pb.go
+A	staging/src/k8s.io/api/authorization/v1alpha1/generated.proto
+A	staging/src/k8s.io/api/authorization/v1alpha1/generated.protomessage.pb.go
+A	staging/src/k8s.io/api/authorization/v1alpha1/types_swagger_doc_generated.go
+A	staging/src/k8s.io/api/authorization/v1alpha1/zz_generated.deepcopy.go
+A	staging/src/k8s.io/api/authorization/v1alpha1/zz_generated.model_name.go
+A	staging/src/k8s.io/api/authorization/v1alpha1/zz_generated.prerelease-lifecycle.go
+M	staging/src/k8s.io/api/authorization/v1beta1/generated.pb.go
+M	staging/src/k8s.io/api/authorization/v1beta1/generated.proto
+M	pkg/apis/authorization/v1/zz_generated.conversion.go
+A	pkg/apis/authorization/v1alpha1/zz_generated.conversion.go
+A	pkg/apis/authorization/v1alpha1/zz_generated.defaults.go
+M	pkg/apis/authorization/v1beta1/zz_generated.conversion.go
+M	pkg/apis/authorization/zz_generated.deepcopy.go
+M	api/api-rules/violation_exceptions.list
+
+
+# Don't commit
+A	plans/kep-5681.md
+A	plans/plan-1.md
+A	plans/plan-2.md
+A	plans/plan-3.md
+A	plans/plan-4.md
+A	plans/plan-5.md
+A	plans/plan-6.md
+A	plans/plan-7.md
+A	plans/plan-8.md
+A	plans/plan-old.md
+A	plans/things-to-add-to-kep.md
+A	plans/todo.md
+A	.claude/settings.json
+M	.gitignore
+A	CLAUDE.md
+A	hack/changed-packages.sh
+A	hack/test-changed.sh
+A	lean/AuthzAfter.lean
+A	lean/AuthzBefore.lean
+A	lean/Plan.md
+A	lean/Properties.lean
+A	lean/Refinement.lean
