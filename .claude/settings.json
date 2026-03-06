@@ -9,13 +9,17 @@
       "Bash(head:*)",
       "Bash(hack/test-changed.sh:*)",
       "Bash(hack/update-codegen.sh:*)",
-      "Bash(hack/update-generated-api-compatibility-data.sh:*)"
+      "Bash(hack/update-generated-api-compatibility-data.sh:*)",
+      "Bash(ls:*)",
+      "Bash(echo $TMPDIR:*)",
+      "Bash(go test:*)",
+      "Bash(sed:*)"
     ]
   },
   "env": {
-    "TMPDIR": "/Users/luxas/upbound/kubernetes/.cache/tmp",
-    "GOCACHE": "/Users/luxas/upbound/kubernetes/.cache/go-build",
-    "GOPATH": "/Users/luxas/upbound/kubernetes/.cache/gopath"
+    "TMPDIR": "/Users/luxas/upbound/kubernetes/_output/.cache/tmp",
+    "GOCACHE": "/Users/luxas/upbound/kubernetes/_output/.cache/go-build",
+    "GOPATH": "/Users/luxas/upbound/kubernetes/_output/.cache/gopath"
   },
   "notifications": true
 }
