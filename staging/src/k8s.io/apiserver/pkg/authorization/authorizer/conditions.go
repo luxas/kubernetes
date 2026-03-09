@@ -51,6 +51,7 @@ type ConditionsAwareDecision struct {
 	unconditionalDecision Decision
 
 	conditionsMap ConditionsMap
+	union         ConditionsAwareDecisionUnionSlice
 
 	reason string
 	err    error
@@ -124,6 +125,12 @@ func (d ConditionsAwareDecision) IsConditionsMap() bool {
 	return len(d.conditionsMap.conditions) != 0
 }
 
+// IsUnion returns true if the decision consists of other sub-decisions
+// unioned together in a tree-like structure.
+func (d ConditionsAwareDecision) IsUnion() bool {
+	return len(d.union) != 0
+}
+
 // IsDenied returns true if the decision is an unconditional Deny.
 func (d ConditionsAwareDecision) IsDenied() bool {
 	// The decision is a Deny whenever none of the other modes apply
@@ -131,12 +138,24 @@ func (d ConditionsAwareDecision) IsDenied() bool {
 	// d.unconditionalDecision == 0 == decisionDeny && d.conditionMap.conditions != nil, so it
 	// is not enough to check d.unconditionalDecision == decisionDeny
 	// This is because the zero value of the struct must be a Deny
-	return !d.IsAllowed() && !d.IsNoOpinion() && !d.IsConditionsMap()
+	return !d.IsAllowed() && !d.IsNoOpinion() && !d.IsConditionsMap() && !d.IsUnion()
 }
 
 // IsUnconditional is true if d is Allowed, Denied or NoOpinion.
 func (d ConditionsAwareDecision) IsUnconditional() bool {
 	return d.IsAllowed() || d.IsDenied() || d.IsNoOpinion()
+}
+
+// ContainsAllowOrDeny returns true whether there union contains at least one
+// Allow or Deny decision within the tree of decisions.
+func (d ConditionsAwareDecision) ContainsAllowOrDeny() bool {
+	if d.IsAllowed() || d.IsDenied() {
+		return true
+	}
+	if d.IsNoOpinion() || d.IsConditionsMap() {
+		return false
+	}
+	return d.union.ContainsAllowOrDeny()
 }
 
 // ConditionsMap returns the ConditionsMap, which is non-empty
@@ -145,24 +164,63 @@ func (d ConditionsAwareDecision) ConditionsMap() ConditionsMap {
 	return d.conditionsMap
 }
 
+// UnionedDecisions returns an iterator for unioned sub-decisions.
+// This iterator is non-empty if and only if IsUnion() == true.
+// The sub-decisions are iterated in their priority order.
+func (d ConditionsAwareDecision) UnionedDecisions() iter.Seq[ConditionsAwareDecision] {
+	return func(yield func(ConditionsAwareDecision) bool) {
+		for _, subDecision := range d.union {
+			if !yield(subDecision) {
+				return
+			}
+		}
+	}
+}
+
+// Reason returns the reason supplied when constructing the decision
+// (if Allow/Deny/NoOpinion/ConditionsMap), or an aggregated reason (if Union).
 func (d ConditionsAwareDecision) Reason() string {
+	if d.IsUnion() {
+		b := strings.Builder{}
+		b.WriteByte('[')
+		for i, sub := range d.union {
+			if i != 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(sub.Reason())
+		}
+		b.WriteByte(']')
+		return b.String()
+	}
 	return d.reason
 }
 
+// Error returns the error supplied when constructing the decision
+// (if Allow/Deny/NoOpinion/ConditionsMap), or an aggregated error (if Union).
 func (d ConditionsAwareDecision) Error() error {
+	if d.IsUnion() {
+		errlist := make([]error, len(d.union))
+		for i, sub := range d.union {
+			errlist[i] = sub.Error()
+		}
+		return utilerrors.NewAggregate(errlist)
+	}
 	return d.err
 }
 
 // FailClosedDecision returns either a Deny or NoOpinion Decision to fail closed
 // whenever processing a decision fails. If the decision contains one or
-// more Deny conditions, the Decision must be Deny, as that could have been the
-// answer if the evaluation had been successful. Otherwise, NoOpinion is returned.
+// more Deny decisions or conditions, one must fail closed with Deny, as that could or would
+// have been the if the condition evaluation did not error. Otherwise, NoOpinion is returned.
 func (d ConditionsAwareDecision) FailClosedDecision(err error) ConditionsAwareDecision {
 	if d.IsAllowed() || d.IsNoOpinion() {
 		return ConditionsAwareDecisionNoOpinion("failed closed", err)
 	}
 	if d.IsConditionsMap() {
 		return d.conditionsMap.FailClosedDecision(err)
+	}
+	if d.IsUnion() {
+		return d.union.FailClosedDecision(err)
 	}
 	// => d.IsDenied() == true
 	return ConditionsAwareDecisionDeny("failed closed", err)
@@ -182,6 +240,18 @@ func (d ConditionsAwareDecision) String() string {
 	}
 	if d.IsConditionsMap() {
 		return fmt.Sprintf("ConditionsMap(target=%q, type=%q, len=%d, reason=%q, err=%s)", d.conditionsMap.conditionTarget, d.conditionsMap.conditionType, len(d.conditionsMap.conditions), d.reason, errStr)
+	}
+	if d.IsUnion() {
+		b := strings.Builder{}
+		b.WriteString("Union[")
+		for i, sub := range d.union {
+			if i != 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(sub.String())
+		}
+		b.WriteByte(']')
+		return b.String()
 	}
 	// Deny is written such that if none of the other modes apply,
 	// IsDenied() is true.
@@ -369,9 +439,9 @@ func (c ConditionsMap) AllowConditions() iter.Seq2[string, Condition] {
 }
 
 // FailClosedDecision returns either a Deny or NoOpinion Decision to fail closed
-// whenever evaluating a ConditionSet fails. If the ConditionSet has one or
-// more Deny conditions, the Decision must be Deny, as that could have been the
-// answer if the evaluation had been successful. Otherwise, NoOpinion is returned.
+// whenever processing a decision fails. If the decision contains one or
+// more Deny decisions or conditions, one must fail closed with Deny, as that could or would
+// have been the if the condition evaluation did not error. Otherwise, NoOpinion is returned.
 func (c ConditionsMap) FailClosedDecision(err error) ConditionsAwareDecision {
 	for _, cond := range c.conditions {
 		if cond.Effect == ConditionEffectDeny {
@@ -446,6 +516,7 @@ func ConditionsAwareDecisionConditionMap(conditionTarget ConditionsTarget, condi
 	}
 
 	return ConditionsAwareDecision{
+		// Note that unconditionalDecision == 0 => Deny only if d.conditionsMap and d.union are both zero-valued
 		unconditionalDecision: 0,
 		conditionsMap: ConditionsMap{
 			conditionTarget: conditionTarget,
@@ -550,6 +621,91 @@ func EvaluateConditionsMap(conditionsMap ConditionsMap, supportedConditionTarget
 	}
 	// Otherwise, no condition evaluated to true, and no condition errored. This means a simple NoOpinion.
 	return ConditionsAwareDecisionNoOpinion("no conditions matched", nil), true
+}
+
+// ConditionsAwareDecisionUnionSlice is an unioned conditions-aware decision type.
+// Order of the decisions matter.
+type ConditionsAwareDecisionUnionSlice []ConditionsAwareDecision
+
+// FailClosedDecision returns either a Deny or NoOpinion Decision to fail closed
+// whenever processing a decision fails. If the decision contains one or
+// more Deny decisions or conditions, one must fail closed with Deny, as that could or would
+// have been the if the condition evaluation did not error. Otherwise, NoOpinion is returned.
+func (unionSlice ConditionsAwareDecisionUnionSlice) FailClosedDecision(err error) ConditionsAwareDecision {
+	for _, subDecision := range unionSlice {
+		if subDecision.FailClosedDecision(err).IsDenied() {
+			return ConditionsAwareDecisionDeny("failed closed", err)
+		}
+	}
+	return ConditionsAwareDecisionNoOpinion("failed closed", err)
+}
+
+// ContainsAllowOrDeny returns true whether there union contains at least one
+// Allow or Deny decision within the unioned decisions.
+func (unionSlice ConditionsAwareDecisionUnionSlice) ContainsAllowOrDeny() bool {
+	for _, subDecision := range unionSlice {
+		if subDecision.ContainsAllowOrDeny() {
+			return true
+		}
+	}
+	return false
+}
+
+// ConditionsAwareDecisionUnion unions some amount of decisions together into a tree structure,
+// where Allow/Deny/NoOpinion/ConditionsMap decisions are leafs, and Union decisions are internal
+// tree nodes.
+func ConditionsAwareDecisionUnion(decisions ...ConditionsAwareDecision) ConditionsAwareDecision {
+	// If there are no decisions, no authorizer had any opinion about the request
+	// This also ensures the invariant that a Union decision always has len(d.union) != 0.
+	if len(decisions) == 0 {
+		return ConditionsAwareDecisionNoOpinion("", nil)
+	}
+
+	// No need to wrap only one element
+	if len(decisions) == 1 {
+		return decisions[0]
+	}
+
+	// Search for the first decision that is not a NoOpinion
+	onlyNoOpinion := true
+	reasonlist := make([]string, 0, len(decisions))
+	errlist := make([]error, 0, len(decisions))
+	for i, d := range decisions {
+		if d.IsNoOpinion() {
+			if reason := d.Reason(); len(reason) != 0 {
+				reasonlist = append(reasonlist, fmt.Sprintf("%d: %s", i, d.Reason()))
+			}
+			if err := d.Error(); err != nil {
+				errlist = append(errlist, fmt.Errorf("%d: %w", i, err))
+			}
+			continue
+		}
+		onlyNoOpinion = false
+
+		// If we see an Allow or Deny, and previously only saw NoOpinions, return Allow/Deny
+		if d.IsAllowed() || d.IsDenied() {
+			return d
+		}
+		// If a ConditionsMap or Union decision is the first not-NoOpinion response,
+		// we cannot simplify it in any way.
+		break
+	}
+
+	// If we got through this loop without setting onlyNoOpinion => false, all elements were NoOpinions
+	if onlyNoOpinion {
+		return ConditionsAwareDecisionNoOpinion(strings.Join(reasonlist, ", "), utilerrors.NewAggregate(errlist))
+	}
+
+	// By this we know that:
+	// - There are at least two elements
+	// - The first not-NoOpinion decision in the list is either Conditional or Union => at least one not-NoOpinion
+	return ConditionsAwareDecision{
+		// Note that unconditionalDecision == 0 => Deny only if d.conditionsMap and d.union are both zero-valued
+		unconditionalDecision: 0,
+		union:                 decisions,
+		reason:                "",
+		err:                   nil,
+	}
 }
 
 // BuiltinConditionsMapEvaluators represents a list of builtin
