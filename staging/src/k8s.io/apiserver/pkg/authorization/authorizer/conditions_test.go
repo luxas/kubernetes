@@ -438,15 +438,26 @@ func TestConditionsAwareDecision(t *testing.T) {
 			wantString:              `NoOpinion("noop", <nil>)`,
 		},
 		{
-			name: "union: single ConditionsMap returned as-is",
+			name: "union: single ConditionsMap wrapped",
 			testDecisions: []authorizer.ConditionsAwareDecision{
 				authorizer.ConditionsAwareDecisionUnion(condMapAllow),
 			},
-			wantIsConditionsMap:     true,
+			wantIsUnion:             true,
 			wantContainsAllowOrDeny: false,
 			wantFailClosedIsDeny:    false,
-			wantReason:              "cond-allow-reason",
-			wantString:              `ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-allow-reason", err=<nil>)`,
+			wantReason:              "[cond-allow-reason]",
+			wantString:              `Union[ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-allow-reason", err=<nil>)]`,
+		},
+		{
+			name: "union: single Union wrapped",
+			testDecisions: []authorizer.ConditionsAwareDecision{
+				authorizer.ConditionsAwareDecisionUnion(authorizer.ConditionsAwareDecisionUnion(condMapDeny, authorizer.ConditionsAwareDecisionAllow("", nil))),
+			},
+			wantIsUnion:             true,
+			wantContainsAllowOrDeny: true,
+			wantFailClosedIsDeny:    true,
+			wantReason:              "[[cond-deny-reason, ]]",
+			wantString:              `Union[Union[ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-deny-reason", err=<nil>), Allow("", <nil>)]]`,
 		},
 		{
 			name: "union: all NoOpinion yields merged NoOpinion",
@@ -1186,7 +1197,7 @@ func TestConditionsAwareDecisionUnionedDecisions(t *testing.T) {
 	t.Run("union iterates sub-decisions in order", func(t *testing.T) {
 		union := authorizer.ConditionsAwareDecisionUnion(condMap, noOp)
 		var got []string
-		for sub := range union.UnionedDecisions() {
+		for _, sub := range union.UnionedDecisions() {
 			got = append(got, sub.Reason())
 		}
 		want := []string{"cond-reason", "noop"}

@@ -167,10 +167,10 @@ func (d ConditionsAwareDecision) ConditionsMap() ConditionsMap {
 // UnionedDecisions returns an iterator for unioned sub-decisions.
 // This iterator is non-empty if and only if IsUnion() == true.
 // The sub-decisions are iterated in their priority order.
-func (d ConditionsAwareDecision) UnionedDecisions() iter.Seq[ConditionsAwareDecision] {
-	return func(yield func(ConditionsAwareDecision) bool) {
-		for _, subDecision := range d.union {
-			if !yield(subDecision) {
+func (d ConditionsAwareDecision) UnionedDecisions() iter.Seq2[int, ConditionsAwareDecision] {
+	return func(yield func(int, ConditionsAwareDecision) bool) {
+		for i, subDecision := range d.union {
+			if !yield(i, subDecision) {
 				return
 			}
 		}
@@ -661,9 +661,20 @@ func ConditionsAwareDecisionUnion(decisions ...ConditionsAwareDecision) Conditio
 		return ConditionsAwareDecisionNoOpinion("", nil)
 	}
 
-	// No need to wrap only one element
 	if len(decisions) == 1 {
-		return decisions[0]
+		// No need to wrap one Allow/Deny/NoOpinion in a union
+		if decisions[0].IsUnconditional() {
+			return decisions[0]
+		}
+
+		// However, ConditionsMap and Union sub-decisions must always be wrapped, such that
+		// the DAG structure is preserved (the union type is an internal node, which is used
+		// to route evaluation of the ConditionsMap to the right authorizer).
+		return ConditionsAwareDecision{
+			// Note that unconditionalDecision == 0 => Deny only if d.conditionsMap and d.union are both zero-valued
+			unconditionalDecision: 0,
+			union:                 decisions,
+		}
 	}
 
 	// Search for the first decision that is not a NoOpinion
@@ -703,8 +714,6 @@ func ConditionsAwareDecisionUnion(decisions ...ConditionsAwareDecision) Conditio
 		// Note that unconditionalDecision == 0 => Deny only if d.conditionsMap and d.union are both zero-valued
 		unconditionalDecision: 0,
 		union:                 decisions,
-		reason:                "",
-		err:                   nil,
 	}
 }
 

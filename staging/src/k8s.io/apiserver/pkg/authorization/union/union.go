@@ -26,6 +26,7 @@ package union
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
@@ -69,13 +70,80 @@ func (authzHandler unionAuthzHandler) Authorize(ctx context.Context, a authorize
 }
 
 // AuthorizeConditionsAware is not conditions-aware, converts the Authorize decision.
-func (authzHandler unionAuthzHandler) AuthorizeConditionsAware(ctx context.Context, a authorizer.Attributes, _ authorizer.ConditionsEncodingPreference) authorizer.ConditionsAwareDecision {
-	return authorizer.ConditionsAwareDecisionFromParts(authzHandler.Authorize(ctx, a))
+func (authzHandler unionAuthzHandler) AuthorizeConditionsAware(ctx context.Context, attrs authorizer.Attributes, encodingPreference authorizer.ConditionsEncodingPreference) authorizer.ConditionsAwareDecision {
+	var decisions []authorizer.ConditionsAwareDecision
+
+	for _, currAuthzHandler := range authzHandler {
+		// Precondition: All previously seen leaf decisions were either of NoOpinion or ConditionsMap type.
+
+		// Call the authorizer on its conditions-aware method, and add the decision to the slice,
+		// regardless of type. This due to that later in EvaluateConditions, the decision index
+		// in the slice is what correlates a decision with the authorizer that should be used
+		// for evaluating it (if needed).
+		decision := currAuthzHandler.AuthorizeConditionsAware(ctx, attrs, encodingPreference)
+		decisions = append(decisions, decision)
+
+		// If there is any Allow/Deny decision leaf, no need to walk the chain further.
+		if decision.ContainsAllowOrDeny() {
+			return authorizer.ConditionsAwareDecisionUnion(decisions...)
+		}
+		// => all leaves are NoOpinion or ConditionsMap, continue to the next authorizer
+	}
+
+	// If we reached here, all leaf decisions were either of NoOpinion or ConditionsMap type.
+	// If all decisions were NoOpinions, the constructor folds into a single NoOpinion decision.
+	return authorizer.ConditionsAwareDecisionUnion(decisions...)
 }
 
 // EvaluateConditions is not supported by this authorizer.
-func (unionAuthzHandler) EvaluateConditions(_ context.Context, _ authorizer.ConditionsAwareDecision, _ authorizer.ConditionsData, _ authorizer.BuiltinConditionsMapEvaluators) authorizer.ConditionsAwareDecision {
-	return authorizer.ConditionsAwareDecisionDeny("", authorizer.ErrorConditionEvaluationNotSupported)
+func (authzHandler unionAuthzHandler) EvaluateConditions(ctx context.Context, unevaluatedDecision authorizer.ConditionsAwareDecision, data authorizer.ConditionsData, evaluators authorizer.BuiltinConditionsMapEvaluators) authorizer.ConditionsAwareDecision {
+	// Stopping condition for the recursion: Nothing to evaluate here.
+	if unevaluatedDecision.IsAllowed() || unevaluatedDecision.IsDenied() || unevaluatedDecision.IsNoOpinion() {
+		return unevaluatedDecision
+	}
+	// This should never happen, an authorizer shall only be called back on an unevaluatedDecision that was returned from
+	// AuthorizeConditionsAware(). However, unionAuthzHandler.AuthorizeConditionsAware never returns a "bare" ConditionsMap,
+	// but either Allow/Deny/NoOpinion (the case above), or Union[...], even if the union only contains one element.
+	if unevaluatedDecision.IsConditionsMap() {
+		return unevaluatedDecision.FailClosedDecision(errors.New("union authorizer never returns a bare ConditionsMap, cannot evaluate"))
+	}
+
+	var evaluatedDecisions []authorizer.ConditionsAwareDecision
+	for i, unevaluatedSubDecision := range unevaluatedDecision.UnionedDecisions() {
+		// Precondition: All previously seen leaf decisions were either of NoOpinion or ConditionsMap type.
+
+		// If the decision is Allow/Deny/NoOpinion, evaluation doesn't change the response,
+		// hence the default evaluated value is the unevaluated one.
+		evaluatedSubDecision := unevaluatedSubDecision
+
+		// However, ConditionsMap and Union decisions can be evaluated, so evaluate such sub-decisions
+		if unevaluatedSubDecision.IsConditionsMap() || unevaluatedSubDecision.IsUnion() {
+			evaluatedSubDecision = authzHandler[i].EvaluateConditions(ctx, unevaluatedSubDecision, data, evaluators)
+			// TODO(luxas): We should ensure here that the evaluated leaf ConditionsMaps are a subset of their unevaluated one,
+			// namely that:
+			// a) the evaluated ConditionsTarget is ordered after the unevaluated ConditionsTarget,
+			// b) any ConditionsMap evaluated to either Allow/Deny/NoOpinion/ConditionsMap (never Union),
+			// c) if a ConditionsMap evaluated to an Allow, it had at least one effect=Allow condition,
+			// d) if a ConditionsMap evaluated to an Deny, it had at least one effect=Deny condition,
+			// e) any condition in a map kept their Effect as-is,
+			// f) no new conditions were added, and
+			// g) all leafs of a union satisfies these constraints (recursively).
+		}
+
+		// Likewise as in AuthorizeConditionsAware, always register all decisions in the slice, as there could
+		// be e.g. Deny conditions before an unconditional Allow, and this setup cannot be simplified to a single decision
+		evaluatedDecisions = append(evaluatedDecisions, evaluatedSubDecision)
+
+		// If there is any Allow/Deny decision leaf, no need to walk the chain further.
+		if evaluatedSubDecision.ContainsAllowOrDeny() {
+			return authorizer.ConditionsAwareDecisionUnion(evaluatedDecisions...)
+		}
+		// => all leaves are NoOpinion or ConditionsMap, continue to the next authorizer
+	}
+
+	// If we reached here, all evaluated decision leafs were NoOpinion or ConditionsMap.
+	// If all decisions were NoOpinions, the constructor folds into a single NoOpinion decision.
+	return authorizer.ConditionsAwareDecisionUnion(evaluatedDecisions...)
 }
 
 // unionAuthzRulesHandler authorizer against a chain of authorizer.RuleResolver
