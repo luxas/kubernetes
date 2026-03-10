@@ -175,6 +175,14 @@ type SubjectAccessReviewSpec struct {
 	Extra map[string]ExtraValue
 	// UID information about the requesting user.
 	UID string
+
+	// ConditionalAuthorization contains options for requesting conditional authorization.
+	// If the field is unset, conditional authorization is not supported, and only Allow/Deny/NoOpinion is returned.
+	// If the field is set, conditional authorization is supported, any of Allow/Deny/NoOpinion/ConditionsMap/Union decisions may be returned.
+	// Requires the ConditionalAuthorization feature to be enabled.
+	// +optional
+	// +featureGate=ConditionalAuthorization
+	ConditionalAuthorization *ConditionalAuthorizationOptions
 }
 
 // ExtraValue masks the value so protobuf can generate
@@ -188,16 +196,26 @@ type SelfSubjectAccessReviewSpec struct {
 	ResourceAttributes *ResourceAttributes
 	// NonResourceAttributes describes information for a non-resource access request
 	NonResourceAttributes *NonResourceAttributes
+
+	// ConditionalAuthorization contains options for requesting conditional authorization.
+	// If the field is unset, conditional authorization is not supported, and only Allow/Deny/NoOpinion is returned.
+	// If the field is set, conditional authorization is supported, any of Allow/Deny/NoOpinion/ConditionsMap/Union decisions may be returned.
+	// Requires the ConditionalAuthorization feature to be enabled.
+	// +optional
+	// +featureGate=ConditionalAuthorization
+	ConditionalAuthorization *ConditionalAuthorizationOptions
 }
 
 // SubjectAccessReviewStatus represents the current state of a SubjectAccessReview.
 type SubjectAccessReviewStatus struct {
 	// Allowed is required. True if the action would be allowed, false otherwise.
+	// Mutually exclusive with denied and conditionalDecision.
 	Allowed bool
-	// Denied is optional. True if the action would be denied, otherwise
-	// false. If both allowed is false and denied is false, then the
-	// authorizer has no opinion on whether to authorize the action. Denied
-	// may not be true if Allowed is true.
+	// denied is optional. True if the action would be denied, otherwise false
+	// If allowed is false, denied is false, and conditionalDecision is unset,
+	// then the authorizer has no opinion on whether to authorize the action.
+	// Mutually exclusive with allowed and conditionalDecision.
+	// +optional
 	Denied bool
 	// Reason is optional.  It indicates why a request was allowed or denied.
 	Reason string
@@ -205,6 +223,17 @@ type SubjectAccessReviewStatus struct {
 	// It is entirely possible to get an error and be able to continue determine authorization status in spite of it.
 	// For instance, RBAC can be missing a role, but enough roles are still present and bound to reason about the request.
 	EvaluationError string
+
+	// ConditionalDecision represents a conditional decision returned by the authorizer.
+	// Mutually exclusive with allowed and denied.
+	// The top-level decision type should be ConditionsAwareDecisionTypeConditionsMap or
+	// ConditionsAwareDecisionTypeUnion, as Allow/Deny/NoOpinion decisions can be represented
+	// with SubjectAccessReviewStatus.Allowed and SubjectAccessReviewStatus.Denied alone.
+	// May only be set if spec.conditionalAuthorization is non-null.
+	// Requires the ConditionalAuthorization feature to be enabled.
+	// +optional
+	// +featureGate=ConditionalAuthorization
+	ConditionalDecision *ConditionsAwareDecision
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -275,4 +304,169 @@ type NonResourceRule struct {
 	// NonResourceURLs is a set of partial urls that a user should have access to.  *s are allowed, but only as the full,
 	// final step in the path.  "*" means all.
 	NonResourceURLs []string
+}
+
+// ConditionsEncodingPreference specifies how, if at all, the client wants conditions to be
+// returned by a conditional authorizer. The default is ConditionsEncodingPreferenceOptimized.
+// +enum
+type ConditionsEncodingPreference string
+
+const (
+	// ConditionsEncodingPreferenceOptimized indicates that the client wants an
+	// optimized conditions encoding without description, if possible.
+	ConditionsEncodingPreferenceOptimized ConditionsEncodingPreference = "Optimized"
+
+	// ConditionsEncodingPreferenceHumanReadable indicates that the client wants a
+	// human-readable condition and description, if possible.
+	ConditionsEncodingPreferenceHumanReadable ConditionsEncodingPreference = "HumanReadable"
+)
+
+// ConditionalAuthorizationOptions contains options for requesting conditional authorization.
+type ConditionalAuthorizationOptions struct {
+	// EncodingPreference specifies how the client would prefer the authorizer to encode the conditions.
+	// If unset, this field is defaulted to ConditionsEncodingPreferenceOptimized.
+	// +optional
+	EncodingPreference ConditionsEncodingPreference
+}
+
+// ConditionEffect specifies how a condition evaluating to
+// true should be treated.
+// +enum
+type ConditionEffect string
+
+const (
+	// ConditionEffectAllow means that if this condition
+	// evaluates to true, the ConditionsMap evaluates to Allow, unless any
+	// Deny/NoOpinion condition also evaluates to true.
+	ConditionEffectAllow ConditionEffect = "Allow"
+
+	// ConditionEffectDeny means that if this condition
+	// evaluates to true, the ConditionsMap necessarily evaluates to Deny.
+	// No further authorizers are consulted.
+	ConditionEffectDeny ConditionEffect = "Deny"
+
+	// ConditionEffectNoOpinion means that if this condition
+	// evaluates to true, the given authorizer's ConditionsMap cannot evaluate
+	// to Allow anymore, but necessarily Deny or NoOpinion.
+	ConditionEffectNoOpinion ConditionEffect = "NoOpinion"
+)
+
+// ConditionsTarget represents a target data set a condition should be evaluated against.
+// +enum
+type ConditionsTarget string
+
+const (
+	// ConditionsTargetAdmissionControl represents that a condition can be written against
+	// the data available in admission, for example, Object and OldObject.
+	ConditionsTargetAdmissionControl ConditionsTarget = "AdmissionControl"
+)
+
+// Condition represents a single authorization condition to be evaluated against
+// data available later in the request chain, e.g. objects available in admission.
+type Condition struct {
+	// ID uniquely identifies this condition within the scope of the authorizer
+	// that authored it. Validated as a Kubernetes label key.
+	// +required
+	ID string
+
+	// Effect specifies how the condition evaluating to "true" should be treated.
+	// +required
+	Effect ConditionEffect
+
+	// Condition is an opaque string that represents the condition to be evaluated.
+	// It is a pure, deterministic function from condition data to a boolean.
+	// +required
+	Condition string
+
+	// Description is an optional human-friendly description that can be shown
+	// as an error message or for debugging.
+	// +optional
+	Description string
+}
+
+// ConditionsMap represents a map of conditions.
+type ConditionsMap struct {
+	// ConditionsTarget describes the target data the conditions are written against.
+	// +required
+	ConditionsTarget ConditionsTarget
+
+	// ConditionsType describes the type (format/encoding/language) of all conditions in the map.
+	// +required
+	ConditionsType string
+
+	// Conditions is an unordered map of conditions, keyed by ID, that should be evaluated
+	// against the specified, to determine whether the authorizer that authored the conditions
+	// allows the request.
+	// If any ConditionsEffect=Deny condition evaluates to true or errors, the evaluated decision must be Deny.
+	// Else if any ConditionsEffect=NoOpinion condition evaluates to true or errors, the evaluated decision must be NoOpinion.
+	// Else if any ConditionsEffect=Allow condition evaluates to true, the evaluated decision must be Allow.
+	// Else, the evaluated decision must be NoOpinion.
+	// +listType=map
+	// +listMapKey=id
+	// +required
+	Conditions []Condition
+}
+
+// ConditionsAwareDecisionType is an enum representing what kind of authorization decision
+// the ConditionsAwareDecision represents. The zero value represents the Deny type.
+// +enum
+type ConditionsAwareDecisionType string
+
+const (
+	// ConditionsAwareDecisionTypeDeny represents an unconditional Deny authorizer decision.
+	ConditionsAwareDecisionTypeDeny ConditionsAwareDecisionType = "Deny"
+
+	// ConditionsAwareDecisionTypeAllow represents an unconditional Allow authorizer decision.
+	ConditionsAwareDecisionTypeAllow ConditionsAwareDecisionType = "Allow"
+
+	// ConditionsAwareDecisionTypeNoOpinion represents an unconditional NoOpinion authorizer decision,
+	// which means that the authorizer does not have a specific opinion on whether the request
+	// should be allowed or denied, and thus can other authorizers later in the union have their say.
+	ConditionsAwareDecisionTypeNoOpinion ConditionsAwareDecisionType = "NoOpinion"
+
+	// ConditionsAwareDecisionTypeConditionsMap represents an authorizer decision that is dependent
+	// on request data available later in the request chain, and thus at this stage conditional.
+	ConditionsAwareDecisionTypeConditionsMap ConditionsAwareDecisionType = "ConditionsMap"
+
+	// ConditionsAwareDecisionTypeUnion is a decision type whose final decision is computed by
+	// an ordered list of sub-authorizers, with their individual decisions. A decision can thus
+	// be represented as a tree, with Union decisions being internal nodes, and
+	// Deny/Allow/NoOpinion/ConditionsMap decisions being leaf nodes, which are visited in depth-first order.
+	ConditionsAwareDecisionTypeUnion ConditionsAwareDecisionType = "Union"
+)
+
+// ConditionsAwareDecision represents one authorizer's decision. It is an enum type,
+// with variants described in ConditionsAwareDecisionType, plus a reason and error.
+type ConditionsAwareDecision struct {
+	// Type describes the type of the decision, and acts as an enum discriminator.
+	// +required
+	Type ConditionsAwareDecisionType
+
+	// Reason is optional. It indicates why a request was allowed or denied.
+	// +optional
+	Reason string
+
+	// EvaluationError is an indication that some error occurred during the authorization check.
+	// It is entirely possible to get an error and be able to continue determine authorization status in spite of it.
+	// For instance, RBAC can be missing a role, but enough roles are still present and bound to reason about the request.
+	// +optional
+	EvaluationError string
+
+	// ConditionsMap represents a conditional decision, modelled as a map of conditions.
+	// Must be non-null when type == "ConditionsMap", otherwise this field must be unset.
+	// +optional
+	ConditionsMap *ConditionsMap
+
+	// Union forms an ordered tree of decisions, where the union decision is represented by
+	// an internal node, and all other decision types are leaf nodes. During evaluation, the
+	// leaf decisions are evaluated in depth-first order, until an Allow or Deny decision is found.
+	// The order of the decisions must match exactly the order of the authorizers in the union authorizer.
+	// At least one of the leaves must be of type ConditionsMap, as otherwise the union could be trivially
+	// reduced to just a single Allow/Deny/NoOpinion.
+	//
+	// Must have at least one element when type == "Union", otherwise this field must be unset.
+	//
+	// +optional
+	// +listType=atomic
+	Union []ConditionsAwareDecision
 }
