@@ -80,12 +80,37 @@
     "nonResourceAttributes": {
       "path": "pathValue",
       "verb": "verbValue"
+    },
+    "conditionalAuthorization": {
+      "encodingPreference": "encodingPreferenceValue"
     }
   },
   "status": {
     "allowed": true,
     "denied": true,
     "reason": "reasonValue",
-    "evaluationError": "evaluationErrorValue"
+    "evaluationError": "evaluationErrorValue",
+    "conditionalDecision": {
+      "type": "typeValue",
+      "reason": "reasonValue",
+      "evaluationError": "evaluationErrorValue",
+      "conditionsMap": {
+        "conditionsTarget": "conditionsTargetValue",
+        "conditionsType": "conditionsTypeValue",
+        "conditions": [
+          {
+            "id": "idValue",
+            "effect": "effectValue",
+            "condition": "conditionValue",
+            "description": "descriptionValue"
+          }
+        ]
+      },
+      "union": [
+        {
+          "type": ""
+        }
+      ]
+    }
   }
 }
