@@ -26,7 +26,9 @@ import (
 	"strconv"
 	"time"
 
+	v1 "k8s.io/api/admission/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
+	authorizationv1alpha1 "k8s.io/api/authorization/v1alpha1"
 	authorizationv1beta1 "k8s.io/api/authorization/v1beta1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -47,6 +49,7 @@ import (
 	"k8s.io/apiserver/plugin/pkg/authorizer/webhook/metrics"
 	"k8s.io/client-go/kubernetes/scheme"
 	authorizationv1client "k8s.io/client-go/kubernetes/typed/authorization/v1"
+	authorizationv1alpha1client "k8s.io/client-go/kubernetes/typed/authorization/v1alpha1"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 )
@@ -69,24 +72,36 @@ type subjectAccessReviewer interface {
 	Create(context.Context, *authorizationv1.SubjectAccessReview, metav1.CreateOptions) (*authorizationv1.SubjectAccessReview, int, error)
 }
 
-type WebhookAuthorizer struct {
-	subjectAccessReview subjectAccessReviewer
-	responseCache       *cache.LRUExpireCache
-	authorizedTTL       time.Duration
-	unauthorizedTTL     time.Duration
-	retryBackoff        wait.Backoff
-	decisionOnError     authorizer.Decision
-	metrics             metrics.AuthorizerMetrics
-	celMatcher          *authorizationcel.CELMatcher
-	name                string
+type authorizationConditionsReviewer interface {
+	Create(context.Context, *authorizationv1alpha1.AuthorizationConditionsReview, metav1.CreateOptions) (*authorizationv1alpha1.AuthorizationConditionsReview, int, error)
 }
 
-// NewFromInterface creates a WebhookAuthorizer using the given subjectAccessReview client
-func NewFromInterface(subjectAccessReview authorizationv1client.AuthorizationV1Interface, authorizedTTL, unauthorizedTTL time.Duration, retryBackoff wait.Backoff, decisionOnError authorizer.Decision, metrics metrics.AuthorizerMetrics, compiler authorizationcel.Compiler) (*WebhookAuthorizer, error) {
-	return newWithBackoff(&subjectAccessReviewV1Client{subjectAccessReview.RESTClient()}, authorizedTTL, unauthorizedTTL, retryBackoff, decisionOnError, nil, metrics, compiler, "")
+type WebhookAuthorizer struct {
+	subjectAccessReview             subjectAccessReviewer
+	authorizationConditionsReviewer authorizationConditionsReviewer
+	responseCache                   *cache.LRUExpireCache
+	authorizedTTL                   time.Duration
+	unauthorizedTTL                 time.Duration
+	retryBackoff                    wait.Backoff
+	decisionOnError                 authorizer.Decision
+	metrics                         metrics.AuthorizerMetrics
+	celMatcher                      *authorizationcel.CELMatcher
+	name                            string
+}
+
+// NewFromInterface creates a WebhookAuthorizer using the given subjectAccessReview client.
+// If conditionsWebhookConfig is non-nil, an AuthorizationConditionsReview client will be
+// built from it to support conditional authorization evaluation.
+func NewFromInterface(subjectAccessReview authorizationv1client.AuthorizationV1Interface, authorizedTTL, unauthorizedTTL time.Duration, retryBackoff wait.Backoff, decisionOnError authorizer.Decision, metrics metrics.AuthorizerMetrics, compiler authorizationcel.Compiler, authorizationV1Alpha1Interface authorizationv1alpha1client.AuthorizationV1alpha1Interface) (*WebhookAuthorizer, error) {
+	var conditionsReviewer authorizationConditionsReviewer
+	if authorizationV1Alpha1Interface != nil {
+		conditionsReviewer = &authorizationConditionsReviewV1Alpha1Client{authorizationV1Alpha1Interface.RESTClient()}
+	}
+	return newWithBackoff(&subjectAccessReviewV1Client{subjectAccessReview.RESTClient()}, authorizedTTL, unauthorizedTTL, retryBackoff, decisionOnError, nil, metrics, compiler, "", conditionsReviewer)
 }
 
 // New creates a new WebhookAuthorizer from the provided kubeconfig file.
+// TODO(luxas): This does not _actually_ build from the KubeConfig file, should we move the logic from reloadableAuthorizerResolver here?
 // The config's cluster field is used to refer to the remote service, user refers to the returned authorizer.
 //
 //	# clusters refers to the remote service.
@@ -105,16 +120,24 @@ func NewFromInterface(subjectAccessReview authorizationv1client.AuthorizationV1I
 //
 // For additional HTTP configuration, refer to the kubeconfig documentation
 // https://kubernetes.io/docs/user-guide/kubeconfig-file/.
-func New(config *rest.Config, version string, authorizedTTL, unauthorizedTTL time.Duration, retryBackoff wait.Backoff, decisionOnError authorizer.Decision, matchConditions []apiserver.WebhookMatchCondition, name string, metrics metrics.AuthorizerMetrics, compiler authorizationcel.Compiler) (*WebhookAuthorizer, error) {
-	subjectAccessReview, err := subjectAccessReviewInterfaceFromConfig(config, version, retryBackoff)
+func New(sarConfig *rest.Config, sarVersion string, authorizedTTL, unauthorizedTTL time.Duration, retryBackoff wait.Backoff, decisionOnError authorizer.Decision, matchConditions []apiserver.WebhookMatchCondition, name string, metrics metrics.AuthorizerMetrics, compiler authorizationcel.Compiler, conditionsReviewConfig *rest.Config, conditionsReviewVersion string) (*WebhookAuthorizer, error) {
+	subjectAccessReview, err := subjectAccessReviewInterfaceFromConfig(sarConfig, sarVersion, retryBackoff)
 	if err != nil {
 		return nil, err
 	}
-	return newWithBackoff(subjectAccessReview, authorizedTTL, unauthorizedTTL, retryBackoff, decisionOnError, matchConditions, metrics, compiler, name)
+	var conditionsReviewer authorizationConditionsReviewer
+	if conditionsReviewConfig != nil {
+		conditionsReviewer, err = authorizationConditionsReviewInterfaceFromConfig(conditionsReviewConfig, conditionsReviewVersion, retryBackoff)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return newWithBackoff(subjectAccessReview, authorizedTTL, unauthorizedTTL, retryBackoff, decisionOnError, matchConditions, metrics, compiler, name, conditionsReviewer)
 }
 
 // newWithBackoff allows tests to skip the sleep.
-func newWithBackoff(subjectAccessReview subjectAccessReviewer, authorizedTTL, unauthorizedTTL time.Duration, retryBackoff wait.Backoff, decisionOnError authorizer.Decision, matchConditions []apiserver.WebhookMatchCondition, am metrics.AuthorizerMetrics, compiler authorizationcel.Compiler, name string) (*WebhookAuthorizer, error) {
+func newWithBackoff(subjectAccessReview subjectAccessReviewer, authorizedTTL, unauthorizedTTL time.Duration, retryBackoff wait.Backoff, decisionOnError authorizer.Decision, matchConditions []apiserver.WebhookMatchCondition, am metrics.AuthorizerMetrics, compiler authorizationcel.Compiler, name string, authorizationConditionsReviewer authorizationConditionsReviewer) (*WebhookAuthorizer, error) {
 	// compile all expressions once in validation and save the results to be used for eval later
 	cm, fieldErr := apiservervalidation.ValidateAndCompileMatchConditions(compiler, matchConditions)
 	if err := fieldErr.ToAggregate(); err != nil {
@@ -126,15 +149,16 @@ func newWithBackoff(subjectAccessReview subjectAccessReviewer, authorizedTTL, un
 		cm.Metrics = am
 	}
 	return &WebhookAuthorizer{
-		subjectAccessReview: subjectAccessReview,
-		responseCache:       cache.NewLRUExpireCache(8192),
-		authorizedTTL:       authorizedTTL,
-		unauthorizedTTL:     unauthorizedTTL,
-		retryBackoff:        retryBackoff,
-		decisionOnError:     decisionOnError,
-		metrics:             am,
-		celMatcher:          cm,
-		name:                name,
+		subjectAccessReview:             subjectAccessReview,
+		authorizationConditionsReviewer: authorizationConditionsReviewer,
+		responseCache:                   cache.NewLRUExpireCache(8192),
+		authorizedTTL:                   authorizedTTL,
+		unauthorizedTTL:                 unauthorizedTTL,
+		retryBackoff:                    retryBackoff,
+		decisionOnError:                 decisionOnError,
+		metrics:                         am,
+		celMatcher:                      cm,
+		name:                            name,
 	}, nil
 }
 
@@ -217,14 +241,106 @@ func (w *WebhookAuthorizer) Authorize(ctx context.Context, attr authorizer.Attri
 	if !matches {
 		return authorizer.DecisionNoOpinion, "", nil
 	}
+
+	r.Status, err = w.sendSARWebhook(ctx, r, attr)
+	if err != nil {
+		return w.decisionOnError, "", err
+	}
+
+	switch {
+	case r.Status.Denied && r.Status.Allowed:
+		return authorizer.DecisionDeny, r.Status.Reason, fmt.Errorf("webhook subject access review returned both allow and deny response")
+	case r.Status.ConditionalDecision != nil:
+		return w.decisionOnError, "", fmt.Errorf("webhook authorizer tried to return conditional decision although client does not support it")
+	case r.Status.Denied:
+		return authorizer.DecisionDeny, r.Status.Reason, nil
+	case r.Status.Allowed:
+		return authorizer.DecisionAllow, r.Status.Reason, nil
+	default:
+		return authorizer.DecisionNoOpinion, r.Status.Reason, nil
+	}
+}
+
+func (w *WebhookAuthorizer) AuthorizeConditionsAware(ctx context.Context, attr authorizer.Attributes, _ authorizer.ConditionsEncodingPreference) authorizer.ConditionsAwareDecision {
+	r := &authorizationv1.SubjectAccessReview{
+		Spec: authorizationv1.SubjectAccessReviewSpec{
+			ConditionalAuthorization: &authorizationv1.ConditionalAuthorizationOptions{
+				// TODO(luxas): Change to enabled
+				EncodingPreference: authorizationv1.ConditionsEncodingPreferenceOptimized,
+			},
+		},
+	}
+	if user := attr.GetUser(); user != nil {
+		r.Spec = authorizationv1.SubjectAccessReviewSpec{
+			User:   user.GetName(),
+			UID:    user.GetUID(),
+			Groups: user.GetGroups(),
+			Extra:  convertToSARExtra(user.GetExtra()),
+		}
+	}
+
+	if attr.IsResourceRequest() {
+		r.Spec.ResourceAttributes = resourceAttributesFrom(attr)
+	} else {
+		r.Spec.NonResourceAttributes = &authorizationv1.NonResourceAttributes{
+			Path: attr.GetPath(),
+			Verb: attr.GetVerb(),
+		}
+	}
+
+	// Process Match Conditions before calling the webhook
+	matches, err := w.match(ctx, r)
+	// If at least one matchCondition evaluates to an error (but none are FALSE):
+	// If failurePolicy=Deny, then the webhook rejects the request
+	// If failurePolicy=NoOpinion, then the error is ignored and the webhook is skipped
+	if err != nil {
+		return w.conditionsAwareFailClosedDecision(err)
+	}
+	// If at least one matchCondition successfully evaluates to FALSE,
+	// then the webhook is skipped.
+	if !matches {
+		return authorizer.ConditionsAwareDecisionNoOpinion("", nil)
+	}
+
+	r.Status, err = w.sendSARWebhook(ctx, r, attr)
+	if err != nil {
+		return w.conditionsAwareFailClosedDecision(err)
+	}
+
+	switch {
+	case r.Status.Denied && r.Status.Allowed:
+		return authorizer.ConditionsAwareDecisionDeny(r.Status.Reason, fmt.Errorf("webhook subject access review returned both allow and deny response"))
+	case r.Status.Denied && r.Status.ConditionalDecision != nil:
+		return authorizer.ConditionsAwareDecisionDeny(r.Status.Reason, fmt.Errorf("webhook subject access review returned both conditional and deny response"))
+	case r.Status.Allowed && r.Status.ConditionalDecision != nil:
+		return authorizer.ConditionsAwareDecisionDeny(r.Status.Reason, fmt.Errorf("webhook subject access review returned both conditional and allow response"))
+	case r.Status.Denied:
+		return authorizer.ConditionsAwareDecisionDeny(r.Status.Reason, nil)
+	case r.Status.Allowed:
+		return authorizer.ConditionsAwareDecisionAllow(r.Status.Reason, nil)
+	case r.Status.ConditionalDecision != nil:
+		return deserializeDecision(*r.Status.ConditionalDecision, w.conditionsAwareFailClosedDecision)
+	default:
+		return authorizer.ConditionsAwareDecisionNoOpinion(r.Status.Reason, nil)
+	}
+}
+
+func (w *WebhookAuthorizer) conditionsAwareFailClosedDecision(err error) authorizer.ConditionsAwareDecision {
+	if w.decisionOnError == authorizer.DecisionNoOpinion {
+		return authorizer.ConditionsAwareDecisionNoOpinion("", err)
+	}
+	return authorizer.ConditionsAwareDecisionDeny("", err)
+}
+
+func (w *WebhookAuthorizer) sendSARWebhook(ctx context.Context, r *authorizationv1.SubjectAccessReview, attr authorizer.Attributes) (authorizationv1.SubjectAccessReviewStatus, error) {
 	// If all evaluated successfully and ALL matchConditions evaluate to TRUE,
 	// then the webhook is called.
 	key, err := json.Marshal(r.Spec)
 	if err != nil {
-		return w.decisionOnError, "", err
+		return authorizationv1.SubjectAccessReviewStatus{}, err
 	}
 	if entry, ok := w.responseCache.Get(string(key)); ok {
-		r.Status = entry.(authorizationv1.SubjectAccessReviewStatus)
+		return entry.(authorizationv1.SubjectAccessReviewStatus), nil
 	} else {
 		var result *authorizationv1.SubjectAccessReview
 		var metricsResult string
@@ -270,9 +386,10 @@ func (w *WebhookAuthorizer) Authorize(ctx context.Context, attr authorizer.Attri
 				w.metrics.RecordWebhookFailOpen(ctx, w.name, metricsResult)
 			}
 
-			return w.decisionOnError, "", err
+			return authorizationv1.SubjectAccessReviewStatus{}, err
 		}
 
+		// TODO: There is a discrepancy between the if and the else branch, else writes into the r pointer, if does not.
 		r.Status = result.Status
 		if shouldCache(attr) {
 			if r.Status.Allowed {
@@ -281,28 +398,194 @@ func (w *WebhookAuthorizer) Authorize(ctx context.Context, attr authorizer.Attri
 				w.responseCache.Add(string(key), r.Status, w.unauthorizedTTL)
 			}
 		}
+		return r.Status, nil
+	}
+}
+
+func (w *WebhookAuthorizer) EvaluateConditions(ctx context.Context, decision authorizer.ConditionsAwareDecision, data authorizer.ConditionsData, builtinEvaluators authorizer.BuiltinConditionsMapEvaluators) authorizer.ConditionsAwareDecision {
+	if decision.IsUnconditional() {
+		return decision
+	}
+
+	// TODO(luxas): Use builtin evaluators to resolve as much as possible of the ConditionsMap or Union
+
+	r := &authorizationv1alpha1.AuthorizationConditionsReview{
+		Request: &authorizationv1alpha1.AuthorizationConditionsRequest{
+			Decision: serializeConditionsAwareDecision(decision),
+		},
+	}
+
+	switch data.Target() {
+	case authorizer.ConditionsTargetAdmissionControl:
+		wr := data.AdmissionControl()
+		if wr == nil {
+			return decision.FailClosedDecision(errors.New("no AdmissionControl ConditionsData to evaluate against"))
+		}
+		r.Request.Target = authorizationv1alpha1.AuthorizationConditionsTarget{
+			Type: authorizationv1alpha1.ConditionsTargetAdmissionControl,
+			AdmissionControl: &authorizationv1alpha1.AuthorizationConditionsTargetAdmissionControl{
+				// TODO: Fill in the other stuff here?
+				Object: runtime.RawExtension{
+					Object: wr.GetObject(),
+				},
+				OldObject: runtime.RawExtension{
+					Object: wr.GetOldObject(),
+				},
+				Operation: v1.Operation(wr.GetOperation()),
+				Options: runtime.RawExtension{
+					Object: wr.GetOperationOptions(),
+				},
+			},
+		}
+	default:
+		return decision.FailClosedDecision(fmt.Errorf("unrecognized ConditionsTarget=%q", data.Target()))
+	}
+
+	var result *authorizationv1alpha1.AuthorizationConditionsReview
+	var metricsResult string
+	// WithExponentialBackoff will return SAR create error (sarErr) if any.
+	if err := webhook.WithExponentialBackoff(ctx, w.retryBackoff, func() error {
+		var acrErr error
+		result, _, acrErr = w.authorizationConditionsReviewer.Create(ctx, r, metav1.CreateOptions{})
+		// TODO: add metrics
+
+		return acrErr
+	}, webhook.DefaultShouldRetry); err != nil {
+		klog.Errorf("Failed to make webhook authorizer evaluation request: %v", err)
+
+		// we're returning NoOpinion, and the parent context has not timed out or been canceled
+		if w.decisionOnError == authorizer.DecisionNoOpinion && ctx.Err() == nil {
+			w.metrics.RecordWebhookFailOpen(ctx, w.name, metricsResult)
+		}
+
+		return w.conditionsAwareFailClosedDecision(err)
+	}
+
+	if result.Response == nil {
+		return authorizer.ConditionsAwareDecisionNoOpinion("", nil)
+	}
+	evaluationError := deserializeEvaluationError(result.Response.Decision.EvaluationError)
+
+	switch result.Response.Decision.Type {
+	case authorizationv1alpha1.ConditionsAwareDecisionTypeAllow:
+		return authorizer.ConditionsAwareDecisionAllow(result.Response.Decision.Reason, evaluationError)
+	case authorizationv1alpha1.ConditionsAwareDecisionTypeDeny:
+		return authorizer.ConditionsAwareDecisionDeny(result.Response.Decision.Reason, evaluationError)
+	case authorizationv1alpha1.ConditionsAwareDecisionTypeNoOpinion:
+		return authorizer.ConditionsAwareDecisionNoOpinion(result.Response.Decision.Reason, evaluationError)
+	default:
+		return w.conditionsAwareFailClosedDecision(fmt.Errorf("unrecognized decision type %q", result.Response.Decision.Type))
+	}
+}
+
+func deserializeEvaluationError(evalErr string) error {
+	if len(evalErr) == 0 {
+		return nil
+	}
+	return errors.New(evalErr)
+}
+
+func deserializeDecision(serializedDecision authorizationv1.ConditionsAwareDecision, failClosed func(error) authorizer.ConditionsAwareDecision) authorizer.ConditionsAwareDecision {
+	evaluationError := deserializeEvaluationError(serializedDecision.EvaluationError)
+
+	switch serializedDecision.Type {
+	case authorizationv1.ConditionsAwareDecisionTypeAllow:
+		return authorizer.ConditionsAwareDecisionAllow(serializedDecision.Reason, evaluationError)
+	case authorizationv1.ConditionsAwareDecisionTypeDeny:
+		return authorizer.ConditionsAwareDecisionDeny(serializedDecision.Reason, evaluationError)
+	case authorizationv1.ConditionsAwareDecisionTypeNoOpinion:
+		return authorizer.ConditionsAwareDecisionNoOpinion(serializedDecision.Reason, evaluationError)
+	case authorizationv1.ConditionsAwareDecisionTypeConditionsMap:
+		if serializedDecision.ConditionsMap != nil {
+			ct := authorizer.ConditionType(serializedDecision.ConditionsMap.ConditionsType)
+			target := authorizer.ConditionsTarget(serializedDecision.ConditionsMap.ConditionsTarget)
+			return authorizer.ConditionsAwareDecisionConditionMap(target, ct, func(yield func(string, authorizer.Condition) bool) {
+				for _, condition := range serializedDecision.ConditionsMap.Conditions {
+					cond := authorizer.Condition{
+						Effect:      authorizer.ConditionEffect(condition.Effect),
+						Condition:   condition.Condition,
+						Description: condition.Description,
+					}
+					if !yield(condition.ID, cond) {
+						return
+					}
+				}
+			}, serializedDecision.Reason, evaluationError)
+		}
+		return authorizer.ConditionsAwareDecisionNoOpinion(serializedDecision.Reason, evaluationError)
+	case authorizationv1.ConditionsAwareDecisionTypeUnion:
+		if len(serializedDecision.Union) != 0 {
+			subDecisions := make([]authorizer.ConditionsAwareDecision, 0, len(serializedDecision.Union))
+			for _, serializedSubDecision := range serializedDecision.Union {
+				subDecisions = append(subDecisions, deserializeDecision(serializedSubDecision, failClosed))
+			}
+			return authorizer.ConditionsAwareDecisionUnion(subDecisions...)
+		}
+		return authorizer.ConditionsAwareDecisionNoOpinion(serializedDecision.Reason, evaluationError)
+	default:
+		return failClosed(fmt.Errorf("unrecognized ConditionsAwareDecision.type=%q", serializedDecision.Type))
+	}
+}
+
+// TODO(luxas): Deduplicate this code with authorizationutil (helpers.go)
+func serializeConditionsAwareDecision(decision authorizer.ConditionsAwareDecision) authorizationv1alpha1.ConditionsAwareDecision {
+	var errString string
+	if decision.Error() != nil {
+		errString = decision.Error().Error()
 	}
 	switch {
-	case r.Status.Denied && r.Status.Allowed:
-		return authorizer.DecisionDeny, r.Status.Reason, fmt.Errorf("webhook subject access review returned both allow and deny response")
-	case r.Status.Denied:
-		return authorizer.DecisionDeny, r.Status.Reason, nil
-	case r.Status.Allowed:
-		return authorizer.DecisionAllow, r.Status.Reason, nil
+	case decision.IsAllowed():
+		return authorizationv1alpha1.ConditionsAwareDecision{
+			Type:            authorizationv1alpha1.ConditionsAwareDecisionTypeAllow,
+			Reason:          decision.Reason(),
+			EvaluationError: errString,
+		}
+	case decision.IsNoOpinion():
+		return authorizationv1alpha1.ConditionsAwareDecision{
+			Type:            authorizationv1alpha1.ConditionsAwareDecisionTypeNoOpinion,
+			Reason:          decision.Reason(),
+			EvaluationError: errString,
+		}
+	case decision.IsConditionsMap():
+		conds := []authorizationv1alpha1.Condition{}
+		for id, condition := range decision.ConditionsMap().Conditions() {
+			conds = append(conds, authorizationv1alpha1.Condition{
+				ID:          id,
+				Effect:      authorizationv1alpha1.ConditionEffect(condition.Effect),
+				Condition:   condition.Condition,
+				Description: condition.Description,
+			})
+		}
+
+		return authorizationv1alpha1.ConditionsAwareDecision{
+			Type:            authorizationv1alpha1.ConditionsAwareDecisionTypeConditionsMap,
+			Reason:          decision.Reason(),
+			EvaluationError: errString,
+			ConditionsMap: &authorizationv1alpha1.ConditionsMap{
+				Conditions:       conds,
+				ConditionsType:   string(decision.ConditionsMap().Type()),
+				ConditionsTarget: authorizationv1alpha1.ConditionsTarget(decision.ConditionsMap().Target()),
+			},
+		}
+	case decision.IsUnion():
+		subDecisions := []authorizationv1alpha1.ConditionsAwareDecision{}
+		for _, subDecision := range decision.UnionedDecisions() {
+			subDecisions = append(subDecisions, serializeConditionsAwareDecision(subDecision))
+		}
+		return authorizationv1alpha1.ConditionsAwareDecision{
+			Type: authorizationv1alpha1.ConditionsAwareDecisionTypeUnion,
+			// Reason and EvaluationError are not serialized in Unions, as that information is anyways
+			// available when reading the leaves.
+			Union: subDecisions,
+		}
 	default:
-		return authorizer.DecisionNoOpinion, r.Status.Reason, nil
+		// If none of the other cases matched, it's a Deny
+		return authorizationv1alpha1.ConditionsAwareDecision{
+			Type:            authorizationv1alpha1.ConditionsAwareDecisionTypeDeny,
+			Reason:          decision.Reason(),
+			EvaluationError: errString,
+		}
 	}
-
-}
-
-// AuthorizeConditionsAware is not conditions-aware, converts the Authorize decision.
-func (w *WebhookAuthorizer) AuthorizeConditionsAware(ctx context.Context, a authorizer.Attributes, _ authorizer.ConditionsEncodingPreference) authorizer.ConditionsAwareDecision {
-	return authorizer.ConditionsAwareDecisionFromParts(w.Authorize(ctx, a))
-}
-
-// EvaluateConditions is not supported by this authorizer.
-func (*WebhookAuthorizer) EvaluateConditions(_ context.Context, _ authorizer.ConditionsAwareDecision, _ authorizer.ConditionsData, _ authorizer.BuiltinConditionsMapEvaluators) authorizer.ConditionsAwareDecision {
-	return authorizer.ConditionsAwareDecisionDeny("", authorizer.ErrorConditionEvaluationNotSupported)
 }
 
 func resourceAttributesFrom(attr authorizer.Attributes) *authorizationv1.ResourceAttributes {
@@ -442,6 +725,31 @@ func convertToSARExtra(extra map[string][]string) map[string]authorizationv1.Ext
 	return ret
 }
 
+func authorizationConditionsReviewInterfaceFromConfig(config *rest.Config, version string, retryBackoff wait.Backoff) (*authorizationConditionsClientGW, error) {
+	localScheme := runtime.NewScheme()
+	if err := authorizationv1alpha1.AddToScheme(localScheme); err != nil {
+		return nil, err
+	}
+	switch version {
+	case authorizationv1alpha1.SchemeGroupVersion.Version:
+		groupVersions := []schema.GroupVersion{authorizationv1alpha1.SchemeGroupVersion}
+		if err := localScheme.SetVersionPriority(groupVersions...); err != nil {
+			return nil, err
+		}
+		gw, err := webhook.NewGenericWebhook(localScheme, scheme.Codecs, config, groupVersions, retryBackoff)
+		if err != nil {
+			return nil, err
+		}
+		return &authorizationConditionsClientGW{gw.RestClient}, nil
+	default:
+		return nil, fmt.Errorf(
+			"unsupported webhook conditions review version %q, supported versions are %v",
+			version,
+			[]string{authorizationv1alpha1.SchemeGroupVersion.Version},
+		)
+	}
+}
+
 // subjectAccessReviewInterfaceFromConfig builds a client from the specified kubeconfig file,
 // and returns a SubjectAccessReviewInterface that uses that client. Note that the client submits SubjectAccessReview
 // requests to the exact path specified in the kubeconfig file, so arbitrary non-API servers can be targeted.
@@ -476,10 +784,12 @@ func subjectAccessReviewInterfaceFromConfig(config *rest.Config, version string,
 
 	default:
 		return nil, fmt.Errorf(
-			"unsupported webhook authorizer version %q, supported versions are %q, %q",
+			"unsupported webhook authorizer version %q, supported versions are %v",
 			version,
-			authorizationv1.SchemeGroupVersion.Version,
-			authorizationv1beta1.SchemeGroupVersion.Version,
+			[]string{
+				authorizationv1.SchemeGroupVersion.Version,
+				authorizationv1beta1.SchemeGroupVersion.Version,
+			},
 		)
 	}
 }
@@ -500,6 +810,41 @@ func (t *subjectAccessReviewV1Client) Create(ctx context.Context, subjectAccessR
 	restResult.StatusCode(&statusCode)
 	err = restResult.Into(result)
 	return
+}
+
+type authorizationConditionsReviewV1Alpha1Client struct {
+	client rest.Interface
+}
+
+func (t *authorizationConditionsReviewV1Alpha1Client) Create(ctx context.Context, authorizationConditionsReview *authorizationv1alpha1.AuthorizationConditionsReview, opts metav1.CreateOptions) (result *authorizationv1alpha1.AuthorizationConditionsReview, statusCode int, err error) {
+	result = &authorizationv1alpha1.AuthorizationConditionsReview{}
+
+	restResult := t.client.Post().
+		Resource("authorizationconditionsreviews").
+		VersionedParams(&opts, scheme.ParameterCodec).
+		Body(authorizationConditionsReview).
+		Do(ctx)
+
+	restResult.StatusCode(&statusCode)
+	err = restResult.Into(result)
+	return
+}
+
+// authorizationConditionsClientGW used by the generic webhook, doesn't specify GVR.
+type authorizationConditionsClientGW struct {
+	client rest.Interface
+}
+
+func (t *authorizationConditionsClientGW) Create(ctx context.Context, authorizationConditionsReview *authorizationv1alpha1.AuthorizationConditionsReview, _ metav1.CreateOptions) (*authorizationv1alpha1.AuthorizationConditionsReview, int, error) {
+	var statusCode int
+	result := &authorizationv1alpha1.AuthorizationConditionsReview{}
+
+	restResult := t.client.Post().Body(authorizationConditionsReview).Do(ctx)
+
+	restResult.StatusCode(&statusCode)
+	err := restResult.Into(result)
+
+	return result, statusCode, err
 }
 
 // subjectAccessReviewV1ClientGW used by the generic webhook, doesn't specify GVR.

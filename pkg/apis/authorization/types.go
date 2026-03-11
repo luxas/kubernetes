@@ -18,6 +18,7 @@ package authorization
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -469,4 +470,66 @@ type ConditionsAwareDecision struct {
 	// +optional
 	// +listType=atomic
 	Union []ConditionsAwareDecision
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+// AuthorizationConditionsReview describes a request to evaluate authorization conditions.
+type AuthorizationConditionsReview struct {
+	metav1.TypeMeta
+	// metadata is the standard list metadata.
+	// In AuthorizationConditionsReview, it must be an empty struct.
+	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+	// +optional
+	metav1.ObjectMeta
+
+	// Request describes the attributes for the authorization conditions request.
+	// +optional
+	Request *AuthorizationConditionsRequest
+	// Response describes the attributes for the authorization conditions response.
+	// +optional
+	Response *AuthorizationConditionsResponse
+}
+
+// AuthorizationConditionsRequest describes the authorization conditions request.
+type AuthorizationConditionsRequest struct {
+	Decision ConditionsAwareDecision
+
+	Target AuthorizationConditionsTarget
+}
+
+type AuthorizationConditionsTarget struct {
+	Type ConditionsTarget
+
+	AdmissionControl *AuthorizationConditionsTargetAdmissionControl
+}
+
+type AuthorizationConditionsTargetAdmissionControl struct {
+	// Operation is the operation being performed. This may be different than the operation
+	// requested. e.g. a patch can result in either a CREATE or UPDATE Operation.
+	// TODO(luxas): Is string here ok?
+	Operation string
+
+	// Object is the object from the incoming request.
+	// +optional
+	Object runtime.RawExtension
+	// OldObject is the existing object. Only populated for DELETE and UPDATE requests.
+	// +optional
+	OldObject runtime.RawExtension
+	// DryRun indicates that modifications will definitely not be persisted for this request.
+	// Defaults to false.
+	// +optional
+	DryRun *bool
+	// Options is the operation option structure of the operation being performed.
+	// e.g. `meta.k8s.io/v1.DeleteOptions` or `meta.k8s.io/v1.CreateOptions`. This may be
+	// different than the options the caller provided. e.g. for a patch request the performed
+	// Operation might be a CREATE, in which case the Options will a
+	// `meta.k8s.io/v1.CreateOptions` even though the caller provided `meta.k8s.io/v1.PatchOptions`.
+	// +optional
+	Options runtime.RawExtension
+}
+
+// AuthorizationConditionsResponse describes an authorization conditions response.
+type AuthorizationConditionsResponse struct {
+	Decision ConditionsAwareDecision
 }

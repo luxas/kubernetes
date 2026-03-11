@@ -514,12 +514,14 @@ type ConditionsAwareDecision struct {
 	Type ConditionsAwareDecisionType `json:"type" protobuf:"bytes,1,opt,name=type,casttype=ConditionsAwareDecisionType"`
 
 	// reason is optional. It indicates why a request was allowed or denied.
+	// Ignored when type == ConditionsAwareDecisionTypeUnion.
 	// +optional
 	Reason string `json:"reason,omitempty" protobuf:"bytes,2,opt,name=reason"`
 
 	// evaluationError is an indication that some error occurred during the authorization check.
 	// It is entirely possible to get an error and be able to continue determine authorization status in spite of it.
 	// For instance, RBAC can be missing a role, but enough roles are still present and bound to reason about the request.
+	// Ignored when type == ConditionsAwareDecisionTypeUnion.
 	// +optional
 	EvaluationError string `json:"evaluationError,omitempty" protobuf:"bytes,3,opt,name=evaluationError"`
 
