@@ -1,0 +1,497 @@
+/*
+Copyright 2026 The Kubernetes Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+	http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package conditionsenforcer
+
+import (
+	"bytes"
+	"context"
+	"maps"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/runtime/serializer"
+	"k8s.io/apimachinery/pkg/util/managedfields"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apiserver/pkg/admission"
+	"k8s.io/apiserver/pkg/apis/example"
+	examplev1 "k8s.io/apiserver/pkg/apis/example/v1"
+	"k8s.io/apiserver/pkg/authentication/authenticator"
+	"k8s.io/apiserver/pkg/authentication/user"
+	"k8s.io/apiserver/pkg/authorization/authorizer"
+	"k8s.io/apiserver/pkg/endpoints/filters"
+	"k8s.io/apiserver/pkg/endpoints/handlers"
+	"k8s.io/apiserver/pkg/endpoints/handlers/responsewriters"
+	"k8s.io/apiserver/pkg/endpoints/request"
+	genericfeatures "k8s.io/apiserver/pkg/features"
+	"k8s.io/apiserver/pkg/registry/rest"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
+)
+
+// ---------- scheme setup ----------
+
+var (
+	testScheme = runtime.NewScheme()
+	testCodecs = serializer.NewCodecFactory(testScheme)
+)
+
+func init() {
+	metav1.AddToGroupVersion(testScheme, metav1.SchemeGroupVersion)
+	utilruntime.Must(example.AddToScheme(testScheme))
+	utilruntime.Must(examplev1.AddToScheme(testScheme))
+}
+
+// ---------- fake authorizers ----------
+
+// fakeAuthorizer returns unconditional decisions.
+type fakeAuthorizer struct {
+	decision authorizer.Decision
+	reason   string
+	err      error
+}
+
+func (f fakeAuthorizer) Authorize(_ context.Context, _ authorizer.Attributes) (authorizer.Decision, string, error) {
+	return f.decision, f.reason, f.err
+}
+
+func (f fakeAuthorizer) AuthorizeConditionsAware(ctx context.Context, a authorizer.Attributes, _ authorizer.ConditionsEncodingPreference) authorizer.ConditionsAwareDecision {
+	return authorizer.ConditionsAwareDecisionFromParts(f.Authorize(ctx, a))
+}
+
+func (fakeAuthorizer) EvaluateConditions(_ context.Context, _ authorizer.ConditionsAwareDecision, _ authorizer.ConditionsData, _ authorizer.BuiltinConditionsMapEvaluators) authorizer.ConditionsAwareDecision {
+	return authorizer.ConditionsAwareDecisionDeny("", authorizer.ErrorConditionEvaluationNotSupported)
+}
+
+// conditionsAwareFakeAuthorizer returns arbitrary ConditionsAwareDecision values and
+// supports configurable condition evaluation.
+type conditionsAwareFakeAuthorizer struct {
+	makeDecision   func() authorizer.ConditionsAwareDecision
+	evalConditions func(ctx context.Context, d authorizer.ConditionsAwareDecision, data authorizer.ConditionsData, builtins authorizer.BuiltinConditionsMapEvaluators) authorizer.ConditionsAwareDecision
+}
+
+func (f *conditionsAwareFakeAuthorizer) Authorize(ctx context.Context, a authorizer.Attributes) (authorizer.Decision, string, error) {
+	return authorizer.DecisionPartsFromConditionsAware(f.AuthorizeConditionsAware(ctx, a, authorizer.ConditionsEncodingPreferenceOptimized()))
+}
+
+func (f *conditionsAwareFakeAuthorizer) AuthorizeConditionsAware(_ context.Context, _ authorizer.Attributes, _ authorizer.ConditionsEncodingPreference) authorizer.ConditionsAwareDecision {
+	return f.makeDecision()
+}
+
+func (f *conditionsAwareFakeAuthorizer) EvaluateConditions(ctx context.Context, d authorizer.ConditionsAwareDecision, data authorizer.ConditionsData, builtins authorizer.BuiltinConditionsMapEvaluators) authorizer.ConditionsAwareDecision {
+	if f.evalConditions != nil {
+		return f.evalConditions(ctx, d, data, builtins)
+	}
+	return authorizer.ConditionsAwareDecisionDeny("", authorizer.ErrorConditionEvaluationNotSupported)
+}
+
+// ---------- fake rest.Updater ----------
+
+type fakeUpdater struct {
+	updated bool
+}
+
+func (f *fakeUpdater) New() runtime.Object {
+	return &example.Pod{}
+}
+
+func (f *fakeUpdater) Destroy() {}
+
+func (f *fakeUpdater) Update(ctx context.Context, name string, objInfo rest.UpdatedObjectInfo, createValidation rest.ValidateObjectFunc, updateValidation rest.ValidateObjectUpdateFunc, forceAllowCreate bool, options *metav1.UpdateOptions) (runtime.Object, bool, error) {
+	// Simulate an existing object in storage.
+	existing := &example.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            name,
+			Namespace:       "default",
+			ResourceVersion: "1",
+		},
+	}
+
+	obj, err := objInfo.UpdatedObject(ctx, existing)
+	if err != nil {
+		return nil, false, err
+	}
+
+	if updateValidation != nil {
+		if err := updateValidation(ctx, obj, existing); err != nil {
+			return nil, false, err
+		}
+	}
+
+	f.updated = true
+	return obj, false, nil
+}
+
+// ---------- fake ScopeNamer ----------
+
+type fakeNamer struct {
+	namespace string
+	name      string
+}
+
+func (n *fakeNamer) Namespace(_ *http.Request) (string, error) {
+	return n.namespace, nil
+}
+
+func (n *fakeNamer) Name(_ *http.Request) (string, string, error) {
+	return n.namespace, n.name, nil
+}
+
+func (n *fakeNamer) ObjectName(_ runtime.Object) (string, string, error) {
+	return n.namespace, n.name, nil
+}
+
+// ---------- helpers ----------
+
+func newRequestScope(t *testing.T, auth authorizer.Authorizer) *handlers.RequestScope {
+	t.Helper()
+
+	kind := examplev1.SchemeGroupVersion.WithKind("Pod")
+	resource := examplev1.SchemeGroupVersion.WithResource("pods")
+	hubVersion := example.SchemeGroupVersion
+	convertor := runtime.UnsafeObjectConvertor(testScheme)
+
+	fm, err := managedfields.NewDefaultFieldManager(
+		managedfields.NewDeducedTypeConverter(),
+		convertor,
+		testScheme, // defaulter
+		testScheme, // creater
+		kind,
+		hubVersion,
+		"",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("failed to create field manager: %v", err)
+	}
+
+	return &handlers.RequestScope{
+		Namer:                    &fakeNamer{namespace: "default", name: "test-pod"},
+		Serializer:               testCodecs,
+		Creater:                  testScheme,
+		Convertor:                convertor,
+		Defaulter:                testScheme,
+		Typer:                    testScheme,
+		UnsafeConvertor:          convertor,
+		Authorizer:               auth,
+		Resource:                 resource,
+		Kind:                     kind,
+		MetaGroupVersion:         schema.GroupVersion{Version: "v1"},
+		HubGroupVersion:          hubVersion,
+		FieldManager:             fm,
+		EquivalentResourceMapper: runtime.NewEquivalentResourceRegistry(),
+		MaxRequestBodyBytes:      int64(3 * 1024 * 1024),
+	}
+}
+
+func newTestRequestInfoResolver() *request.RequestInfoFactory {
+	return &request.RequestInfoFactory{
+		APIPrefixes:          sets.NewString("api", "apis"),
+		GrouplessAPIPrefixes: sets.NewString("api"),
+	}
+}
+
+func makeUpdateRequest(t *testing.T) *http.Request {
+	t.Helper()
+
+	pod := &examplev1.Pod{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "example.apiserver.k8s.io/v1",
+			Kind:       "Pod",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            "test-pod",
+			Namespace:       "default",
+			ResourceVersion: "1",
+		},
+	}
+
+	codec := testCodecs.LegacyCodec(examplev1.SchemeGroupVersion)
+	body, err := runtime.Encode(codec, pod)
+	if err != nil {
+		t.Fatalf("failed to encode pod: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPut,
+		"/apis/example.apiserver.k8s.io/v1/namespaces/default/pods/test-pod",
+		bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("failed to create request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "127.0.0.1"
+
+	return req
+}
+
+func setupConditionsEnforcer(t *testing.T, auth authorizer.Authorizer) admission.Interface {
+	t.Helper()
+
+	plugin := NewConditionalAuthorizationEnforcer()
+	plugin.InspectFeatureGates(utilfeature.DefaultFeatureGate)
+	plugin.SetAuthorizer(auth)
+	if err := plugin.ValidateInitialization(); err != nil {
+		t.Fatalf("ValidateInitialization failed: %v", err)
+	}
+	return plugin
+}
+
+func withCompoundAuthorization(handler http.Handler, compoundAuthorizer authorizer.Authorizer, s runtime.NegotiatedSerializer) http.Handler {
+	if compoundAuthorizer == nil {
+		return handler
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		ctx := req.Context()
+		attrs, err := filters.GetAuthorizerAttributes(ctx)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
+			decision, reason, err := compoundAuthorizer.Authorize(ctx, attrs)
+			if decision == authorizer.DecisionAllow {
+				handler.ServeHTTP(w, req)
+				return
+			}
+			if err != nil {
+				responsewriters.InternalError(w, req, err)
+				return
+			}
+			responsewriters.Forbidden(attrs, w, req, reason, s)
+			return
+		}
+		decision := compoundAuthorizer.AuthorizeConditionsAware(ctx, attrs, authorizer.ConditionsEncodingPreferenceOptimized())
+		reason := decision.Reason()
+		err = decision.Error()
+
+		if decision.IsAllowed() {
+			handler.ServeHTTP(w, req)
+			return
+		}
+		if decision.CanBecomeAllowed() {
+			ctx = request.WithConditionallyAuthorizedDecision(ctx, compoundAuthorizer, decision)
+			req = req.WithContext(ctx)
+			handler.ServeHTTP(w, req)
+			return
+		}
+		if err != nil {
+			responsewriters.InternalError(w, req, err)
+			return
+		}
+		responsewriters.Forbidden(attrs, w, req, reason, s)
+		return
+	})
+}
+
+// ---------- tests ----------
+
+func TestConditionsEnforcerEndToEnd(t *testing.T) {
+	classifierAlwaysTrue := filters.ConditionalAuthorizationRequestClassifier(func(_ authorizer.Attributes) bool { return true })
+	classifierAlwaysFalse := filters.ConditionalAuthorizationRequestClassifier(func(_ authorizer.Attributes) bool { return false })
+
+	makeCondMapAllowDecision := func() authorizer.ConditionsAwareDecision {
+		return authorizer.ConditionsAwareDecisionConditionMap(
+			authorizer.ConditionsTargetAdmissionControl,
+			authorizer.ConditionType("cel"),
+			maps.All(map[string]authorizer.Condition{
+				"c1": {Condition: "object.metadata.name == 'test-pod'", Effect: authorizer.ConditionEffectAllow},
+			}),
+			"conditional", nil,
+		)
+	}
+
+	type expectedOutcome struct {
+		statusCode int
+		updated    bool // whether the updater was called
+	}
+
+	tests := []struct {
+		name                       string
+		authorizer                 authorizer.Authorizer
+		compoundAuthorizer         authorizer.Authorizer
+		conditionalAuthzClassifier filters.ConditionalAuthorizationRequestClassifier
+		disabled                   expectedOutcome
+		enabled                    expectedOutcome
+	}{
+		{
+			name:       "unconditional allow passes through",
+			authorizer: fakeAuthorizer{authorizer.DecisionAllow, "allowed", nil},
+			disabled:   expectedOutcome{statusCode: http.StatusOK, updated: true},
+			enabled:    expectedOutcome{statusCode: http.StatusOK, updated: true},
+		},
+		{
+			name:       "unconditional deny is rejected at auth filter",
+			authorizer: fakeAuthorizer{authorizer.DecisionDeny, "denied", nil},
+			disabled:   expectedOutcome{statusCode: http.StatusForbidden},
+			enabled:    expectedOutcome{statusCode: http.StatusForbidden},
+		},
+		{
+			name:       "no opinion without error is forbidden",
+			authorizer: fakeAuthorizer{authorizer.DecisionNoOpinion, "no match", nil},
+			disabled:   expectedOutcome{statusCode: http.StatusForbidden},
+			enabled:    expectedOutcome{statusCode: http.StatusForbidden},
+		},
+		{
+			name: "conditional allow + classifier true + eval allows => update succeeds",
+			authorizer: &conditionsAwareFakeAuthorizer{
+				makeDecision: makeCondMapAllowDecision,
+				evalConditions: func(_ context.Context, _ authorizer.ConditionsAwareDecision, _ authorizer.ConditionsData, _ authorizer.BuiltinConditionsMapEvaluators) authorizer.ConditionsAwareDecision {
+					return authorizer.ConditionsAwareDecisionAllow("conditions met", nil)
+				},
+			},
+			conditionalAuthzClassifier: classifierAlwaysTrue,
+			// gate off: condMap constructor fail-closes => 500
+			// TODO(luxas): Again, we might want to fail softer in DecisionPartsFromConditionsAware
+			disabled: expectedOutcome{statusCode: http.StatusInternalServerError},
+			// gate on: auth filter lets through, conditions eval to allow => update succeeds
+			enabled: expectedOutcome{statusCode: http.StatusOK, updated: true},
+		},
+		{
+			name: "conditional allow + classifier true + eval denies => admission rejects",
+			authorizer: &conditionsAwareFakeAuthorizer{
+				makeDecision: makeCondMapAllowDecision,
+				evalConditions: func(_ context.Context, _ authorizer.ConditionsAwareDecision, _ authorizer.ConditionsData, _ authorizer.BuiltinConditionsMapEvaluators) authorizer.ConditionsAwareDecision {
+					return authorizer.ConditionsAwareDecisionDeny("conditions not met", nil)
+				},
+			},
+			conditionalAuthzClassifier: classifierAlwaysTrue,
+			disabled:                   expectedOutcome{statusCode: http.StatusInternalServerError},
+			// gate on: auth filter lets through, conditions eval to deny => forbidden from admission
+			enabled: expectedOutcome{statusCode: http.StatusForbidden},
+		},
+		{
+			name: "conditional allow + classifier false => forbidden at auth filter",
+			authorizer: &conditionsAwareFakeAuthorizer{
+				makeDecision: makeCondMapAllowDecision,
+			},
+			conditionalAuthzClassifier: classifierAlwaysFalse,
+			disabled:                   expectedOutcome{statusCode: http.StatusInternalServerError},
+			// gate on: classifier rejects => forbidden
+			enabled: expectedOutcome{statusCode: http.StatusForbidden},
+		},
+		{
+			name: "conditional allow + classifier nil => forbidden at auth filter",
+			authorizer: &conditionsAwareFakeAuthorizer{
+				makeDecision: makeCondMapAllowDecision,
+			},
+			conditionalAuthzClassifier: nil,
+			disabled:                   expectedOutcome{statusCode: http.StatusInternalServerError},
+			enabled:                    expectedOutcome{statusCode: http.StatusForbidden},
+		},
+		// Make sure all registered conditional decisions in the context are enforced
+		{
+			name: "conditional (=> allow) + compound conditional (=> allow) => update succeeds",
+			authorizer: &conditionsAwareFakeAuthorizer{
+				makeDecision: makeCondMapAllowDecision,
+				evalConditions: func(_ context.Context, _ authorizer.ConditionsAwareDecision, _ authorizer.ConditionsData, _ authorizer.BuiltinConditionsMapEvaluators) authorizer.ConditionsAwareDecision {
+					return authorizer.ConditionsAwareDecisionAllow("conditions met", nil)
+				},
+			},
+			compoundAuthorizer: &conditionsAwareFakeAuthorizer{
+				makeDecision: makeCondMapAllowDecision,
+				evalConditions: func(_ context.Context, _ authorizer.ConditionsAwareDecision, _ authorizer.ConditionsData, _ authorizer.BuiltinConditionsMapEvaluators) authorizer.ConditionsAwareDecision {
+					return authorizer.ConditionsAwareDecisionAllow("conditions met", nil)
+				},
+			},
+			conditionalAuthzClassifier: classifierAlwaysTrue,
+			// gate off: condMap constructor fail-closes => 500
+			disabled: expectedOutcome{statusCode: http.StatusInternalServerError},
+			// gate on: auth filter lets through, both conditions eval to allow
+			enabled: expectedOutcome{statusCode: http.StatusOK, updated: true},
+		},
+		{
+			name: "conditional (=> allow) + compound conditional (=> deny) => denied",
+			authorizer: &conditionsAwareFakeAuthorizer{
+				makeDecision: makeCondMapAllowDecision,
+				evalConditions: func(_ context.Context, _ authorizer.ConditionsAwareDecision, _ authorizer.ConditionsData, _ authorizer.BuiltinConditionsMapEvaluators) authorizer.ConditionsAwareDecision {
+					return authorizer.ConditionsAwareDecisionAllow("conditions met", nil)
+				},
+			},
+			compoundAuthorizer: &conditionsAwareFakeAuthorizer{
+				makeDecision: makeCondMapAllowDecision,
+				evalConditions: func(_ context.Context, _ authorizer.ConditionsAwareDecision, _ authorizer.ConditionsData, _ authorizer.BuiltinConditionsMapEvaluators) authorizer.ConditionsAwareDecision {
+					return authorizer.ConditionsAwareDecisionDeny("compound conditions not met", nil)
+				},
+			},
+			conditionalAuthzClassifier: classifierAlwaysTrue,
+			// gate off: condMap constructor fail-closes => 500
+			disabled: expectedOutcome{statusCode: http.StatusInternalServerError},
+			// gate on: auth filter lets through, but the compound conditions deny the request
+			enabled: expectedOutcome{statusCode: http.StatusForbidden},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, mode := range []struct {
+				name string
+				gate bool
+				want expectedOutcome
+			}{
+				{"disabled", false, tt.disabled},
+				{"enabled", true, tt.enabled},
+			} {
+				t.Run(mode.name, func(t *testing.T) {
+					if mode.gate {
+						featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ConditionalAuthorization, true)
+					}
+
+					updater := &fakeUpdater{}
+					scope := newRequestScope(t, tt.authorizer)
+					admit := setupConditionsEnforcer(t, tt.authorizer)
+
+					innerHandler := handlers.UpdateResource(updater, scope, admit)
+
+					// Wire up: WithRequestInfo -> WithAuthorization (with conditions support) -> UpdateResource
+					var handler http.Handler = innerHandler
+
+					// Compound authorization only enabled if tt.compoundAuthorizer != nil
+					handler = withCompoundAuthorization(handler, tt.compoundAuthorizer, testCodecs)
+
+					if mode.gate {
+						handler = filters.WithAuthorizationAndConditionsSupport(handler, tt.authorizer, testCodecs.WithoutConversion(), tt.conditionalAuthzClassifier)
+					} else {
+						handler = filters.WithAuthorization(handler, tt.authorizer, testCodecs.WithoutConversion())
+					}
+					failedHandler := filters.Unauthorized(testCodecs)
+					handler = filters.WithAuthentication(handler, authenticator.RequestFunc(func(req *http.Request) (*authenticator.Response, bool, error) {
+						return &authenticator.Response{
+							User: &user.DefaultInfo{Name: "test-user"},
+						}, true, nil
+					}), failedHandler, nil, nil)
+					handler = filters.WithRequestInfo(handler, newTestRequestInfoResolver())
+
+					req := makeUpdateRequest(t)
+
+					recorder := httptest.NewRecorder()
+					handler.ServeHTTP(recorder, req)
+
+					if recorder.Code != mode.want.statusCode {
+						t.Errorf("status code = %d, want %d; body: %s", recorder.Code, mode.want.statusCode, recorder.Body.String())
+					}
+					if updater.updated != mode.want.updated {
+						t.Errorf("updater called = %v, want %v", updater.updated, mode.want.updated)
+					}
+				})
+			}
+		})
+	}
+}
