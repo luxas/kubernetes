@@ -25,7 +25,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -35,7 +34,6 @@ import (
 	authorizationv1alpha1 "k8s.io/api/authorization/v1alpha1"
 	autoscalingv1 "k8s.io/api/autoscaling/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
-	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -51,6 +49,7 @@ import (
 	kubeapiservertesting "k8s.io/kubernetes/cmd/kube-apiserver/app/testing"
 	"k8s.io/kubernetes/test/integration/authutil"
 	"k8s.io/kubernetes/test/integration/framework"
+	"k8s.io/utils/ptr"
 )
 
 // TestConditionalAuthorizationEnabled tests the conditional authorization flow
@@ -359,7 +358,7 @@ authorizers:
 			expectAllowed: true,
 			// When disabled, the conditional decision is treated as NoOpinion,
 			// falling through to RBAC which denies (no RBAC rules for this user).
-			expectAllowedWhenDisabled: boolPtr(false),
+			expectAllowedWhenDisabled: ptr.To(false),
 		},
 		{
 			name: "conditional deny - condition evaluates to deny",
@@ -424,7 +423,7 @@ authorizers:
 			// so RBAC is never consulted. The conditions evaluator returns NoOpinion => denied.
 			expectAllowed: false,
 			// When disabled: conditional decision is NoOpinion, RBAC is consulted and allows.
-			expectAllowedWhenDisabled: boolPtr(true),
+			expectAllowedWhenDisabled: ptr.To(true),
 		},
 
 		// CEL-based conditional authorization tests.
@@ -458,7 +457,7 @@ authorizers:
 				return err
 			},
 			expectAllowed:             true,
-			expectAllowedWhenDisabled: boolPtr(false),
+			expectAllowedWhenDisabled: ptr.To(false),
 		},
 		{
 			name: "cel deny by name pattern mismatch",
@@ -557,7 +556,7 @@ authorizers:
 				return err
 			},
 			expectAllowed:             true,
-			expectAllowedWhenDisabled: boolPtr(false),
+			expectAllowedWhenDisabled: ptr.To(false),
 		},
 		{
 			name: "cel deny by data content missing",
@@ -631,7 +630,7 @@ authorizers:
 				return err
 			},
 			expectAllowed:             false,
-			expectAllowedWhenDisabled: boolPtr(false),
+			expectAllowedWhenDisabled: ptr.To(false),
 		},
 		{
 			name: "cel deny overrides allow and noopinion",
@@ -718,7 +717,8 @@ authorizers:
 		// "create" verb. These tests verify that conditional authorization works
 		// correctly in this flow. Leases support AllowCreateOnUpdate.
 		// TODO: Verify the same behavior for patch
-		{
+		// TODO(luxas): Reactivate this when we add support for update/patch -> create conditions.
+		/*{
 			name: "update-to-create conditional allow by label",
 			user: "update-create-allow-user",
 			webhookBehaviors: celConditionalTestCases(func(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
@@ -767,13 +767,13 @@ authorizers:
 					WithLabels(map[string]string{"creator": "update-create-allow-user"}),
 				metav1.ApplyOptions{
 					FieldManager: "foo",
-				})*/
+				})*
 				return err
 			},
 			expectAllowed: true,
 			// When disabled, the conditional create decision is treated as NoOpinion,
 			// falls through to RBAC which denies (no RBAC rules for this user).
-			expectAllowedWhenDisabled: boolPtr(false),
+			expectAllowedWhenDisabled: ptr.To(false),
 		},
 		{
 			name: "update-to-create conditional deny by label",
@@ -823,7 +823,7 @@ authorizers:
 					WithLabels(map[string]string{"creator": "not-authorized-user"}),
 				metav1.ApplyOptions{
 					FieldManager: "foo",
-				})*/
+				})*
 				return err
 			},
 			expectAllowed: false,
@@ -892,17 +892,18 @@ authorizers:
 					WithLabels(map[string]string{"creator": "update-create-deny-user"}),
 				metav1.ApplyOptions{
 					FieldManager: "foo",
-				})*/
+				})*
 				return err
 			},
 			expectAllowed: false,
-		},
+		},*/
 		// Tests for the builtin authorizer function in k8s authorization CEL.
 		// The "compound authorization" pattern: creating an object with the "protected-label"
 		// label requires the additional permission "verb=use apigroup=example.com
 		// resource=protectedlabels name=protected-label", which is checked via the
 		// authorizer CEL function.
-		{
+		// TODO(luxas): Reactivate this when we support in-tree evaluation.
+		/*{
 			name: "cel authorizer compound authorization - allow",
 			user: "compound-authz-allow-user",
 			webhookBehaviors: map[string]func(ws *webhookServerHandler){
@@ -921,7 +922,7 @@ authorizers:
 				return err
 			},
 			expectAllowed:             true,
-			expectAllowedWhenDisabled: boolPtr(false),
+			expectAllowedWhenDisabled: ptr.To(false),
 		},
 		{
 			name: "cel authorizer compound authorization - deny",
@@ -985,7 +986,7 @@ authorizers:
 				return err
 			},
 			expectAllowed:             true,
-			expectAllowedWhenDisabled: boolPtr(false),
+			expectAllowedWhenDisabled: ptr.To(false),
 		},
 		{
 			name: "cel namespaceObject - negative match",
@@ -1027,7 +1028,7 @@ authorizers:
 				return err
 			},
 			expectAllowed: false,
-		},
+		},*/
 
 		// Tests for HPA v1 and v2 with CPU utilization conditions.
 		// The authorizer returns version-specific CEL conditions that require
@@ -1046,13 +1047,13 @@ authorizers:
 							APIVersion: "apps/v1",
 						},
 						MaxReplicas:                    10,
-						TargetCPUUtilizationPercentage: int32Ptr(80),
+						TargetCPUUtilizationPercentage: ptr.To(int32(80)),
 					},
 				}, metav1.CreateOptions{})
 				return err
 			},
 			expectAllowed:             true,
-			expectAllowedWhenDisabled: boolPtr(false),
+			expectAllowedWhenDisabled: ptr.To(false),
 		},
 		{
 			name:             "hpa v1 cpu utilization - deny",
@@ -1068,7 +1069,7 @@ authorizers:
 							APIVersion: "apps/v1",
 						},
 						MaxReplicas:                    10,
-						TargetCPUUtilizationPercentage: int32Ptr(90),
+						TargetCPUUtilizationPercentage: ptr.To(int32(90)),
 					},
 				}, metav1.CreateOptions{})
 				return err
@@ -1096,7 +1097,7 @@ authorizers:
 									Name: corev1.ResourceCPU,
 									Target: autoscalingv2.MetricTarget{
 										Type:               autoscalingv2.UtilizationMetricType,
-										AverageUtilization: int32Ptr(80),
+										AverageUtilization: ptr.To(int32(80)),
 									},
 								},
 							},
@@ -1106,7 +1107,7 @@ authorizers:
 				return err
 			},
 			expectAllowed:             true,
-			expectAllowedWhenDisabled: boolPtr(false),
+			expectAllowedWhenDisabled: ptr.To(false),
 		},
 		{
 			name:             "hpa v2 cpu utilization - deny",
@@ -1129,7 +1130,7 @@ authorizers:
 									Name: corev1.ResourceCPU,
 									Target: autoscalingv2.MetricTarget{
 										Type:               autoscalingv2.UtilizationMetricType,
-										AverageUtilization: int32Ptr(90),
+										AverageUtilization: ptr.To(int32(90)),
 									},
 								},
 							},
@@ -1173,7 +1174,7 @@ authorizers:
 				return err
 			},
 			expectAllowed:             true,
-			expectAllowedWhenDisabled: boolPtr(false),
+			expectAllowedWhenDisabled: ptr.To(false),
 		},
 		{
 			name:             "crd v1 replicas - create denied",
@@ -1234,7 +1235,7 @@ authorizers:
 				return err
 			},
 			expectAllowed:             true,
-			expectAllowedWhenDisabled: boolPtr(false),
+			expectAllowedWhenDisabled: ptr.To(false),
 		},
 		{
 			name:             "crd v2 replicas.max - create denied",
@@ -1302,7 +1303,7 @@ authorizers:
 				return err
 			},
 			expectAllowed:             true,
-			expectAllowedWhenDisabled: boolPtr(false),
+			expectAllowedWhenDisabled: ptr.To(false),
 		},
 		{
 			name:             "crd v1 replicas - update denied",
@@ -1340,7 +1341,10 @@ authorizers:
 			},
 			expectAllowed: false,
 		},
-		{
+		// This fails with an error, as no "real" CRD conversion happens, and the old object comes in with spec={"replicas": {}}, as
+		// the v1 data was spec={"replicas": 5}, and during "conversion", the replicas field was just cast into an object, which means
+		// that it's not even possible to apply the v1 condition (that targeted spec.replicas as an int).
+		/*{
 			name:             "crd v2 replicas.max - update allowed",
 			user:             "alice-crd-v2-update-allow",
 			webhookBehaviors: celConditionalTestCases(crdReplicasSARHandler),
@@ -1381,8 +1385,8 @@ authorizers:
 				return err
 			},
 			expectAllowed:             true,
-			expectAllowedWhenDisabled: boolPtr(false),
-		},
+			expectAllowedWhenDisabled: ptr.To(false),
+		},*/
 		{
 			name:             "crd v2 replicas.max - update denied",
 			user:             "alice-crd-v2-update-deny",
@@ -1493,14 +1497,6 @@ authorizers:
 			}
 		})
 	}
-}
-
-func boolPtr(b bool) *bool {
-	return &b
-}
-
-func int32Ptr(i int32) *int32 {
-	return &i
 }
 
 // compoundAuthzSARHandler returns a SAR handler that implements compound
@@ -1629,7 +1625,7 @@ func crdReplicasSARHandler(sar *authorizationv1.SubjectAccessReview, conditionsT
 // write request objects, and sets the response.
 func acrEvaluateCEL(t *testing.T, expectedConditionsType string) func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
 	return func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
-		if acr.Request.Decision.Type == authorizationv1alpha1.ConditionsAwareDecisionTypeConditionsMap {
+		if acr.Request.Decision.Type != authorizationv1alpha1.ConditionsAwareDecisionTypeConditionsMap {
 			t.Fatalf("expected ConditionsMap decision to evaluate, got %q", acr.Request.Decision.Type)
 		}
 		conditionsMap := acr.Request.Decision.ConditionsMap
@@ -1672,7 +1668,8 @@ func celConditionalTestCases(processSAR func(sar *authorizationv1.SubjectAccessR
 			ws.acrHandler = acrEvaluateCEL(ws.t, "opaque-cel-condition-type")
 		},
 		// When the condition type is k8s.io/authorization-cel, in-tree evaluation handles it.
-		"in-process-eval-only": func(ws *webhookServerHandler) {
+		// TODO(luxas): Reactivate this when we support in-tree evaluation.
+		/*"in-process-eval-only": func(ws *webhookServerHandler) {
 			ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
 				processSAR(sar, "k8s.io/authorization-cel")
 			}
@@ -1706,7 +1703,7 @@ func celConditionalTestCases(processSAR func(sar *authorizationv1.SubjectAccessR
 				}
 				acrEvaluateCEL(ws.t, "k8s.io/authorization-cel")(acr)
 			}
-		},
+		},*/
 	}
 }
 

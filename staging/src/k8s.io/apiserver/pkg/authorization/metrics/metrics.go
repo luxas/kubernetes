@@ -113,6 +113,6 @@ func (a *instrumentedAuthorizer) AuthorizeConditionsAware(ctx context.Context, a
 }
 
 // EvaluateConditions is not supported by this authorizer, yet. TODO(luxas): Add a metric for evaluations.
-func (*instrumentedAuthorizer) EvaluateConditions(_ context.Context, _ authorizer.ConditionsAwareDecision, _ authorizer.ConditionsData, _ authorizer.BuiltinConditionsMapEvaluators) authorizer.ConditionsAwareDecision {
-	return authorizer.ConditionsAwareDecisionDeny("", authorizer.ErrorConditionEvaluationNotSupported)
+func (a *instrumentedAuthorizer) EvaluateConditions(ctx context.Context, unevaluatedDecision authorizer.ConditionsAwareDecision, conditionsData authorizer.ConditionsData, builtinEvaluators authorizer.BuiltinConditionsMapEvaluators) authorizer.ConditionsAwareDecision {
+	return a.delegate.EvaluateConditions(ctx, unevaluatedDecision, conditionsData, builtinEvaluators)
 }

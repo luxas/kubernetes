@@ -251,7 +251,8 @@ func (w *WebhookAuthorizer) Authorize(ctx context.Context, attr authorizer.Attri
 	case r.Status.Denied && r.Status.Allowed:
 		return authorizer.DecisionDeny, r.Status.Reason, fmt.Errorf("webhook subject access review returned both allow and deny response")
 	case r.Status.ConditionalDecision != nil:
-		return w.decisionOnError, "", fmt.Errorf("webhook authorizer tried to return conditional decision although client does not support it")
+		// TODO(luxas): Should this error or fail closed like this? We should also compute the decisionOnError from the ConditionsMap instead from the authorizer.
+		return w.decisionOnError, "webhook authorizer tried to return conditional decision although client does not support it", nil
 	case r.Status.Denied:
 		return authorizer.DecisionDeny, r.Status.Reason, nil
 	case r.Status.Allowed:
