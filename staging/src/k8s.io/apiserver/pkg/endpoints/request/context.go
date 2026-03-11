@@ -18,9 +18,11 @@ package request
 
 import (
 	"context"
+	"iter"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apiserver/pkg/authentication/user"
+	"k8s.io/apiserver/pkg/authorization/authorizer"
 )
 
 // The key type is unexported to prevent collisions
@@ -32,6 +34,9 @@ const (
 
 	// userKey is the context key for the request user.
 	userKey
+
+	// used for propagating a conditional authorization decision between authorization and admission
+	conditionallyAuthorizedDecisionKey
 )
 
 // NewContext instantiates a base context object for request flows.
@@ -75,4 +80,49 @@ func WithUser(parent context.Context, user user.Info) context.Context {
 func UserFrom(ctx context.Context) (user.Info, bool) {
 	user, ok := ctx.Value(userKey).(user.Info)
 	return user, ok
+}
+
+type authorizerDecisionTuples struct {
+	toEnforce []authorizerDecisionTuple
+}
+
+type authorizerDecisionTuple struct {
+	authorizer authorizer.Authorizer
+	decision   authorizer.ConditionsAwareDecision
+}
+
+// WithConditionallyAllowedDecision returns a copy of parent in which a conditionally authorized decision is stored, along with the authorizer that produced it
+func WithConditionallyAuthorizedDecision(parent context.Context, authorizer authorizer.Authorizer, decision authorizer.ConditionsAwareDecision) context.Context {
+	tuples, ok := parent.Value(conditionallyAuthorizedDecisionKey).(*authorizerDecisionTuples)
+	if ok {
+		tuples.toEnforce = append(tuples.toEnforce, authorizerDecisionTuple{
+			authorizer: authorizer,
+			decision:   decision,
+		})
+		return parent // no need to make a new context, as we could write directly into the existing pointer value
+	}
+	// Attach a fresh tuples holder
+	return WithValue(parent, conditionallyAuthorizedDecisionKey, &authorizerDecisionTuples{
+		toEnforce: []authorizerDecisionTuple{
+			{
+				authorizer: authorizer,
+				decision:   decision,
+			},
+		},
+	})
+}
+
+// ConditionallyAuthorizedDecisionsFrom returns the decisions to be enforced, along with the authorizer that produced it (and should be called back)
+func ConditionallyAuthorizedDecisionsFrom(ctx context.Context) (iter.Seq2[authorizer.Authorizer, authorizer.ConditionsAwareDecision], bool) {
+	tuples, ok := ctx.Value(conditionallyAuthorizedDecisionKey).(*authorizerDecisionTuples)
+	if !ok || len(tuples.toEnforce) == 0 {
+		return func(_ func(authorizer.Authorizer, authorizer.ConditionsAwareDecision) bool) {}, false
+	}
+	return func(yield func(authorizer.Authorizer, authorizer.ConditionsAwareDecision) bool) {
+		for _, tuple := range tuples.toEnforce {
+			if !yield(tuple.authorizer, tuple.decision) {
+				return
+			}
+		}
+	}, true
 }

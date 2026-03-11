@@ -17,10 +17,12 @@ limitations under the License.
 package request
 
 import (
+	"context"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apiserver/pkg/authentication/user"
+	"k8s.io/apiserver/pkg/authorization/authorizer"
 )
 
 // TestNamespaceContext validates that a namespace can be get/set on a context object
@@ -89,5 +91,141 @@ func TestUserContext(t *testing.T) {
 	} else if actualExtra[expectedExtraKey][0] != expectedExtraValue {
 		t.Fatalf("Get user extra map value error, Expected: %s, Actual: %s", expectedExtraValue, actualExtra[expectedExtraKey])
 	}
+}
 
+// mockAuthorizer is a minimal authorizer used as an identity in context tests.
+type mockAuthorizer struct{ name string }
+
+func (m *mockAuthorizer) Authorize(_ context.Context, _ authorizer.Attributes) (authorizer.Decision, string, error) {
+	return authorizer.DecisionNoOpinion, "", nil
+}
+func (m *mockAuthorizer) AuthorizeConditionsAware(_ context.Context, _ authorizer.Attributes, _ authorizer.ConditionsEncodingPreference) authorizer.ConditionsAwareDecision {
+	return authorizer.ConditionsAwareDecisionNoOpinion("", nil)
+}
+func (m *mockAuthorizer) EvaluateConditions(_ context.Context, _ authorizer.ConditionsAwareDecision, _ authorizer.ConditionsData, _ authorizer.BuiltinConditionsMapEvaluators) authorizer.ConditionsAwareDecision {
+	return authorizer.ConditionsAwareDecisionDeny("not implemented", authorizer.ErrorConditionEvaluationNotSupported)
+}
+
+func TestConditionallyAuthorizedDecisionContext(t *testing.T) {
+	t.Run("empty context returns false", func(t *testing.T) {
+		ctx := NewContext()
+		iter, ok := ConditionallyAuthorizedDecisionsFrom(ctx)
+		if ok {
+			t.Fatal("expected ok=false for empty context")
+		}
+		// Iterator should be valid but yield nothing
+		count := 0
+		for range iter {
+			count++
+		}
+		if count != 0 {
+			t.Fatalf("expected 0 items from empty context, got %d", count)
+		}
+	})
+
+	t.Run("single decision round-trips", func(t *testing.T) {
+		ctx := NewContext()
+		authz := &mockAuthorizer{name: "authz1"}
+		decision := authorizer.ConditionsAwareDecisionAllow("test-reason", nil)
+
+		ctx = WithConditionallyAuthorizedDecision(ctx, authz, decision)
+
+		iter, ok := ConditionallyAuthorizedDecisionsFrom(ctx)
+		if !ok {
+			t.Fatal("expected ok=true after storing a decision")
+		}
+
+		var collected []authorizerDecisionTuple
+		for a, d := range iter {
+			collected = append(collected, authorizerDecisionTuple{authorizer: a, decision: d})
+		}
+		if len(collected) != 1 {
+			t.Fatalf("expected 1 decision, got %d", len(collected))
+		}
+		if collected[0].authorizer != authz {
+			t.Error("authorizer pointer mismatch")
+		}
+		if !collected[0].decision.IsAllowed() {
+			t.Error("expected Allow decision")
+		}
+		if collected[0].decision.Reason() != "test-reason" {
+			t.Errorf("expected reason %q, got %q", "test-reason", collected[0].decision.Reason())
+		}
+	})
+
+	t.Run("multiple decisions preserve order", func(t *testing.T) {
+		ctx := NewContext()
+		authz1 := &mockAuthorizer{name: "authz1"}
+		authz2 := &mockAuthorizer{name: "authz2"}
+		authz3 := &mockAuthorizer{name: "authz3"}
+
+		d1 := authorizer.ConditionsAwareDecisionAllow("first", nil)
+		d2 := authorizer.ConditionsAwareDecisionDeny("second", nil)
+		d3 := authorizer.ConditionsAwareDecisionNoOpinion("third", nil)
+
+		ctx = WithConditionallyAuthorizedDecision(ctx, authz1, d1)
+		ctx = WithConditionallyAuthorizedDecision(ctx, authz2, d2)
+		ctx = WithConditionallyAuthorizedDecision(ctx, authz3, d3)
+
+		iter, ok := ConditionallyAuthorizedDecisionsFrom(ctx)
+		if !ok {
+			t.Fatal("expected ok=true")
+		}
+
+		var collected []authorizerDecisionTuple
+		for a, d := range iter {
+			collected = append(collected, authorizerDecisionTuple{authorizer: a, decision: d})
+		}
+		if len(collected) != 3 {
+			t.Fatalf("expected 3 decisions, got %d", len(collected))
+		}
+
+		// Verify order and identity
+		if collected[0].authorizer != authz1 || !collected[0].decision.IsAllowed() {
+			t.Error("first decision mismatch")
+		}
+		if collected[1].authorizer != authz2 || !collected[1].decision.IsDenied() {
+			t.Error("second decision mismatch")
+		}
+		if collected[2].authorizer != authz3 || !collected[2].decision.IsNoOpinion() {
+			t.Error("third decision mismatch")
+		}
+	})
+
+	t.Run("iterator can be stopped early, then fully looped again", func(t *testing.T) {
+		ctx := NewContext()
+		authz := &mockAuthorizer{name: "authz"}
+		ctx = WithConditionallyAuthorizedDecision(ctx, authz, authorizer.ConditionsAwareDecisionAllow("a", nil))
+		ctx = WithConditionallyAuthorizedDecision(ctx, authz, authorizer.ConditionsAwareDecisionDeny("b", nil))
+		ctx = WithConditionallyAuthorizedDecision(ctx, authz, authorizer.ConditionsAwareDecisionNoOpinion("c", nil))
+
+		iter, _ := ConditionallyAuthorizedDecisionsFrom(ctx)
+		count := 0
+		for range iter {
+			count++
+			break // stop after first
+		}
+		if count != 1 {
+			t.Fatalf("expected iterator to stop after 1 item, got %d", count)
+		}
+
+		var collected []authorizerDecisionTuple
+		for a, d := range iter {
+			collected = append(collected, authorizerDecisionTuple{authorizer: a, decision: d})
+		}
+		if len(collected) != 3 {
+			t.Fatalf("expected 3 decisions, got %d", len(collected))
+		}
+
+		// Verify order and identity
+		if collected[0].authorizer != authz || !collected[0].decision.IsAllowed() {
+			t.Error("first decision mismatch")
+		}
+		if collected[1].authorizer != authz || !collected[1].decision.IsDenied() {
+			t.Error("second decision mismatch")
+		}
+		if collected[2].authorizer != authz || !collected[2].decision.IsNoOpinion() {
+			t.Error("third decision mismatch")
+		}
+	})
 }

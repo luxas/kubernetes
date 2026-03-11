@@ -18,6 +18,7 @@ package filters
 
 import (
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -29,6 +30,9 @@ import (
 	"k8s.io/apiserver/pkg/authentication/authenticator"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
+	genericfeatures "k8s.io/apiserver/pkg/features"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	"k8s.io/component-base/metrics/legacyregistry"
 	"k8s.io/component-base/metrics/testutil"
 )
@@ -172,7 +176,7 @@ func TestRecordAuthorizationMetricsMetrics(t *testing.T) {
 
 	testCases := []struct {
 		desc       string
-		authorizer fakeAuthorizer
+		authorizer authorizer.Authorizer
 		want       string
 	}{
 		{
@@ -183,7 +187,7 @@ func TestRecordAuthorizationMetricsMetrics(t *testing.T) {
 				nil,
 			},
 			want: `
-			# HELP authorization_attempts_total [ALPHA] Counter of authorization attempts broken down by result. It can be either 'allowed', 'denied', 'no-opinion' or 'error'.
+			# HELP authorization_attempts_total [ALPHA] Counter of authorization attempts broken down by result. It can be either 'allowed', 'denied', 'no-opinion', 'conditional' or 'error'.
 			# TYPE authorization_attempts_total counter
 			authorization_attempts_total{result="allowed"} 1
 				`,
@@ -196,7 +200,7 @@ func TestRecordAuthorizationMetricsMetrics(t *testing.T) {
 				nil,
 			},
 			want: `
-			# HELP authorization_attempts_total [ALPHA] Counter of authorization attempts broken down by result. It can be either 'allowed', 'denied', 'no-opinion' or 'error'.
+			# HELP authorization_attempts_total [ALPHA] Counter of authorization attempts broken down by result. It can be either 'allowed', 'denied', 'no-opinion', 'conditional' or 'error'.
 			# TYPE authorization_attempts_total counter
 			authorization_attempts_total{result="denied"} 1
 				`,
@@ -209,7 +213,7 @@ func TestRecordAuthorizationMetricsMetrics(t *testing.T) {
 				errors.New("can't parse user info"),
 			},
 			want: `
-			# HELP authorization_attempts_total [ALPHA] Counter of authorization attempts broken down by result. It can be either 'allowed', 'denied', 'no-opinion' or 'error'.
+			# HELP authorization_attempts_total [ALPHA] Counter of authorization attempts broken down by result. It can be either 'allowed', 'denied', 'no-opinion', 'conditional' or 'error'.
 			# TYPE authorization_attempts_total counter
 			authorization_attempts_total{result="error"} 1
 				`,
@@ -222,7 +226,7 @@ func TestRecordAuthorizationMetricsMetrics(t *testing.T) {
 				errors.New("can't parse user info"),
 			},
 			want: `
-			# HELP authorization_attempts_total [ALPHA] Counter of authorization attempts broken down by result. It can be either 'allowed', 'denied', 'no-opinion' or 'error'.
+			# HELP authorization_attempts_total [ALPHA] Counter of authorization attempts broken down by result. It can be either 'allowed', 'denied', 'no-opinion', 'conditional' or 'error'.
 			# TYPE authorization_attempts_total counter
 			authorization_attempts_total{result="allowed"} 1
 				`,
@@ -235,9 +239,58 @@ func TestRecordAuthorizationMetricsMetrics(t *testing.T) {
 				nil,
 			},
 			want: `
-			# HELP authorization_attempts_total [ALPHA] Counter of authorization attempts broken down by result. It can be either 'allowed', 'denied', 'no-opinion' or 'error'.
+			# HELP authorization_attempts_total [ALPHA] Counter of authorization attempts broken down by result. It can be either 'allowed', 'denied', 'no-opinion', 'conditional' or 'error'.
 			# TYPE authorization_attempts_total counter
 			authorization_attempts_total{result="no-opinion"} 1
+				`,
+		},
+		{
+			desc: "conditional allow with error (CanBecomeAllowed() == true)",
+			authorizer: &conditionsAwareFakeAuthorizer{
+				makeDecision: func() authorizer.ConditionsAwareDecision {
+					return authorizer.ConditionsAwareDecisionConditionMap(authorizer.ConditionsTargetAdmissionControl, "foo-type", maps.All(map[string]authorizer.Condition{
+						"cond": authorizer.Condition{Effect: authorizer.ConditionEffectAllow, Condition: "maybe"},
+					}), "", errors.New("partial error does not affect the status code, and thus not the metrics"))
+				},
+			},
+			want: `
+			# HELP authorization_attempts_total [ALPHA] Counter of authorization attempts broken down by result. It can be either 'allowed', 'denied', 'no-opinion', 'conditional' or 'error'.
+			# TYPE authorization_attempts_total counter
+			authorization_attempts_total{result="conditional"} 1
+				`,
+		},
+		{
+			desc: "conditional deny (CanBecomeAllowed() == false)",
+			// Technically the authorizer did not give the Deny response, but because CanBecomeAllowed() == false,
+			// we practically deny the response, and thus does this go under the "denied" label (not NoOpinion, as the authorizer did have an opinion).
+			authorizer: &conditionsAwareFakeAuthorizer{
+				makeDecision: func() authorizer.ConditionsAwareDecision {
+					return authorizer.ConditionsAwareDecisionConditionMap(authorizer.ConditionsTargetAdmissionControl, "foo-type", maps.All(map[string]authorizer.Condition{
+						"cond": authorizer.Condition{Effect: authorizer.ConditionEffectDeny, Condition: "maybe-not"},
+					}), "", nil)
+				},
+			},
+			want: `
+			# HELP authorization_attempts_total [ALPHA] Counter of authorization attempts broken down by result. It can be either 'allowed', 'denied', 'no-opinion', 'conditional' or 'error'.
+			# TYPE authorization_attempts_total counter
+			authorization_attempts_total{result="denied"} 1
+				`,
+		},
+		{
+			desc: "conditional deny with error (CanBecomeAllowed() == false)",
+			// Technically the authorizer did not give the Deny response, but because CanBecomeAllowed() == false,
+			// we practically deny the response, and thus does this go under the "denied" label (not NoOpinion, as the authorizer did have an opinion).
+			authorizer: &conditionsAwareFakeAuthorizer{
+				makeDecision: func() authorizer.ConditionsAwareDecision {
+					return authorizer.ConditionsAwareDecisionConditionMap(authorizer.ConditionsTargetAdmissionControl, "foo-type", maps.All(map[string]authorizer.Condition{
+						"cond": authorizer.Condition{Effect: authorizer.ConditionEffectDeny, Condition: "maybe-not"},
+					}), "", errors.New("affects the status code"))
+				},
+			},
+			want: `
+			# HELP authorization_attempts_total [ALPHA] Counter of authorization attempts broken down by result. It can be either 'allowed', 'denied', 'no-opinion', 'conditional' or 'error'.
+			# TYPE authorization_attempts_total counter
+			authorization_attempts_total{result="error"} 1
 				`,
 		},
 	}
@@ -249,6 +302,9 @@ func TestRecordAuthorizationMetricsMetrics(t *testing.T) {
 
 	scheme := runtime.NewScheme()
 	negotiatedSerializer := serializer.NewCodecFactory(scheme).WithoutConversion()
+
+	// Allow creating conditional decisions in the test
+	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ConditionalAuthorization, true)
 
 	for _, tt := range testCases {
 		t.Run(tt.desc, func(t *testing.T) {
