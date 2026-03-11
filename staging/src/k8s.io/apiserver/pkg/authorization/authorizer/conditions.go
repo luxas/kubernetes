@@ -158,6 +158,21 @@ func (d ConditionsAwareDecision) ContainsAllowOrDeny() bool {
 	return d.union.ContainsAllowOrDeny()
 }
 
+// CanBecomeAllowed returns true if there exists some ConditionsData for which
+// the ConditionsAwareDecision would evaluate to Allow for.
+func (d ConditionsAwareDecision) CanBecomeAllowed() bool {
+	if d.IsAllowed() {
+		return true
+	}
+	if d.IsConditionsMap() {
+		return d.conditionsMap.CanBecomeAllowed()
+	}
+	if d.IsUnion() {
+		return d.union.CanBecomeAllowed()
+	}
+	return false // if Denied or NoOpinion
+}
+
 // ConditionsMap returns the ConditionsMap, which is non-empty
 // if and only if IsConditionsMap is true.
 func (d ConditionsAwareDecision) ConditionsMap() ConditionsMap {
@@ -379,6 +394,18 @@ func (c ConditionsMap) Type() ConditionType {
 // Target returns the condition target of the conditions in this map.
 func (c ConditionsMap) Target() ConditionsTarget {
 	return c.conditionTarget
+}
+
+// CanBecomeAllowed returns true if this ConditionsMap has at least one
+// effect=Allow condition, which means that there exists some ConditionsData
+// for which the ConditionsMap could evaluate to Allow.
+func (c ConditionsMap) CanBecomeAllowed() bool {
+	for _, cond := range c.conditions {
+		if cond.Effect == ConditionEffectAllow {
+			return true
+		}
+	}
+	return false
 }
 
 // Conditions returns all conditions in this map, sorted by ID.
@@ -645,6 +672,26 @@ func (unionSlice ConditionsAwareDecisionUnionSlice) FailClosedDecision(err error
 func (unionSlice ConditionsAwareDecisionUnionSlice) ContainsAllowOrDeny() bool {
 	for _, subDecision := range unionSlice {
 		if subDecision.ContainsAllowOrDeny() {
+			return true
+		}
+	}
+	return false
+}
+
+// CanBecomeAllowed returns true if there exists some ConditionsData for which
+// the unionSlice would evaluate to Allow for.
+func (unionSlice ConditionsAwareDecisionUnionSlice) CanBecomeAllowed() bool {
+	for _, subDecision := range unionSlice {
+		if subDecision.IsDenied() {
+			return false
+		}
+		if subDecision.IsAllowed() {
+			return true
+		}
+		if subDecision.IsConditionsMap() && subDecision.CanBecomeAllowed() {
+			return true
+		}
+		if subDecision.IsUnion() && subDecision.CanBecomeAllowed() {
 			return true
 		}
 	}

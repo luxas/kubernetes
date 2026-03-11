@@ -73,6 +73,34 @@ func TestConditionsAwareDecision(t *testing.T) {
 		"cond-deny-reason",
 		nil,
 	)
+	condMapNoOpinionOnly := authorizer.ConditionsAwareDecisionConditionMap(
+		authorizer.ConditionsTargetAdmissionControl,
+		authorizer.ConditionType("test-type"),
+		maps.All(map[string]authorizer.Condition{
+			"noop-cond": {
+				Condition: "true",
+				Effect:    authorizer.ConditionEffectNoOpinion,
+			},
+		}),
+		"cond-noop-reason",
+		nil,
+	)
+	condMapMixed := authorizer.ConditionsAwareDecisionConditionMap(
+		authorizer.ConditionsTargetAdmissionControl,
+		authorizer.ConditionType("test-type"),
+		maps.All(map[string]authorizer.Condition{
+			"allow-cond": {
+				Condition: "true",
+				Effect:    authorizer.ConditionEffectAllow,
+			},
+			"deny-cond2": {
+				Condition: "true",
+				Effect:    authorizer.ConditionEffectDeny,
+			},
+		}),
+		"cond-mixed-reason",
+		nil,
+	)
 
 	tests := []struct {
 		name                    string
@@ -84,6 +112,7 @@ func TestConditionsAwareDecision(t *testing.T) {
 		wantIsUnion             bool
 		wantIsUnconditional     bool
 		wantContainsAllowOrDeny bool
+		wantCanBecomeAllowed    bool
 		wantFailClosedIsDeny    bool
 		wantReason              string
 		wantAnyError            bool
@@ -136,6 +165,7 @@ func TestConditionsAwareDecision(t *testing.T) {
 			wantIsAllowed:           true,
 			wantIsUnconditional:     true,
 			wantContainsAllowOrDeny: true,
+			wantCanBecomeAllowed:    true,
 			wantReason:              "ok",
 			wantErrorIs:             nil,
 			wantString:              `Allow("ok", <nil>)`,
@@ -196,6 +226,7 @@ func TestConditionsAwareDecision(t *testing.T) {
 			wantIsConditionsMap:     true,
 			wantIsUnconditional:     false,
 			wantContainsAllowOrDeny: false,
+			wantCanBecomeAllowed:    true,
 			wantFailClosedIsDeny:    false,
 			wantReason:              "cond-allow-reason",
 			wantString:              `ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-allow-reason", err=<nil>)`,
@@ -410,6 +441,7 @@ func TestConditionsAwareDecision(t *testing.T) {
 			wantIsUnconditional:     true,
 			wantContainsAllowOrDeny: true,
 			wantFailClosedIsDeny:    false,
+			wantCanBecomeAllowed:    true,
 			wantReason:              "ok",
 			wantString:              `Allow("ok", <nil>)`,
 		},
@@ -444,6 +476,7 @@ func TestConditionsAwareDecision(t *testing.T) {
 			},
 			wantIsUnion:             true,
 			wantContainsAllowOrDeny: false,
+			wantCanBecomeAllowed:    true,
 			wantFailClosedIsDeny:    false,
 			wantReason:              "[cond-allow-reason]",
 			wantString:              `Union[ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-allow-reason", err=<nil>)]`,
@@ -455,6 +488,7 @@ func TestConditionsAwareDecision(t *testing.T) {
 			},
 			wantIsUnion:             true,
 			wantContainsAllowOrDeny: true,
+			wantCanBecomeAllowed:    true, // inner union has Allow after condMapDeny
 			wantFailClosedIsDeny:    true,
 			wantReason:              "[[cond-deny-reason, ]]",
 			wantString:              `Union[Union[ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-deny-reason", err=<nil>), Allow("", <nil>)]]`,
@@ -490,6 +524,7 @@ func TestConditionsAwareDecision(t *testing.T) {
 			wantIsUnconditional:     true,
 			wantContainsAllowOrDeny: true,
 			wantFailClosedIsDeny:    false,
+			wantCanBecomeAllowed:    true,
 			wantReason:              "first",
 			wantString:              `Allow("first", <nil>)`,
 		},
@@ -521,6 +556,7 @@ func TestConditionsAwareDecision(t *testing.T) {
 			},
 			wantIsUnion:             true,
 			wantContainsAllowOrDeny: false,
+			wantCanBecomeAllowed:    true,
 			wantFailClosedIsDeny:    false,
 			wantReason:              "[no-op1, cond-allow-reason, no-op2]",
 			wantString:              `Union[NoOpinion("no-op1", <nil>), ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-allow-reason", err=<nil>), NoOpinion("no-op2", <nil>)]`,
@@ -536,6 +572,7 @@ func TestConditionsAwareDecision(t *testing.T) {
 			// However, to avoid complicating things too much in the beginning, this is not yet implemented. However, if we choose the Lazy evaluation mode, this optimization cannot be done.
 			wantIsUnion:             true,
 			wantContainsAllowOrDeny: true, // There is an inner Allow
+			wantCanBecomeAllowed:    true, // condMapAllow has Allow effect
 			wantFailClosedIsDeny:    false,
 			wantReason:              "[cond-allow-reason, allowed]",
 			wantString:              `Union[ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-allow-reason", err=<nil>), Allow("allowed", <nil>)]`,
@@ -547,6 +584,7 @@ func TestConditionsAwareDecision(t *testing.T) {
 			},
 			wantIsUnion:             true,
 			wantContainsAllowOrDeny: true, // There is an inner Deny
+			wantCanBecomeAllowed:    true, // condMapAllow has Allow effect, checked before Deny
 			wantFailClosedIsDeny:    true,
 			wantReason:              "[cond-allow-reason, no]",
 			wantString:              `Union[ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-allow-reason", err=<nil>), Deny("no", <nil>)]`,
@@ -569,6 +607,7 @@ func TestConditionsAwareDecision(t *testing.T) {
 			},
 			wantIsUnion:             true,
 			wantContainsAllowOrDeny: true, // There is an inner Allow
+			wantCanBecomeAllowed:    true, // condMapDeny has no Allow, but Allow after it does
 			wantFailClosedIsDeny:    true, // There are Deny conditions
 			wantReason:              "[cond-deny-reason, allowed]",
 			wantErrorIs:             unexpectedErr,
@@ -581,6 +620,7 @@ func TestConditionsAwareDecision(t *testing.T) {
 			},
 			wantIsUnion:             true,
 			wantContainsAllowOrDeny: false,
+			wantCanBecomeAllowed:    true, // condMapAllow has Allow effect
 			wantFailClosedIsDeny:    true, // There are Deny conditions
 			wantReason:              "[cond-allow-reason, cond-deny-reason]",
 			wantString:              `Union[ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-allow-reason", err=<nil>), ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-deny-reason", err=<nil>)]`,
@@ -600,6 +640,7 @@ func TestConditionsAwareDecision(t *testing.T) {
 			},
 			wantIsUnion:             true,
 			wantContainsAllowOrDeny: true, // There is an inner Allow
+			wantCanBecomeAllowed:    true, // condMapAllow at top level has Allow effect
 			wantFailClosedIsDeny:    false,
 			wantReason:              "[cond-allow-reason, [cond-allow-reason, ok], don't care]",
 			wantString:              `Union[ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-allow-reason", err=<nil>), Union[ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-allow-reason", err=<nil>), Allow("ok", <nil>)], NoOpinion("don't care", <nil>)]`,
@@ -620,9 +661,142 @@ func TestConditionsAwareDecision(t *testing.T) {
 			},
 			wantIsUnion:             true,
 			wantContainsAllowOrDeny: false,
+			wantCanBecomeAllowed:    true, // condMapAllow at top level has Allow effect
 			wantFailClosedIsDeny:    true,
 			wantReason:              "[cond-allow-reason, [cond-allow-reason, inner, [cond-deny-reason, inner2]]]",
 			wantString:              `Union[ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-allow-reason", err=<nil>), Union[ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-allow-reason", err=<nil>), NoOpinion("inner", <nil>), Union[ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-deny-reason", err=<nil>), NoOpinion("inner2", <nil>)]]]`,
+		},
+
+		// CanBecomeAllowed-focused test cases
+		{
+			name: "conditionsmap: noopinion only, CanBecomeAllowed is false",
+			testDecisions: []authorizer.ConditionsAwareDecision{
+				condMapNoOpinionOnly,
+			},
+			wantIsConditionsMap:     true,
+			wantContainsAllowOrDeny: false,
+			wantCanBecomeAllowed:    false, // no Allow effect
+			wantReason:              "cond-noop-reason",
+			wantString:              `ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-noop-reason", err=<nil>)`,
+		},
+		{
+			name: "conditionsmap: mixed allow+deny, CanBecomeAllowed is true",
+			testDecisions: []authorizer.ConditionsAwareDecision{
+				condMapMixed,
+			},
+			wantIsConditionsMap:     true,
+			wantContainsAllowOrDeny: false,
+			wantCanBecomeAllowed:    true, // has Allow effect despite also having Deny
+			wantFailClosedIsDeny:    true, // has Deny effect
+			wantReason:              "cond-mixed-reason",
+			wantString:              `ConditionsMap(target="AdmissionControl", type="test-type", len=2, reason="cond-mixed-reason", err=<nil>)`,
+		},
+		{
+			name: "union: conditionsmap(deny) + conditionsmap(deny), CanBecomeAllowed is false",
+			testDecisions: []authorizer.ConditionsAwareDecision{
+				authorizer.ConditionsAwareDecisionUnion(condMapDeny, condMapDeny),
+			},
+			wantIsUnion:             true,
+			wantContainsAllowOrDeny: false,
+			wantCanBecomeAllowed:    false, // neither condMapDeny has Allow effect
+			wantFailClosedIsDeny:    true,
+			wantReason:              "[cond-deny-reason, cond-deny-reason]",
+			wantString:              `Union[ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-deny-reason", err=<nil>), ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-deny-reason", err=<nil>)]`,
+		},
+		{
+			name: "union: conditionsmap(deny) + conditionsmap(allow), CanBecomeAllowed is true",
+			testDecisions: []authorizer.ConditionsAwareDecision{
+				authorizer.ConditionsAwareDecisionUnion(condMapDeny, condMapAllow),
+			},
+			wantIsUnion:             true,
+			wantContainsAllowOrDeny: false,
+			wantCanBecomeAllowed:    true, // condMapDeny skipped (no Allow), condMapAllow has Allow
+			wantFailClosedIsDeny:    true, // condMapDeny has Deny effect
+			wantReason:              "[cond-deny-reason, cond-allow-reason]",
+			wantString:              `Union[ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-deny-reason", err=<nil>), ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-allow-reason", err=<nil>)]`,
+		},
+		{
+			name: "union: conditionsmap(noopinion) + conditionsmap(deny), CanBecomeAllowed is false",
+			testDecisions: []authorizer.ConditionsAwareDecision{
+				authorizer.ConditionsAwareDecisionUnion(condMapNoOpinionOnly, condMapDeny),
+			},
+			wantIsUnion:             true,
+			wantContainsAllowOrDeny: false,
+			wantCanBecomeAllowed:    false, // no Allow effect anywhere
+			wantFailClosedIsDeny:    true,  // condMapDeny has Deny effect
+			wantReason:              "[cond-noop-reason, cond-deny-reason]",
+			wantString:              `Union[ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-noop-reason", err=<nil>), ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-deny-reason", err=<nil>)]`,
+		},
+		{
+			name: "union: deep nesting, all deny-only conditionsmaps, CanBecomeAllowed is false",
+			testDecisions: []authorizer.ConditionsAwareDecision{
+				authorizer.ConditionsAwareDecisionUnion(
+					condMapDeny,
+					authorizer.ConditionsAwareDecisionUnion(
+						condMapDeny,
+						condMapDeny,
+					),
+				),
+			},
+			wantIsUnion:             true,
+			wantContainsAllowOrDeny: false,
+			wantCanBecomeAllowed:    false, // no Allow effect at any depth
+			wantFailClosedIsDeny:    true,
+			wantReason:              "[cond-deny-reason, [cond-deny-reason, cond-deny-reason]]",
+			wantString:              `Union[ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-deny-reason", err=<nil>), Union[ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-deny-reason", err=<nil>), ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-deny-reason", err=<nil>)]]`,
+		},
+		{
+			name: "union: deep nesting, allow at deepest level, CanBecomeAllowed is true",
+			testDecisions: []authorizer.ConditionsAwareDecision{
+				authorizer.ConditionsAwareDecisionUnion(
+					condMapDeny,
+					authorizer.ConditionsAwareDecisionUnion(
+						condMapDeny,
+						authorizer.ConditionsAwareDecisionUnion(
+							condMapDeny,
+							condMapAllow,
+						),
+					),
+				),
+			},
+			wantIsUnion:             true,
+			wantContainsAllowOrDeny: false,
+			wantCanBecomeAllowed:    true, // condMapAllow at deepest level propagates up
+			wantFailClosedIsDeny:    true,
+			wantReason:              "[cond-deny-reason, [cond-deny-reason, [cond-deny-reason, cond-allow-reason]]]",
+			wantString:              `Union[ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-deny-reason", err=<nil>), Union[ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-deny-reason", err=<nil>), Union[ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-deny-reason", err=<nil>), ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-allow-reason", err=<nil>)]]]`,
+		},
+		{
+			name: "union: mixed conditionsmap at first position, CanBecomeAllowed is true",
+			testDecisions: []authorizer.ConditionsAwareDecision{
+				authorizer.ConditionsAwareDecisionUnion(
+					condMapMixed,
+					authorizer.ConditionsAwareDecisionNoOpinion("noop", nil),
+				),
+			},
+			wantIsUnion:             true,
+			wantContainsAllowOrDeny: false,
+			wantCanBecomeAllowed:    true, // condMapMixed has Allow effect
+			wantFailClosedIsDeny:    true, // condMapMixed has Deny effect
+			wantReason:              "[cond-mixed-reason, noop]",
+			wantString:              `Union[ConditionsMap(target="AdmissionControl", type="test-type", len=2, reason="cond-mixed-reason", err=<nil>), NoOpinion("noop", <nil>)]`,
+		},
+		{
+			name: "union: unconditional Deny before conditional Allow can never become Allow",
+			testDecisions: []authorizer.ConditionsAwareDecision{
+				authorizer.ConditionsAwareDecisionUnion(
+					condMapDeny,
+					authorizer.ConditionsAwareDecisionDeny("not ok", nil),
+					// TODO(luxas): We should trim all decisions after an Allow or Deny, they are not relevant.
+					condMapAllow,
+				),
+			},
+			wantIsUnion:             true,
+			wantContainsAllowOrDeny: true,
+			wantCanBecomeAllowed:    false, // The unconditional Allow trumps the later conditional Allow
+			wantFailClosedIsDeny:    true,  // condMapDeny has Deny effect
+			wantReason:              "[cond-deny-reason, not ok, cond-allow-reason]",
+			wantString:              `Union[ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-deny-reason", err=<nil>), Deny("not ok", <nil>), ConditionsMap(target="AdmissionControl", type="test-type", len=1, reason="cond-allow-reason", err=<nil>)]`,
 		},
 	}
 	for _, tt := range tests {
@@ -656,6 +830,10 @@ func TestConditionsAwareDecision(t *testing.T) {
 					hasConcreteResponse := d.ContainsAllowOrDeny()
 					if hasConcreteResponse != tt.wantContainsAllowOrDeny {
 						t.Errorf("ContainsAllowOrDeny() = %v, want %v", hasConcreteResponse, tt.wantContainsAllowOrDeny)
+					}
+					canBecomeAllowed := d.CanBecomeAllowed()
+					if canBecomeAllowed != tt.wantCanBecomeAllowed {
+						t.Errorf("CanBecomeAllowed() = %v, want %v", canBecomeAllowed, tt.wantCanBecomeAllowed)
 					}
 					failClosed := d.FailClosedDecision(failClosedErr)
 					if tt.wantFailClosedIsDeny {
