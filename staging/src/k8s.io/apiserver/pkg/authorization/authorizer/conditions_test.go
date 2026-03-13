@@ -152,8 +152,6 @@ func TestConditionsAwareDecision(t *testing.T) {
 							Description: "foo",
 						},
 					}),
-					"",
-					nil,
 				),
 			},
 			wantIsConditionsMap: true,
@@ -182,8 +180,6 @@ func TestConditionsAwareDecision(t *testing.T) {
 							return
 						}
 					},
-					"",
-					nil,
 				),
 			},
 			wantIsDenied:        true,
@@ -203,8 +199,6 @@ func TestConditionsAwareDecision(t *testing.T) {
 							Effect:    authorizer.ConditionEffect("nonexistent"),
 						},
 					}),
-					"",
-					nil,
 				),
 			},
 			wantIsDenied:        true,
@@ -227,8 +221,6 @@ func TestConditionsAwareDecision(t *testing.T) {
 							Effect:    authorizer.ConditionEffectDeny,
 						},
 					}),
-					"",
-					nil,
 				),
 			},
 			wantIsDenied:        true,
@@ -248,8 +240,6 @@ func TestConditionsAwareDecision(t *testing.T) {
 							Effect:    authorizer.ConditionEffectDeny,
 						},
 					}),
-					"",
-					nil,
 				),
 			},
 			wantIsDenied:        true,
@@ -269,8 +259,6 @@ func TestConditionsAwareDecision(t *testing.T) {
 							Effect:    authorizer.ConditionEffectNoOpinion,
 						},
 					}),
-					"",
-					nil,
 				),
 			},
 			wantIsNoOpinion:     true,
@@ -285,15 +273,12 @@ func TestConditionsAwareDecision(t *testing.T) {
 				authorizer.ConditionsAwareDecisionConditionMap(
 					authorizer.ConditionType("foo-type"),
 					maps.All(map[string]authorizer.Condition{}),
-					"ignored",
-					otherErr,
 				),
 			},
 			wantIsNoOpinion:     true,
 			wantIsUnconditional: true,
 			wantReason:          "empty ConditionsMap",
-			wantErrorIs:         otherErr,
-			wantString:          `NoOpinion(reason="empty ConditionsMap", err="other error")`,
+			wantString:          `NoOpinion(reason="empty ConditionsMap")`,
 		},
 	}
 	for _, tt := range tests {
@@ -357,8 +342,6 @@ func TestCreateConditionsMapFeatureDisabled(t *testing.T) {
 				Description: "foo",
 			},
 		}),
-		"",
-		nil,
 	)
 	if !d.IsNoOpinion() {
 		t.Error("Expected creating a ConditionsMap decision to yield NoOpinion when the feature gate is disabled")
@@ -376,8 +359,6 @@ func TestCreateConditionsMapFeatureDisabled(t *testing.T) {
 				Description: "foo",
 			},
 		}),
-		"",
-		nil,
 	)
 	if !d.IsDenied() {
 		t.Error("Expected creating a ConditionsMap decision to yield NoOpinion when the feature gate is disabled")

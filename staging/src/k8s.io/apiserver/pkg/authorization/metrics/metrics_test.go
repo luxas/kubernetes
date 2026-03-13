@@ -183,8 +183,6 @@ func TestRecordAuthorizationDecisionsTotal(t *testing.T) {
 					Effect:    authorizer.ConditionEffectAllow,
 				},
 			}),
-			"",
-			nil,
 		)
 		_ = ac.ConditionsAwareAuthorize(context.Background(), nil)
 		_ = ac.ConditionsAwareAuthorize(context.Background(), nil)

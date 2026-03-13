@@ -365,7 +365,7 @@ func (c ConditionsMap) AllowConditions() iter.Seq2[string, Condition] {
 }
 
 // ConditionsAwareDecisionConditionMap creates a ConditionsMap decision. One can use maps.All to create an iterator from a map[string]Condition.
-func ConditionsAwareDecisionConditionMap(conditionType ConditionType, conditionsIter iter.Seq2[string, Condition], reason string, err error) ConditionsAwareDecision {
+func ConditionsAwareDecisionConditionMap(conditionType ConditionType, conditionsIter iter.Seq2[string, Condition]) ConditionsAwareDecision {
 	conditionMap := map[string]Condition{}
 	seenIDs := sets.New[string]()
 	errlist := []error{}
@@ -412,7 +412,7 @@ func ConditionsAwareDecisionConditionMap(conditionType ConditionType, conditions
 	// an empty ConditionsMap always evaluates to NoOpinion
 	// ignore conditionType being invalid or the feature gate not being set in this case, as it does not matter
 	if len(conditionMap) == 0 {
-		return ConditionsAwareDecisionNoOpinion("empty ConditionsMap", err)
+		return ConditionsAwareDecisionNoOpinion("empty ConditionsMap", nil)
 	}
 
 	// Do not allow constructing Conditional decisions when the feature gate is off
@@ -430,8 +430,6 @@ func ConditionsAwareDecisionConditionMap(conditionType ConditionType, conditions
 			conditionType: conditionType,
 			conditions:    conditionMap,
 		},
-		reason: reason,
-		err:    err,
 	}
 }
 
