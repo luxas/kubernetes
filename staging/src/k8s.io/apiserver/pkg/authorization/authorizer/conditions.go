@@ -75,7 +75,7 @@ func ConditionsAwareDecisionNoOpinion(reason string, err error) ConditionsAwareD
 }
 
 // DecisionFromParts is meant to be used by conditions-unaware Authorizer implementations
-// in order to implement Authorizer.AuthorizeConditionsAware as:
+// in order to implement Authorizer.ConditionsAwareAuthorize as:
 // "return authorizer.DecisionFromParts(self.Authorize(ctx, a))"
 func ConditionsAwareDecisionFromParts(unconditional Decision, reason string, err error) ConditionsAwareDecision {
 	switch unconditional {
