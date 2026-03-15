@@ -86,8 +86,7 @@ func RegisterConversions(s *runtime.Scheme) error {
 }
 
 func autoConvert_v1alpha1_AuthorizationConditionsRequest_To_authorization_AuthorizationConditionsRequest(in *authorizationv1alpha1.AuthorizationConditionsRequest, out *authorization.AuthorizationConditionsRequest, s conversion.Scope) error {
-	// FIXME: Provide conversion function to convert v1.ConditionsAwareDecision to authorization.ConditionsAwareDecision
-	compileErrorOnMissingConversion()
+	out.Decision = (*authorization.ConditionsAwareDecision)(unsafe.Pointer(in.Decision))
 	if in.AdmissionControlData != nil {
 		in, out := &in.AdmissionControlData, &out.AdmissionControlData
 		*out = new(authorization.AuthorizationConditionsTargetAdmissionControl)
@@ -106,8 +105,7 @@ func Convert_v1alpha1_AuthorizationConditionsRequest_To_authorization_Authorizat
 }
 
 func autoConvert_authorization_AuthorizationConditionsRequest_To_v1alpha1_AuthorizationConditionsRequest(in *authorization.AuthorizationConditionsRequest, out *authorizationv1alpha1.AuthorizationConditionsRequest, s conversion.Scope) error {
-	// FIXME: Provide conversion function to convert authorization.ConditionsAwareDecision to v1.ConditionsAwareDecision
-	compileErrorOnMissingConversion()
+	out.Decision = (*v1.ConditionsAwareDecision)(unsafe.Pointer(in.Decision))
 	if in.AdmissionControlData != nil {
 		in, out := &in.AdmissionControlData, &out.AdmissionControlData
 		*out = new(authorizationv1alpha1.AuthorizationConditionsTargetAdmissionControl)
@@ -126,8 +124,7 @@ func Convert_authorization_AuthorizationConditionsRequest_To_v1alpha1_Authorizat
 }
 
 func autoConvert_v1alpha1_AuthorizationConditionsResponse_To_authorization_AuthorizationConditionsResponse(in *authorizationv1alpha1.AuthorizationConditionsResponse, out *authorization.AuthorizationConditionsResponse, s conversion.Scope) error {
-	// FIXME: Provide conversion function to convert v1.ConditionsAwareDecision to authorization.ConditionsAwareDecision
-	compileErrorOnMissingConversion()
+	out.Decision = (*authorization.ConditionsAwareDecision)(unsafe.Pointer(in.Decision))
 	return nil
 }
 
@@ -137,8 +134,7 @@ func Convert_v1alpha1_AuthorizationConditionsResponse_To_authorization_Authoriza
 }
 
 func autoConvert_authorization_AuthorizationConditionsResponse_To_v1alpha1_AuthorizationConditionsResponse(in *authorization.AuthorizationConditionsResponse, out *authorizationv1alpha1.AuthorizationConditionsResponse, s conversion.Scope) error {
-	// FIXME: Provide conversion function to convert authorization.ConditionsAwareDecision to v1.ConditionsAwareDecision
-	compileErrorOnMissingConversion()
+	out.Decision = (*v1.ConditionsAwareDecision)(unsafe.Pointer(in.Decision))
 	return nil
 }
 

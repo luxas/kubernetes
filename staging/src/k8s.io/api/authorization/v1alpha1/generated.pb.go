@@ -25,6 +25,7 @@ import (
 	io "io"
 
 	k8s_io_api_admission_v1 "k8s.io/api/admission/v1"
+	v1 "k8s.io/api/authorization/v1"
 	v11 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	math_bits "math/bits"
@@ -74,16 +75,18 @@ func (m *AuthorizationConditionsRequest) MarshalToSizedBuffer(dAtA []byte) (int,
 		i--
 		dAtA[i] = 0x12
 	}
-	{
-		size, err := m.Decision.MarshalToSizedBuffer(dAtA[:i])
-		if err != nil {
-			return 0, err
+	if m.Decision != nil {
+		{
+			size, err := m.Decision.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintGenerated(dAtA, i, uint64(size))
 		}
-		i -= size
-		i = encodeVarintGenerated(dAtA, i, uint64(size))
+		i--
+		dAtA[i] = 0xa
 	}
-	i--
-	dAtA[i] = 0xa
 	return len(dAtA) - i, nil
 }
 
@@ -107,16 +110,18 @@ func (m *AuthorizationConditionsResponse) MarshalToSizedBuffer(dAtA []byte) (int
 	_ = i
 	var l int
 	_ = l
-	{
-		size, err := m.Decision.MarshalToSizedBuffer(dAtA[:i])
-		if err != nil {
-			return 0, err
+	if m.Decision != nil {
+		{
+			size, err := m.Decision.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintGenerated(dAtA, i, uint64(size))
 		}
-		i -= size
-		i = encodeVarintGenerated(dAtA, i, uint64(size))
+		i--
+		dAtA[i] = 0xa
 	}
-	i--
-	dAtA[i] = 0xa
 	return len(dAtA) - i, nil
 }
 
@@ -338,8 +343,10 @@ func (m *AuthorizationConditionsRequest) Size() (n int) {
 	}
 	var l int
 	_ = l
-	l = m.Decision.Size()
-	n += 1 + l + sovGenerated(uint64(l))
+	if m.Decision != nil {
+		l = m.Decision.Size()
+		n += 1 + l + sovGenerated(uint64(l))
+	}
 	if m.AdmissionControlData != nil {
 		l = m.AdmissionControlData.Size()
 		n += 1 + l + sovGenerated(uint64(l))
@@ -353,8 +360,10 @@ func (m *AuthorizationConditionsResponse) Size() (n int) {
 	}
 	var l int
 	_ = l
-	l = m.Decision.Size()
-	n += 1 + l + sovGenerated(uint64(l))
+	if m.Decision != nil {
+		l = m.Decision.Size()
+		n += 1 + l + sovGenerated(uint64(l))
+	}
 	return n
 }
 
@@ -430,7 +439,7 @@ func (this *AuthorizationConditionsRequest) String() string {
 		return "nil"
 	}
 	s := strings.Join([]string{`&AuthorizationConditionsRequest{`,
-		`Decision:` + strings.Replace(strings.Replace(fmt.Sprintf("%v", this.Decision), "ConditionsAwareDecision", "v1.ConditionsAwareDecision", 1), `&`, ``, 1) + `,`,
+		`Decision:` + strings.Replace(fmt.Sprintf("%v", this.Decision), "ConditionsAwareDecision", "v1.ConditionsAwareDecision", 1) + `,`,
 		`AdmissionControlData:` + strings.Replace(this.AdmissionControlData.String(), "AuthorizationConditionsTargetAdmissionControl", "AuthorizationConditionsTargetAdmissionControl", 1) + `,`,
 		`}`,
 	}, "")
@@ -441,7 +450,7 @@ func (this *AuthorizationConditionsResponse) String() string {
 		return "nil"
 	}
 	s := strings.Join([]string{`&AuthorizationConditionsResponse{`,
-		`Decision:` + strings.Replace(strings.Replace(fmt.Sprintf("%v", this.Decision), "ConditionsAwareDecision", "v1.ConditionsAwareDecision", 1), `&`, ``, 1) + `,`,
+		`Decision:` + strings.Replace(fmt.Sprintf("%v", this.Decision), "ConditionsAwareDecision", "v1.ConditionsAwareDecision", 1) + `,`,
 		`}`,
 	}, "")
 	return s
@@ -546,6 +555,9 @@ func (m *AuthorizationConditionsRequest) Unmarshal(dAtA []byte) error {
 			}
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
+			}
+			if m.Decision == nil {
+				m.Decision = &v1.ConditionsAwareDecision{}
 			}
 			if err := m.Decision.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
@@ -665,6 +677,9 @@ func (m *AuthorizationConditionsResponse) Unmarshal(dAtA []byte) error {
 			}
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
+			}
+			if m.Decision == nil {
+				m.Decision = &v1.ConditionsAwareDecision{}
 			}
 			if err := m.Decision.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err

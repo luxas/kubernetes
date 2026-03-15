@@ -443,7 +443,7 @@ func (w *WebhookAuthorizer) EvaluateConditions(ctx context.Context, decision aut
 
 	r := &authorizationv1alpha1.AuthorizationConditionsReview{
 		Request: &authorizationv1alpha1.AuthorizationConditionsRequest{
-			Decision: serializeConditionsAwareDecision(decision),
+			Decision: ptr.To(serializeConditionsAwareDecision(decision)),
 		},
 	}
 

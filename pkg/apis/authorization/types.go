@@ -471,7 +471,7 @@ type AuthorizationConditionsReview struct {
 type AuthorizationConditionsRequest struct {
 	// decision contains the conditional decision the authorizer authored at authorization time.
 	// +required
-	Decision ConditionsAwareDecision `json:"decision" protobuf:"bytes,1,opt,name=decision"`
+	Decision *ConditionsAwareDecision `json:"decision" protobuf:"bytes,1,opt,name=decision"`
 
 	// admissionControlData may contain additional information for evaluating the conditions.
 	// +optional
@@ -559,5 +559,5 @@ type AuthorizationConditionsTargetAdmissionControl struct {
 type AuthorizationConditionsResponse struct {
 	// decision contains the authorizer's decision after seeing the data.
 	// +required
-	Decision ConditionsAwareDecision `json:"decision" protobuf:"bytes,1,opt,name=decision"`
+	Decision *ConditionsAwareDecision `json:"decision" protobuf:"bytes,1,opt,name=decision"`
 }
