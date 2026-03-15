@@ -138,7 +138,9 @@ func (d ConditionsAwareDecision) IsUnconditional() bool {
 }
 
 // UnconditionalParts turns a ConditionsAwareDecision into the
-// triple that Authorizer.Authorize expects.
+// triple that Authorizer.Authorize expects. If the decision is
+// conditional, the returned condition is Deny if there were at least
+// some Deny condition, otherwise NoOpinion.
 func (d ConditionsAwareDecision) UnconditionalParts() (Decision, string, error) {
 	switch {
 	case d.IsAllowed():
@@ -148,8 +150,11 @@ func (d ConditionsAwareDecision) UnconditionalParts() (Decision, string, error) 
 	case d.IsNoOpinion():
 		return DecisionNoOpinion, d.Reason(), d.Error()
 	default:
-		// TODO(luxas): Use FailClosedDecision here instead.
-		return DecisionDeny, "failed closed", fmt.Errorf("tried to return conditional decision to conditions-unaware authorizer")
+		failClosed := d.FailClosedDecision(nil)
+		if failClosed.IsNoOpinion() {
+			return DecisionNoOpinion, "failed closed: tried to return conditional decision to conditions-unaware authorizer", nil
+		}
+		return DecisionDeny, "failed closed: tried to return conditional decision to conditions-unaware authorizer", nil
 	}
 }
 
@@ -555,7 +560,14 @@ func ConditionsAwareDecisionConditionMap(conditions ...Condition) ConditionsAwar
 
 	// Do not allow constructing Conditional decisions when the feature gate is off
 	if !utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
-		return makeFailClosedError(fmt.Errorf("cannot construct conditional decision: the ConditionalAuthorization feature gate is disabled"))
+		// Fail closed "softer" than makeFailClosedError, as in this case the authorizer isn't malfunctioning, but the _caller_ of the
+		// authorizer just called ConditionsAwareAuthorize even though the feature is off. The caller _shouldn't_ do this, but there is
+		// no way of us preventing it. However, instead of returning an error, which could lead to a response code 500, just tell the caller
+		// through the reason that as the feature gate is off, the returned decision is "rounded down" (which most likely yields a 403).
+		if hasDenyEffect {
+			return ConditionsAwareDecisionDeny("authorizer tried to return conditional decision, but the ConditionalAuthorization feature gate is disabled", nil)
+		}
+		return ConditionsAwareDecisionNoOpinion("authorizer tried to return conditional decision, but the ConditionalAuthorization feature gate is disabled", nil)
 	}
 
 	return ConditionsAwareDecision{
@@ -674,7 +686,7 @@ func (c *ConditionsMap) Evaluate(ctx context.Context, data ConditionsData, evalu
 		// TODO(luxas): Unit test for errors this behavior?
 		if len(appliedDenyReasons) != 0 {
 			// A nil error must be returned here, in order for the WithAuthorization handler to return 403 and not 500.
-			return ConditionsAwareDecisionDeny(fmt.Sprintf("%v", appliedDenyReasons), nil)
+			return ConditionsAwareDecisionDeny(strings.Join(appliedDenyReasons, ", "), nil)
 		}
 		// If any deny errors were encountered, fail closed
 		if len(denyErrors) != 0 {
@@ -721,7 +733,7 @@ func (c *ConditionsMap) Evaluate(ctx context.Context, data ConditionsData, evalu
 		}
 		// If any NoOpinion conditions evaluated to true, return NoOpinion
 		if len(appliedNoOpinionReasons) != 0 {
-			return ConditionsAwareDecisionNoOpinion(fmt.Sprintf("%v", appliedNoOpinionReasons), nil)
+			return ConditionsAwareDecisionNoOpinion(strings.Join(appliedNoOpinionReasons, ", "), nil)
 		}
 		// If any NoOpinion errors were encountered, fail closed to NoOpinion as if the conditions would have matched
 		if len(noOpinionErrors) != 0 {
@@ -779,7 +791,7 @@ func (c *ConditionsMap) Evaluate(ctx context.Context, data ConditionsData, evalu
 		// If there were at least one Allow condition that applied, then evaluation is successful, even if there
 		// were some errors that happened. Those are in this case considered warnings.
 		if len(appliedAllowReasons) != 0 {
-			return ConditionsAwareDecisionAllow(fmt.Sprintf("%v", appliedAllowReasons), utilerrors.NewAggregate(allowErrors))
+			return ConditionsAwareDecisionAllow(strings.Join(appliedAllowReasons, ", "), utilerrors.NewAggregate(allowErrors))
 		}
 		// However, if no Allow condition evaluated to true, but at least one errored, return that as an error to the caller
 		if len(allowErrors) != 0 {
