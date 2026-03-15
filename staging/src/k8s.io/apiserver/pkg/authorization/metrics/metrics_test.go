@@ -18,7 +18,6 @@ package metrics
 
 import (
 	"context"
-	"maps"
 	"strings"
 	"testing"
 
@@ -176,13 +175,7 @@ func TestRecordAuthorizationDecisionsTotal(t *testing.T) {
 
 	t.Run("conditional emits a metric (conditional authorizer via ConditionsAwareAuthorize)", func(t *testing.T) {
 		dummyConditionalAuthorizer.authorizeDecision = authorizer.ConditionsAwareDecisionConditionMap(
-			authorizer.ConditionType("foo"),
-			maps.All(map[string]authorizer.Condition{
-				"foo": {
-					Condition: "foo",
-					Effect:    authorizer.ConditionEffectAllow,
-				},
-			}),
+			authorizer.GenericCondition{ID: "foo", Effect: authorizer.ConditionEffectAllow},
 		)
 		_ = ac.ConditionsAwareAuthorize(context.Background(), nil)
 		_ = ac.ConditionsAwareAuthorize(context.Background(), nil)

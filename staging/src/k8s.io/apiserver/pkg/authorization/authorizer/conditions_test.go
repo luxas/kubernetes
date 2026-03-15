@@ -20,7 +20,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"strings"
 	"testing"
 
@@ -38,6 +37,16 @@ func TestConditionsAwareDecision(t *testing.T) {
 	sampleAttrs := authorizer.AttributesRecord{}
 
 	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ConditionalAuthorization, true)
+
+	okAmountOfConditions := make([]authorizer.Condition, authorizer.MaxConditionsPerMap)
+	for i := range authorizer.MaxConditionsPerMap {
+		okAmountOfConditions[i] = authorizer.GenericCondition{ID: fmt.Sprintf("cond-%d", i), Effect: authorizer.ConditionEffectAllow}
+	}
+
+	tooManyConditions := make([]authorizer.Condition, authorizer.MaxConditionsPerMap+1)
+	for i := range authorizer.MaxConditionsPerMap + 1 {
+		tooManyConditions[i] = authorizer.GenericCondition{ID: fmt.Sprintf("cond-%d", i), Effect: authorizer.ConditionEffectAllow}
+	}
 
 	tests := []struct {
 		name                string
@@ -143,43 +152,43 @@ func TestConditionsAwareDecision(t *testing.T) {
 		{
 			name: "construct valid conditionsmap",
 			testDecisions: []authorizer.ConditionsAwareDecision{
+				authorizer.ConditionsAwareDecisionConditionMap(okAmountOfConditions...),
+			},
+			wantIsConditionsMap: true,
+			wantIsUnconditional: false,
+			wantString:          `ConditionsMap(len=128)`,
+		},
+		{
+			name: "too many conditions",
+			testDecisions: []authorizer.ConditionsAwareDecision{
+				authorizer.ConditionsAwareDecisionConditionMap(tooManyConditions...),
+			},
+			wantIsDenied:        true,
+			wantIsUnconditional: true,
+			wantReason:          "failed closed",
+			wantAnyError:        true,
+			wantString:          `Deny(reason="failed closed", err="too many conditions: 129 exceeds maximum of 128")`,
+		},
+		{
+			name: "construct valid conditionsmap",
+			testDecisions: []authorizer.ConditionsAwareDecision{
 				authorizer.ConditionsAwareDecisionConditionMap(
-					authorizer.ConditionType("foo-type"),
-					maps.All(map[string]authorizer.Condition{
-						"foo": {
-							Condition:   "ok",
-							Effect:      authorizer.ConditionEffectAllow,
-							Description: "foo",
-						},
-					}),
+					authorizer.GenericCondition{ID: "foo", Effect: authorizer.ConditionEffectAllow},
+					nil,
+					typedNil(), // nil, but has the type word set so the normal nil check fails
+					authorizer.GenericCondition{ID: "baz", Effect: authorizer.ConditionEffectAllow},
 				),
 			},
 			wantIsConditionsMap: true,
 			wantIsUnconditional: false,
-			wantReason:          "",
-			wantString:          `ConditionsMap(type="foo-type", len=1)`,
+			wantString:          `ConditionsMap(len=2)`,
 		},
 		{
-			name: "duplicate IDs",
+			name: "duplicate IDs, ignores nil",
 			testDecisions: []authorizer.ConditionsAwareDecision{
 				authorizer.ConditionsAwareDecisionConditionMap(
-					authorizer.ConditionType("foo-type"),
-					func(yield func(string, authorizer.Condition) bool) {
-						cond1 := authorizer.Condition{
-							Condition: "foo",
-							Effect:    authorizer.ConditionEffectAllow,
-						}
-						cond2 := authorizer.Condition{
-							Condition: "bar",
-							Effect:    authorizer.ConditionEffectDeny,
-						}
-						if !yield("foo", cond1) {
-							return
-						}
-						if !yield("foo", cond2) {
-							return
-						}
-					},
+					authorizer.GenericCondition{ID: "foo", Effect: authorizer.ConditionEffectAllow},
+					authorizer.GenericCondition{ID: "foo", Effect: authorizer.ConditionEffectDeny},
 				),
 			},
 			wantIsDenied:        true,
@@ -192,54 +201,21 @@ func TestConditionsAwareDecision(t *testing.T) {
 			name: "invalid effect",
 			testDecisions: []authorizer.ConditionsAwareDecision{
 				authorizer.ConditionsAwareDecisionConditionMap(
-					authorizer.ConditionType("foo-type"),
-					maps.All(map[string]authorizer.Condition{
-						"foo": {
-							Condition: "ok",
-							Effect:    authorizer.ConditionEffect("nonexistent"),
-						},
-					}),
+					authorizer.GenericCondition{ID: "foo", Effect: authorizer.ConditionEffect("nonexistent")},
 				),
 			},
 			wantIsDenied:        true,
 			wantIsUnconditional: true,
 			wantReason:          "failed closed",
 			wantAnyError:        true,
-			wantString:          `Deny(reason="failed closed", err="condition effect \"nonexistent\" not supported. Supported effects are: [Allow Deny NoOpinion]")`,
+			wantString:          `Deny(reason="failed closed", err="condition effect \"nonexistent\" not supported. Supported effects are: [Deny, NoOpinion, Allow]")`,
 		},
 		{
-			name: "empty condition invalid, one condition error is enough to fail closed",
+			name: "condition ID must be a Kubernetes label, one condition error enough to fail closed",
 			testDecisions: []authorizer.ConditionsAwareDecision{
 				authorizer.ConditionsAwareDecisionConditionMap(
-					authorizer.ConditionType("foo-type"),
-					maps.All(map[string]authorizer.Condition{
-						"foo": {
-							Effect: authorizer.ConditionEffectAllow,
-						},
-						"deny": {
-							Condition: "ok",
-							Effect:    authorizer.ConditionEffectDeny,
-						},
-					}),
-				),
-			},
-			wantIsDenied:        true,
-			wantIsUnconditional: true,
-			wantReason:          "failed closed",
-			wantAnyError:        true,
-			wantString:          `Deny(reason="failed closed", err="condition \"foo\" has empty Condition string")`,
-		},
-		{
-			name: "condition ID must be a Kubernetes label",
-			testDecisions: []authorizer.ConditionsAwareDecision{
-				authorizer.ConditionsAwareDecisionConditionMap(
-					authorizer.ConditionType("foo-type"),
-					maps.All(map[string]authorizer.Condition{
-						"not a kubernetes label": {
-							Condition: "ok",
-							Effect:    authorizer.ConditionEffectDeny,
-						},
-					}),
+					authorizer.GenericCondition{ID: "foo", Effect: authorizer.ConditionEffectAllow},
+					authorizer.GenericCondition{ID: "not a kubernetes label", Effect: authorizer.ConditionEffectDeny},
 				),
 			},
 			wantIsDenied:        true,
@@ -252,13 +228,8 @@ func TestConditionsAwareDecision(t *testing.T) {
 			name: "condition type must be a Kubernetes label",
 			testDecisions: []authorizer.ConditionsAwareDecision{
 				authorizer.ConditionsAwareDecisionConditionMap(
-					authorizer.ConditionType("not a kubernetes label"),
-					maps.All(map[string]authorizer.Condition{
-						"ok": {
-							Condition: "ok",
-							Effect:    authorizer.ConditionEffectNoOpinion,
-						},
-					}),
+					authorizer.GenericCondition{ID: "foo", Effect: authorizer.ConditionEffectAllow},
+					authorizer.GenericCondition{ID: "bar", Effect: authorizer.ConditionEffectNoOpinion, Type: "not a kubernetes label"},
 				),
 			},
 			wantIsNoOpinion:     true,
@@ -270,10 +241,7 @@ func TestConditionsAwareDecision(t *testing.T) {
 		{
 			name: "empty ConditionsMap is NoOpinion",
 			testDecisions: []authorizer.ConditionsAwareDecision{
-				authorizer.ConditionsAwareDecisionConditionMap(
-					authorizer.ConditionType("foo-type"),
-					maps.All(map[string]authorizer.Condition{}),
-				),
+				authorizer.ConditionsAwareDecisionConditionMap(),
 			},
 			wantIsNoOpinion:     true,
 			wantIsUnconditional: true,
@@ -330,18 +298,33 @@ func TestConditionsAwareDecision(t *testing.T) {
 	}
 }
 
+func typedNil() authorizer.Condition {
+	var c *authorizer.GenericCondition = nil
+	return c
+}
+
+/*var _ authorizer.Condition = dummyCondition{}
+
+type dummyCondition struct {
+	id            string
+	effect        authorizer.ConditionEffect
+	condition     string
+	conditionType string
+	description   string
+}
+
+func (d dummyCondition) GetID() string                         { return d.id }
+func (d dummyCondition) GetEffect() authorizer.ConditionEffect { return d.effect }
+func (d dummyCondition) GetCondition() string                  { return d.condition }
+func (d dummyCondition) GetType() string                       { return d.conditionType }
+func (d dummyCondition) GetDescription() string                { return d.description }
+func (d dummyCondition) DeepCopy() authorizer.Condition        { return d } // all field passed by value*/
+
 func TestCreateConditionsMapFeatureDisabled(t *testing.T) {
 	// Feature gate is disabled (which is the default) in this test
 	// Fail closed to NoOpinion, as there are no denies
 	d := authorizer.ConditionsAwareDecisionConditionMap(
-		authorizer.ConditionType("foo-type"),
-		maps.All(map[string]authorizer.Condition{
-			"foo": {
-				Condition:   "ok",
-				Effect:      authorizer.ConditionEffectAllow,
-				Description: "foo",
-			},
-		}),
+		authorizer.GenericCondition{ID: "foo", Effect: authorizer.ConditionEffectAllow},
 	)
 	if !d.IsNoOpinion() {
 		t.Error("Expected creating a ConditionsMap decision to yield NoOpinion when the feature gate is disabled")
@@ -351,14 +334,7 @@ func TestCreateConditionsMapFeatureDisabled(t *testing.T) {
 	}
 	// Fail closed to Deny, as there is at least one Deny condition
 	d = authorizer.ConditionsAwareDecisionConditionMap(
-		authorizer.ConditionType("foo-type"),
-		maps.All(map[string]authorizer.Condition{
-			"foo": {
-				Condition:   "ok",
-				Effect:      authorizer.ConditionEffectDeny,
-				Description: "foo",
-			},
-		}),
+		authorizer.GenericCondition{ID: "foo", Effect: authorizer.ConditionEffectDeny},
 	)
 	if !d.IsDenied() {
 		t.Error("Expected creating a ConditionsMap decision to yield NoOpinion when the feature gate is disabled")
