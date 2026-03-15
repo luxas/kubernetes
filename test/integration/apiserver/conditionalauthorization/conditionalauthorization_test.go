@@ -318,7 +318,15 @@ authorizers:
 				},
 			},
 			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
-				_, err := client.CoreV1().ConfigMaps("test-ns").List(context.TODO(), metav1.ListOptions{})
+				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "foo" + suffix,
+						Namespace: "test-ns",
+					},
+					Data: map[string]string{
+						"foo": "bar",
+					},
+				}, metav1.CreateOptions{})
 				return err
 			},
 			expectAllowed: true,
@@ -412,15 +420,19 @@ authorizers:
 				}
 			}),
 			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
-				_, err := client.CoreV1().ConfigMaps("test-ns").List(context.TODO(), metav1.ListOptions{})
+				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "foo" + suffix,
+						Namespace: "test-ns",
+					},
+					Data: map[string]string{
+						"foo": "bar",
+					},
+				}, metav1.CreateOptions{})
 				return err
 			},
-			// With feature enabled: conditional => NoOpinion from conditions evaluation.
-			// The original Authorize() in the chain returns Conditional (which CanBecomeAllowed),
-			// so RBAC is never consulted. The conditions evaluator returns NoOpinion => denied.
-			expectAllowed: false,
-			// When disabled: conditional decision is NoOpinion, RBAC is consulted and allows.
-			expectAllowedWhenDisabled: boolPtr(true),
+			// The conditional response is NoOpinion, so both when enabled and disabled does this fall through to RBAC which allows.
+			expectAllowed: true,
 		},
 
 		// CEL-based conditional authorization tests.
@@ -1446,7 +1458,7 @@ authorizers:
 					if tc.user == "conditional-noop-rbac-user" || tc.user == "webhook-noop-rbac-user" {
 						authutil.GrantUserAuthorization(t, t.Context(), adminClient, userName,
 							rbacv1.PolicyRule{
-								Verbs:     []string{"list", "get"},
+								Verbs:     []string{"create"},
 								APIGroups: []string{""},
 								Resources: []string{"configmaps"},
 							},
@@ -1636,7 +1648,7 @@ func acrEvaluateCEL(t *testing.T, expectedConditionsType string) func(acr *autho
 		}
 		decisionType := celEvaluateConditions(t, acr.Request.AdmissionControlData, conditionsMap)
 		acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
-			Decision: authorizationv1.ConditionsAwareDecision{
+			Decision: &authorizationv1.ConditionsAwareDecision{
 				Type: decisionType,
 			},
 		}
