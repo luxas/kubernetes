@@ -25,8 +25,11 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/validate/content"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apiserver/pkg/authentication/user"
 	genericfeatures "k8s.io/apiserver/pkg/features"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 )
@@ -243,57 +246,6 @@ const (
 	// precedence).
 	ConditionEffectAllow ConditionEffect = "Allow"
 )
-
-// Validate validates that the given ConditionEffect is known to the system.
-/*func (e ConditionEffect) Validate() error {
-	if !supportedConditionEffects.Has(e) {
-		return fmt.Errorf("condition effect %q not supported. Supported effects are: %v", e, slices.Sorted(maps.Keys(supportedConditionEffects)))
-	}
-	return nil
-}*/
-
-// var supportedConditionEffects = sets.New(ConditionEffectDeny, ConditionEffectNoOpinion, ConditionEffectAllow)
-
-// ConditionType represents a type of authorization conditions.
-// Should be formatted as a Kubernetes label key.
-// Any domain suffix of *.k8s.io or *.kubernetes.io is reserved.
-/*type ConditionType string
-
-func (ct ConditionType) Validate() error {
-	if errs := content.IsLabelKey(string(ct)); len(errs) > 0 {
-		return fmt.Errorf("invalid condition type %q: %s", ct, strings.Join(errs, "; "))
-	}
-	return nil
-}*/
-
-// SerializedCondition represents a single condition to be evaluated against ConditionsData.
-// A condition is a pure, deterministic function from ConditionsData to a boolean.
-/*type SerializedCondition struct {
-	// ID uniquely identifies this condition within the scope of the authorizer
-	// that authored it. Validated as a Kubernetes label key.
-	// Required.
-	ID string
-
-	// Condition is an opaque string that represents the condition to be evaluated.
-	// It is a pure, deterministic function from ConditionsData to a boolean.
-	// Might or might not be human-readable. Maximum MaxConditionBytes bytes.
-	// Required.
-	Condition string
-
-	// Effect specifies how the condition evaluating to "true" should be treated.
-	// Required.
-	Effect ConditionEffect
-
-	// Type describes the type of the condition, if there are multiple possibilities.
-	// Should be formatted as a Kubernetes label key.
-	// Any domain suffix of *.k8s.io or *.kubernetes.io is reserved for Kubernetes use.
-	// Optional. Can be omitted if the condition is self-describing.
-	Type string
-
-	// Description is an optional human-friendly description that can be shown
-	// as an error message or for debugging. Optional.
-	Description string
-}*/
 
 // ConditionsMap is a map of conditions of a given type, and represents
 // the conditional decision from the authorizer.
@@ -632,10 +584,6 @@ func (c GenericCondition) DeepCopy() Condition {
 	return c // no values passed by reference
 }
 
-/*type BuiltinEvaluator interface {
-	TryEvaluateCondition(ctx context.Context, condition Condition, data ConditionsData) (bool, error, bool)
-}*/
-
 // EvaluateConditionsMap evaluates the conditions in the map into a concrete Allow/Deny/NoOpinion Decision, given an
 // evaluation function with a given supported condition type.
 // This is a reference implementation that other conditional authorizers can use if convenient.
@@ -824,6 +772,47 @@ func deepCopyConditions(originals []Condition) []Condition {
 
 // ConditionsData is an enum type for various evaluation targets conditions
 // can be written against.
-// TODO(luxas): Implement this in the follow-up PR.
 type ConditionsData struct {
+	AdmissionControl ConditionsDataAdmissionControl
+}
+
+// AdmissionOperation represents the admission operation,
+// for example CREATE, UPDATE, DELETE. The constants are
+// defined in k8s.io/apiserver/pkg/admission, but the
+// type is defined here, because this package is more generic
+// than the admission package (thus avoiding import cycles)
+type AdmissionOperation string
+
+// ConditionsDataAdmissionControl represents the data available during admission control, for conditions
+// to evaluate against.
+type ConditionsDataAdmissionControl interface {
+	// GetName returns the name of the object as presented in the request. On a CREATE operation, the client
+	// may omit name and rely on the server to generate the name. If that is the case, this method will return
+	// the empty string
+	GetName() string
+	// GetNamespace is the namespace associated with the request (if any)
+	GetNamespace() string
+	// GetResource is the name of the resource being requested. This is not the kind. For example: pods
+	GetResource() schema.GroupVersionResource
+	// GetSubresource is the name of the subresource being requested. This is a different resource, scoped to the parent resource, but it may have a different kind.
+	// For instance, /pods has the resource "pods" and the kind "Pod", while /pods/foo/status has the resource "pods", the sub resource "status", and the kind "Pod"
+	// (because status operates on pods). The binding resource for a pod though may be /pods/foo/binding, which has resource "pods", subresource "binding", and kind "Binding".
+	GetSubresource() string
+	// GetOperation is the operation being performed
+	GetOperation() AdmissionOperation
+	// GetOperationOptions is the options for the operation being performed
+	GetOperationOptions() runtime.Object
+	// IsDryRun indicates that modifications will definitely not be persisted for this request. This is to prevent
+	// admission controllers with side effects and a method of reconciliation from being overwhelmed.
+	// However, a value of false for this does not mean that the modification will be persisted, because it
+	// could still be rejected by a subsequent validation step.
+	IsDryRun() bool
+	// GetObject is the object from the incoming request prior to default values being applied
+	GetObject() runtime.Object
+	// GetOldObject is the existing object. Only populated for UPDATE and DELETE requests.
+	GetOldObject() runtime.Object
+	// GetKind is the type of object being manipulated.  For example: Pod
+	GetKind() schema.GroupVersionKind
+	// GetUserInfo is information about the requesting user
+	GetUserInfo() user.Info
 }
