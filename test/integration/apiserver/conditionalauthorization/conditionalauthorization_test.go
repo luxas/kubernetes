@@ -25,6 +25,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -1637,6 +1638,370 @@ authorizers:
 			}
 		})
 	}
+
+	if featureEnabled {
+		// The conditional decision the webhook returns for configmap SARs.
+		conditionalDecision := &authorizationv1.ConditionsAwareDecision{
+			Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
+			ConditionsMap: &authorizationv1.ConditionsMap{
+				Conditions: []authorizationv1.Condition{
+					{
+						ID:          "allow-safe-prefix",
+						Effect:      authorizationv1.ConditionEffectAllow,
+						Condition:   `object.metadata.name.startsWith("safe-")`,
+						Type:        "opaque-cel-condition-type",
+						Description: "only allow configmaps with safe- prefix",
+					},
+				},
+			},
+		}
+
+		expectedConditionalDecision := &authorizationv1.ConditionsAwareDecision{
+			Type: authorizationv1.ConditionsAwareDecisionTypeUnion,
+			Union: []authorizationv1.ConditionsAwareDecision{
+				{Type: authorizationv1.ConditionsAwareDecisionTypeNoOpinion}, // system privileged authorizer
+				*conditionalDecision, // Conditional webhook
+				{Type: authorizationv1.ConditionsAwareDecisionTypeNoOpinion}, // RBAC authorizer
+			},
+		}
+
+		// Configure the webhook: return a conditional decision for configmap SARs,
+		// NoOpinion for everything else (falls through to RBAC).
+		webhookServer.handler.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
+			if sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "configmaps" {
+				sar.Status.ConditionalDecision = conditionalDecision
+			}
+		}
+		webhookServer.handler.acrHandler = acrEvaluateCEL(t, "opaque-cel-condition-type")
+
+		t.Run("SubjectAccessReview with conditional authorization requested", func(t *testing.T) {
+			sar := &authorizationv1.SubjectAccessReview{
+				Spec: authorizationv1.SubjectAccessReviewSpec{
+					ResourceAttributes: &authorizationv1.ResourceAttributes{
+						Verb:      "create",
+						Group:     "",
+						Version:   "v1",
+						Resource:  "configmaps",
+						Namespace: "test-ns",
+					},
+					User: "sar-test-user",
+					ConditionalAuthorization: &authorizationv1.ConditionalAuthorizationOptions{
+						Enabled: true,
+					},
+				},
+			}
+			response, err := adminClient.AuthorizationV1().SubjectAccessReviews().Create(context.TODO(), sar, metav1.CreateOptions{})
+			if err != nil {
+				t.Fatalf("failed to create SubjectAccessReview: %v", err)
+			}
+			// The decision is conditional, so Allowed and Denied must both be false.
+			if response.Status.Allowed {
+				t.Errorf("expected Allowed=false for conditional decision, got true")
+			}
+			if response.Status.Denied {
+				t.Errorf("expected Denied=false for conditional decision, got true")
+			}
+			if response.Status.ConditionalDecision == nil {
+				t.Fatalf("expected ConditionalDecision to be set, got nil")
+			}
+			if !reflect.DeepEqual(response.Status.ConditionalDecision, expectedConditionalDecision) {
+				t.Errorf("unexpected ConditionalDecision:\ngot:  %+v\nwant: %+v", response.Status.ConditionalDecision, conditionalDecision)
+			}
+		})
+
+		t.Run("SubjectAccessReview without conditional authorization requested", func(t *testing.T) {
+			sar := &authorizationv1.SubjectAccessReview{
+				Spec: authorizationv1.SubjectAccessReviewSpec{
+					ResourceAttributes: &authorizationv1.ResourceAttributes{
+						Verb:      "create",
+						Group:     "",
+						Version:   "v1",
+						Resource:  "configmaps",
+						Namespace: "test-ns",
+					},
+					User: "sar-test-user-no-cond",
+					// ConditionalAuthorization not set
+				},
+			}
+			response, err := adminClient.AuthorizationV1().SubjectAccessReviews().Create(context.TODO(), sar, metav1.CreateOptions{})
+			if err != nil {
+				t.Fatalf("failed to create SubjectAccessReview: %v", err)
+			}
+			// Without conditional authorization requested, the conditional decision
+			// from the webhook is treated as NoOpinion, falling through to RBAC
+			// which does not have a rule for this user.
+			if response.Status.Allowed {
+				t.Errorf("expected Allowed=false, got true")
+			}
+			if response.Status.Denied {
+				t.Errorf("expected Denied=false, got true")
+			}
+			if response.Status.ConditionalDecision != nil {
+				t.Errorf("expected ConditionalDecision to be nil when not requested, got: %+v", response.Status.ConditionalDecision)
+			}
+		})
+
+		t.Run("SelfSubjectAccessReview with conditional authorization requested", func(t *testing.T) {
+			// Use an impersonated client so the "self" user is known.
+			impersonationConfig := rest.CopyConfig(server.ClientConfig)
+			impersonationConfig.Impersonate.UserName = "selfsar-test-user"
+			userClient := clientset.NewForConfigOrDie(impersonationConfig)
+
+			ssar := &authorizationv1.SelfSubjectAccessReview{
+				Spec: authorizationv1.SelfSubjectAccessReviewSpec{
+					ResourceAttributes: &authorizationv1.ResourceAttributes{
+						Verb:      "create",
+						Group:     "",
+						Version:   "v1",
+						Resource:  "configmaps",
+						Namespace: "test-ns",
+					},
+					ConditionalAuthorization: &authorizationv1.ConditionalAuthorizationOptions{
+						Enabled: true,
+					},
+				},
+			}
+			response, err := userClient.AuthorizationV1().SelfSubjectAccessReviews().Create(context.TODO(), ssar, metav1.CreateOptions{})
+			if err != nil {
+				t.Fatalf("failed to create SelfSubjectAccessReview: %v", err)
+			}
+			if response.Status.Allowed {
+				t.Errorf("expected Allowed=false for conditional decision, got true")
+			}
+			if response.Status.Denied {
+				t.Errorf("expected Denied=false for conditional decision, got true")
+			}
+			if response.Status.ConditionalDecision == nil {
+				t.Fatalf("expected ConditionalDecision to be set, got nil")
+			}
+			if !reflect.DeepEqual(response.Status.ConditionalDecision, expectedConditionalDecision) {
+				t.Errorf("unexpected ConditionalDecision:\ngot:  %+v\nwant: %+v", response.Status.ConditionalDecision, conditionalDecision)
+			}
+		})
+
+		t.Run("SelfSubjectAccessReview without conditional authorization requested", func(t *testing.T) {
+			impersonationConfig := rest.CopyConfig(server.ClientConfig)
+			impersonationConfig.Impersonate.UserName = "selfsar-test-user-no-cond"
+			userClient := clientset.NewForConfigOrDie(impersonationConfig)
+
+			ssar := &authorizationv1.SelfSubjectAccessReview{
+				Spec: authorizationv1.SelfSubjectAccessReviewSpec{
+					ResourceAttributes: &authorizationv1.ResourceAttributes{
+						Verb:      "create",
+						Group:     "",
+						Version:   "v1",
+						Resource:  "configmaps",
+						Namespace: "test-ns",
+					},
+					// ConditionalAuthorization not set
+				},
+			}
+			response, err := userClient.AuthorizationV1().SelfSubjectAccessReviews().Create(context.TODO(), ssar, metav1.CreateOptions{})
+			if err != nil {
+				t.Fatalf("failed to create SelfSubjectAccessReview: %v", err)
+			}
+			if response.Status.Allowed {
+				t.Errorf("expected Allowed=false, got true")
+			}
+			if response.Status.Allowed {
+				t.Errorf("expected Denied=false, got true")
+			}
+			if response.Status.ConditionalDecision != nil {
+				t.Errorf("expected ConditionalDecision to be nil when not requested, got: %+v", response.Status.ConditionalDecision)
+			}
+		})
+
+		t.Run("LocalSubjectAccessReview with conditional authorization requested", func(t *testing.T) {
+			lsar := &authorizationv1.LocalSubjectAccessReview{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "test-ns"},
+				Spec: authorizationv1.SubjectAccessReviewSpec{
+					ResourceAttributes: &authorizationv1.ResourceAttributes{
+						Verb:      "create",
+						Group:     "",
+						Version:   "v1",
+						Resource:  "configmaps",
+						Namespace: "test-ns",
+					},
+					User: "local-sar-test-user",
+					ConditionalAuthorization: &authorizationv1.ConditionalAuthorizationOptions{
+						Enabled: true,
+					},
+				},
+			}
+			response, err := adminClient.AuthorizationV1().LocalSubjectAccessReviews("test-ns").Create(context.TODO(), lsar, metav1.CreateOptions{})
+			if err != nil {
+				t.Fatalf("failed to create LocalSubjectAccessReview: %v", err)
+			}
+			if response.Status.Allowed {
+				t.Errorf("expected Allowed=false for conditional decision, got true")
+			}
+			if response.Status.Denied {
+				t.Errorf("expected Denied=false for conditional decision, got true")
+			}
+			if response.Status.ConditionalDecision == nil {
+				t.Fatalf("expected ConditionalDecision to be set, got nil")
+			}
+			if !reflect.DeepEqual(response.Status.ConditionalDecision, expectedConditionalDecision) {
+				t.Errorf("unexpected ConditionalDecision:\ngot:  %+v\nwant: %+v", response.Status.ConditionalDecision, conditionalDecision)
+			}
+		})
+
+		t.Run("LocalSubjectAccessReview without conditional authorization requested", func(t *testing.T) {
+			lsar := &authorizationv1.LocalSubjectAccessReview{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "test-ns"},
+				Spec: authorizationv1.SubjectAccessReviewSpec{
+					ResourceAttributes: &authorizationv1.ResourceAttributes{
+						Verb:      "create",
+						Group:     "",
+						Version:   "v1",
+						Resource:  "configmaps",
+						Namespace: "test-ns",
+					},
+					User: "local-sar-test-user-no-cond",
+					// ConditionalAuthorization not set
+				},
+			}
+			response, err := adminClient.AuthorizationV1().LocalSubjectAccessReviews("test-ns").Create(context.TODO(), lsar, metav1.CreateOptions{})
+			if err != nil {
+				t.Fatalf("failed to create LocalSubjectAccessReview: %v", err)
+			}
+			if response.Status.Allowed {
+				t.Errorf("expected Allowed=false, got true")
+			}
+			if response.Status.Allowed {
+				t.Errorf("expected Denied=false, got true")
+			}
+			if response.Status.ConditionalDecision != nil {
+				t.Errorf("expected ConditionalDecision to be nil when not requested, got: %+v", response.Status.ConditionalDecision)
+			}
+		})
+
+		// Test that an unconditional allow from the webhook is properly returned
+		// even when conditional authorization is requested.
+		t.Run("SubjectAccessReview unconditional allow with conditional authorization requested", func(t *testing.T) {
+			webhookServer.handler.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
+				if sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "configmaps" {
+					sar.Status.Allowed = true
+					sar.Status.Reason = "unconditionally allowed"
+				}
+			}
+			sar := &authorizationv1.SubjectAccessReview{
+				Spec: authorizationv1.SubjectAccessReviewSpec{
+					ResourceAttributes: &authorizationv1.ResourceAttributes{
+						Verb:      "create",
+						Group:     "",
+						Version:   "v1",
+						Resource:  "configmaps",
+						Namespace: "test-ns",
+					},
+					User: "sar-unconditional-allow-user",
+					ConditionalAuthorization: &authorizationv1.ConditionalAuthorizationOptions{
+						Enabled: true,
+					},
+				},
+			}
+			response, err := adminClient.AuthorizationV1().SubjectAccessReviews().Create(context.TODO(), sar, metav1.CreateOptions{})
+			if err != nil {
+				t.Fatalf("failed to create SubjectAccessReview: %v", err)
+			}
+			if !response.Status.Allowed {
+				t.Errorf("expected Allowed=true for unconditional allow, got false")
+			}
+			if response.Status.Denied {
+				t.Errorf("expected Denied=false for unconditional allow, got true")
+			}
+			if response.Status.ConditionalDecision != nil {
+				t.Errorf("expected ConditionalDecision to be nil for unconditional allow, got: %+v", response.Status.ConditionalDecision)
+			}
+		})
+
+		// Test that an unconditional deny from the webhook is properly returned
+		// even when conditional authorization is requested.
+		t.Run("SubjectAccessReview unconditional deny with conditional authorization requested", func(t *testing.T) {
+			webhookServer.handler.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
+				if sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "configmaps" {
+					sar.Status.Allowed = false
+					sar.Status.Denied = true
+					sar.Status.Reason = "unconditionally denied"
+				}
+			}
+			sar := &authorizationv1.SubjectAccessReview{
+				Spec: authorizationv1.SubjectAccessReviewSpec{
+					ResourceAttributes: &authorizationv1.ResourceAttributes{
+						Verb:      "create",
+						Group:     "",
+						Version:   "v1",
+						Resource:  "configmaps",
+						Namespace: "test-ns",
+					},
+					User: "sar-unconditional-deny-user",
+					ConditionalAuthorization: &authorizationv1.ConditionalAuthorizationOptions{
+						Enabled: true,
+					},
+				},
+			}
+			response, err := adminClient.AuthorizationV1().SubjectAccessReviews().Create(context.TODO(), sar, metav1.CreateOptions{})
+			if err != nil {
+				t.Fatalf("failed to create SubjectAccessReview: %v", err)
+			}
+			if response.Status.Allowed {
+				t.Errorf("expected Allowed=false for unconditional deny, got true")
+			}
+			if !response.Status.Denied {
+				t.Errorf("expected Denied=true for unconditional deny, got false")
+			}
+			if response.Status.ConditionalDecision != nil {
+				t.Errorf("expected ConditionalDecision to be nil for unconditional deny, got: %+v", response.Status.ConditionalDecision)
+			}
+		})
+		// Test that an unconditional deny from the webhook is properly returned
+		// even when conditional authorization is requested.
+		t.Run("SubjectAccessReview conditional deny fails closed when client is not conditions-aware", func(t *testing.T) {
+			webhookServer.handler.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
+				if sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "configmaps" {
+					sar.Status.ConditionalDecision = &authorizationv1.ConditionsAwareDecision{
+						Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
+						ConditionsMap: &authorizationv1.ConditionsMap{
+							Conditions: []authorizationv1.Condition{
+								{
+									ID:        "deny-sensitive-label",
+									Effect:    authorizationv1.ConditionEffectDeny,
+									Condition: `has(object.metadata.labels) && has(object.metadata.labels.sensitive)`,
+									Type:      "opaque-cel-condition-type",
+								},
+							},
+						},
+					}
+				}
+			}
+			sar := &authorizationv1.SubjectAccessReview{
+				Spec: authorizationv1.SubjectAccessReviewSpec{
+					ResourceAttributes: &authorizationv1.ResourceAttributes{
+						Verb:      "create",
+						Group:     "",
+						Version:   "v1",
+						Resource:  "configmaps",
+						Namespace: "test-ns",
+					},
+					User: "sar-unconditional-deny-user",
+					// Conditions unaware client
+				},
+			}
+			response, err := adminClient.AuthorizationV1().SubjectAccessReviews().Create(context.TODO(), sar, metav1.CreateOptions{})
+			if err != nil {
+				t.Fatalf("failed to create SubjectAccessReview: %v", err)
+			}
+			if response.Status.Allowed {
+				t.Errorf("expected Allowed=false for unconditional deny, got true")
+			}
+			if !response.Status.Denied {
+				t.Errorf("expected Denied=true for unconditional deny, got false")
+			}
+			if response.Status.ConditionalDecision != nil {
+				t.Errorf("expected ConditionalDecision to be nil for unconditional deny, got: %+v", response.Status.ConditionalDecision)
+			}
+		})
+	}
 }
 
 func boolPtr(b bool) *bool {
@@ -1647,6 +2012,8 @@ func int32Ptr(i int32) *int32 {
 	return &i
 }
 
+// TODO(luxas): Reactivate this when we add support for in-tree evaluation.
+/*
 // compoundAuthzSARHandler returns a SAR handler that implements compound
 // authorization: creating a resource with the "protected-label" label
 // requires the additional "use protectedlabels" permission, checked via the
@@ -1674,6 +2041,7 @@ func compoundAuthzSARHandler(matchResource string) func(sar *authorizationv1.Sub
 		}
 	}
 }
+*/
 
 // hpaCPUUtilizationSARHandler returns a processSAR function for use with
 // celConditionalTestCases. It sets CEL conditions on HPA SARs that require
