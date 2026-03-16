@@ -5,7 +5,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-	http://www.apache.org/licenses/LICENSE-2.0
+    http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package v1alpha1
 
 import (
@@ -37,10 +38,10 @@ type AuthorizationConditionsReview struct {
 	// +optional
 	metav1.ObjectMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
 
-	// Request describes the attributes for the authorization conditions request.
+	// request describes the attributes for the authorization conditions request.
 	// +optional
 	Request *AuthorizationConditionsRequest `json:"request,omitempty" protobuf:"bytes,2,opt,name=request"`
-	// Response describes the attributes for the authorization conditions response.
+	// response describes the attributes for the authorization conditions response.
 	// +optional
 	Response *AuthorizationConditionsResponse `json:"response,omitempty" protobuf:"bytes,3,opt,name=response"`
 }
@@ -77,7 +78,7 @@ type AuthorizationConditionsTargetAdmissionControl struct {
 	// +optional
 	// SubResource string `json:"subResource,omitempty" protobuf:"bytes,4,opt,name=subResource"`
 
-	// RequestKind is the fully-qualified type of the original API request (for example, v1.Pod or autoscaling.v1.Scale).
+	// requestKind is the fully-qualified type of the original API request (for example, v1.Pod or autoscaling.v1.Scale).
 	// If this is specified and differs from the value in "kind", an equivalent match and conversion was performed.
 	//
 	// For example, if deployments can be modified via apps/v1 and apps/v1beta1, and a webhook registered a rule of
@@ -89,7 +90,7 @@ type AuthorizationConditionsTargetAdmissionControl struct {
 	// See documentation for the "matchPolicy" field in the webhook configuration type for more details.
 	// +optional
 	RequestKind *metav1.GroupVersionKind `json:"requestKind,omitempty" protobuf:"bytes,14,opt,name=requestKind"`
-	// RequestResource is the fully-qualified resource of the original API request (for example, v1.pods).
+	// requestResource is the fully-qualified resource of the original API request (for example, v1.pods).
 	// If this is specified and differs from the value in "resource", an equivalent match and conversion was performed.
 	//
 	// For example, if deployments can be modified via apps/v1 and apps/v1beta1, and a webhook registered a rule of
@@ -101,36 +102,36 @@ type AuthorizationConditionsTargetAdmissionControl struct {
 	// See documentation for the "matchPolicy" field in the webhook configuration type.
 	// +optional
 	RequestResource *metav1.GroupVersionResource `json:"requestResource,omitempty" protobuf:"bytes,15,opt,name=requestResource"`
-	// RequestSubResource is the name of the subresource of the original API request, if any (for example, "status" or "scale")
+	// requestSubResource is the name of the subresource of the original API request, if any (for example, "status" or "scale")
 	// If this is specified and differs from the value in "subResource", an equivalent match and conversion was performed.
 	// See documentation for the "matchPolicy" field in the webhook configuration type.
 	// +optional
 	RequestSubResource string `json:"requestSubResource,omitempty" protobuf:"bytes,16,opt,name=requestSubResource"`
 
-	// Name is the name of the object as presented in the request. On a CREATE operation, the client may omit name and
+	// name is the name of the object as presented in the request. On a CREATE operation, the client may omit name and
 	// rely on the server to generate the name. If that is the case, this field will contain an empty string.
 	// +optional
 	Name string `json:"name,omitempty" protobuf:"bytes,5,opt,name=name"`
-	// Namespace is the namespace associated with the request (if any).
+	// namespace is the namespace associated with the request (if any).
 	// +optional
 	Namespace string `json:"namespace,omitempty" protobuf:"bytes,6,opt,name=namespace"`
-	// Operation is the operation being performed. This may be different than the operation
+	// operation is the operation being performed. This may be different than the operation
 	// requested. e.g. a patch can result in either a CREATE or UPDATE Operation.
 	Operation admissionv1.Operation `json:"operation" protobuf:"bytes,7,opt,name=operation"`
 
-	// UserInfo is information about the requesting user
+	// userInfo is information about the requesting user
 	UserInfo authenticationv1.UserInfo `json:"userInfo" protobuf:"bytes,9,opt,name=userInfo"`
-	// Object is the object from the incoming request.
+	// object is the object from the incoming request.
 	// +optional
 	Object runtime.RawExtension `json:"object,omitempty" protobuf:"bytes,10,opt,name=object"`
-	// OldObject is the existing object. Only populated for DELETE and UPDATE requests.
+	// oldObject is the existing object. Only populated for DELETE and UPDATE requests.
 	// +optional
 	OldObject runtime.RawExtension `json:"oldObject,omitempty" protobuf:"bytes,11,opt,name=oldObject"`
-	// DryRun indicates that modifications will definitely not be persisted for this request.
+	// dryRun indicates that modifications will definitely not be persisted for this request.
 	// Defaults to false.
 	// +optional
 	DryRun *bool `json:"dryRun,omitempty" protobuf:"varint,12,opt,name=dryRun"`
-	// Options is the operation option structure of the operation being performed.
+	// options is the operation option structure of the operation being performed.
 	// e.g. `meta.k8s.io/v1.DeleteOptions` or `meta.k8s.io/v1.CreateOptions`. This may be
 	// different than the options the caller provided. e.g. for a patch request the performed
 	// Operation might be a CREATE, in which case the Options will a
@@ -211,7 +212,7 @@ type ConditionsMap struct {
 	// +listType=map
 	// +listMapKey=id
 	// +required
-	Conditions []Condition `json:"conditions" protobuf:"bytes,1,rep,name=conditions"`
+	Conditions []Condition `json:"conditions" protobuf:"bytes,1,rep,name=conditions"` //nolint:kubeapilinter // These are authorization conditions.
 }
 
 // ConditionsAwareDecisionType is an enum representing what kind of authorization decision

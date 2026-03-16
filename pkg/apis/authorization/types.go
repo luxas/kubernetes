@@ -456,30 +456,30 @@ type ConditionsAwareDecision struct {
 
 // AuthorizationConditionsReview describes a request to evaluate authorization conditions.
 type AuthorizationConditionsReview struct {
-	metav1.TypeMeta `json:",inline"`
+	metav1.TypeMeta
 	// metadata is the standard list metadata.
 	// In AuthorizationConditionsReview, it must be an empty struct.
 	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
 	// +optional
-	metav1.ObjectMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
+	metav1.ObjectMeta
 
 	// Request describes the attributes for the authorization conditions request.
 	// +optional
-	Request *AuthorizationConditionsRequest `json:"request,omitempty" protobuf:"bytes,2,opt,name=request"`
+	Request *AuthorizationConditionsRequest
 	// Response describes the attributes for the authorization conditions response.
 	// +optional
-	Response *AuthorizationConditionsResponse `json:"response,omitempty" protobuf:"bytes,3,opt,name=response"`
+	Response *AuthorizationConditionsResponse
 }
 
 // AuthorizationConditionsRequest describes the authorization conditions request.
 type AuthorizationConditionsRequest struct {
 	// Decision contains the conditional decision the authorizer authored at authorization time.
 	// +required
-	Decision ConditionsAwareDecision `json:"decision" protobuf:"bytes,1,opt,name=decision"`
+	Decision ConditionsAwareDecision
 
 	// AdmissionControlData may contain additional information for evaluating the conditions.
 	// +optional
-	AdmissionControlData *AuthorizationConditionsTargetAdmissionControl `json:"admissionControlData,omitempty" protobuf:"bytes,2,opt,name=admissionControlData"`
+	AdmissionControlData *AuthorizationConditionsTargetAdmissionControl
 }
 
 // AuthorizationConditionsTargetAdmissionControl contains the data available during admission control,

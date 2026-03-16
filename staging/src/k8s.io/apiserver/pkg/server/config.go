@@ -54,7 +54,6 @@ import (
 	"k8s.io/apiserver/pkg/endpoints/discovery"
 	discoveryendpoint "k8s.io/apiserver/pkg/endpoints/discovery/aggregated"
 	"k8s.io/apiserver/pkg/endpoints/filterlatency"
-	"k8s.io/apiserver/pkg/endpoints/filters"
 	genericapifilters "k8s.io/apiserver/pkg/endpoints/filters"
 	"k8s.io/apiserver/pkg/endpoints/filters/impersonation"
 	apiopenapi "k8s.io/apiserver/pkg/endpoints/openapi"
@@ -390,7 +389,7 @@ type AuthorizationInfo struct {
 	Authorizer authorizer.Authorizer
 
 	// ConditionalAuthorizationRequestClassifier is a function that returns true if a request with the given attributes supports conditional authorization
-	ConditionalAuthorizationRequestClassifier filters.ConditionalAuthorizationRequestClassifier
+	ConditionalAuthorizationRequestClassifier genericapifilters.ConditionalAuthorizationRequestClassifier
 }
 
 func init() {

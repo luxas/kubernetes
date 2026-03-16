@@ -84,7 +84,7 @@ func withAuthorization(handler http.Handler, a authorizer.Authorizer, s runtime.
 
 		var reason string
 		var metricsResultLabel string
-		var unconditionallyAuthorized bool = false
+		var unconditionallyAuthorized bool // = false, unless set in the branches below
 		var conditionsAwareDecision *authorizer.ConditionsAwareDecision
 
 		// Both branches must set unconditionallyAuthorized, reason, err, and metricsResultLabel properly
