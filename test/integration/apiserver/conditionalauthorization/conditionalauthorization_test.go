@@ -1144,6 +1144,142 @@ authorizers:
 			},
 			expectAllowed: false,
 		},
+		{
+			name:             "hpa v1 cpu utilization - update allowed",
+			user:             "hpa-cpu-allow-update-user",
+			webhookBehaviors: celConditionalTestCases(hpaCPUUtilizationSARHandler),
+			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
+				// Create with 70% (allowed: 70 <= 80)
+				created, err := client.AutoscalingV1().HorizontalPodAutoscalers("test-ns").Create(context.TODO(), &autoscalingv1.HorizontalPodAutoscaler{
+					ObjectMeta: metav1.ObjectMeta{Name: "hpa-v1-update-allow" + suffix},
+					Spec: autoscalingv1.HorizontalPodAutoscalerSpec{
+						ScaleTargetRef: autoscalingv1.CrossVersionObjectReference{
+							Kind:       "Deployment",
+							Name:       "test-deploy",
+							APIVersion: "apps/v1",
+						},
+						MaxReplicas:                    10,
+						TargetCPUUtilizationPercentage: int32Ptr(70),
+					},
+				}, metav1.CreateOptions{})
+				if err != nil {
+					return fmt.Errorf("initial create should have succeeded: %w", err)
+				}
+				// Update to 80% (allowed: new=80<=80 && old=70<=80)
+				created.Spec.TargetCPUUtilizationPercentage = int32Ptr(80)
+				_, err = client.AutoscalingV1().HorizontalPodAutoscalers("test-ns").Update(context.TODO(), created, metav1.UpdateOptions{})
+				return err
+			},
+			expectAllowed:             true,
+			expectAllowedWhenDisabled: boolPtr(false),
+		},
+		{
+			name:             "hpa v1 cpu utilization - update denied",
+			user:             "hpa-cpu-deny-update-user",
+			webhookBehaviors: celConditionalTestCases(hpaCPUUtilizationSARHandler),
+			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
+				// Create with 70% (allowed: 70 <= 80)
+				created, err := client.AutoscalingV1().HorizontalPodAutoscalers("test-ns").Create(context.TODO(), &autoscalingv1.HorizontalPodAutoscaler{
+					ObjectMeta: metav1.ObjectMeta{Name: "hpa-v1-update-deny" + suffix},
+					Spec: autoscalingv1.HorizontalPodAutoscalerSpec{
+						ScaleTargetRef: autoscalingv1.CrossVersionObjectReference{
+							Kind:       "Deployment",
+							Name:       "test-deploy",
+							APIVersion: "apps/v1",
+						},
+						MaxReplicas:                    10,
+						TargetCPUUtilizationPercentage: int32Ptr(70),
+					},
+				}, metav1.CreateOptions{})
+				if err != nil {
+					return fmt.Errorf("initial create should have succeeded: %w", err)
+				}
+				// Update to 90% (denied: new=90>80)
+				created.Spec.TargetCPUUtilizationPercentage = int32Ptr(90)
+				_, err = client.AutoscalingV1().HorizontalPodAutoscalers("test-ns").Update(context.TODO(), created, metav1.UpdateOptions{})
+				return err
+			},
+			expectAllowed: false,
+		},
+		{
+			name:             "hpa v2 cpu utilization - update allowed",
+			user:             "hpa-cpu-allow-update-v2-user",
+			webhookBehaviors: celConditionalTestCases(hpaCPUUtilizationSARHandler),
+			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
+				// Create with 70% (allowed: 70 <= 80)
+				created, err := client.AutoscalingV2().HorizontalPodAutoscalers("test-ns").Create(context.TODO(), &autoscalingv2.HorizontalPodAutoscaler{
+					ObjectMeta: metav1.ObjectMeta{Name: "hpa-v2-update-allow" + suffix},
+					Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+						ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+							Kind:       "Deployment",
+							Name:       "test-deploy",
+							APIVersion: "apps/v1",
+						},
+						MaxReplicas: 10,
+						Metrics: []autoscalingv2.MetricSpec{
+							{
+								Type: autoscalingv2.ResourceMetricSourceType,
+								Resource: &autoscalingv2.ResourceMetricSource{
+									Name: corev1.ResourceCPU,
+									Target: autoscalingv2.MetricTarget{
+										Type:               autoscalingv2.UtilizationMetricType,
+										AverageUtilization: int32Ptr(70),
+									},
+								},
+							},
+						},
+					},
+				}, metav1.CreateOptions{})
+				if err != nil {
+					return fmt.Errorf("initial create should have succeeded: %w", err)
+				}
+				// Update to 80% (allowed: new=80<=80 && old=70<=80)
+				created.Spec.Metrics[0].Resource.Target.AverageUtilization = int32Ptr(80)
+				_, err = client.AutoscalingV2().HorizontalPodAutoscalers("test-ns").Update(context.TODO(), created, metav1.UpdateOptions{})
+				return err
+			},
+			expectAllowed:             true,
+			expectAllowedWhenDisabled: boolPtr(false),
+		},
+		{
+			name:             "hpa v2 cpu utilization - update denied",
+			user:             "hpa-cpu-deny-update-v2-user",
+			webhookBehaviors: celConditionalTestCases(hpaCPUUtilizationSARHandler),
+			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
+				// Create with 70% (allowed: 70 <= 80)
+				created, err := client.AutoscalingV2().HorizontalPodAutoscalers("test-ns").Create(context.TODO(), &autoscalingv2.HorizontalPodAutoscaler{
+					ObjectMeta: metav1.ObjectMeta{Name: "hpa-v2-update-deny" + suffix},
+					Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+						ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+							Kind:       "Deployment",
+							Name:       "test-deploy",
+							APIVersion: "apps/v1",
+						},
+						MaxReplicas: 10,
+						Metrics: []autoscalingv2.MetricSpec{
+							{
+								Type: autoscalingv2.ResourceMetricSourceType,
+								Resource: &autoscalingv2.ResourceMetricSource{
+									Name: corev1.ResourceCPU,
+									Target: autoscalingv2.MetricTarget{
+										Type:               autoscalingv2.UtilizationMetricType,
+										AverageUtilization: int32Ptr(70),
+									},
+								},
+							},
+						},
+					},
+				}, metav1.CreateOptions{})
+				if err != nil {
+					return fmt.Errorf("initial create should have succeeded: %w", err)
+				}
+				// Update to 90% (denied: new=90>80)
+				created.Spec.Metrics[0].Resource.Target.AverageUtilization = int32Ptr(90)
+				_, err = client.AutoscalingV2().HorizontalPodAutoscalers("test-ns").Update(context.TODO(), created, metav1.UpdateOptions{})
+				return err
+			},
+			expectAllowed: false,
+		},
 
 		// Tests for a multi-version CRD (ScalableWidget) with version-specific schemas.
 		// v1 has spec.replicas (integer), v2 has spec.replicas.max (integer in object).
@@ -1544,24 +1680,57 @@ func compoundAuthzSARHandler(matchResource string) func(sar *authorizationv1.Sub
 // CPU utilization to be at most 80%. The CEL expression is version-specific:
 // for v1 it checks spec.targetCPUUtilizationPercentage, for v2 it iterates
 // spec.metrics to find the CPU resource metric and checks averageUtilization.
+// For updates, both the old and new objects must satisfy the condition.
 func hpaCPUUtilizationSARHandler(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
 	if sar.Spec.ResourceAttributes == nil || sar.Spec.ResourceAttributes.Resource != "horizontalpodautoscalers" {
 		return
 	}
 
-	var condition string
+	v1ObjectCondition := `has(object.spec.targetCPUUtilizationPercentage) && object.spec.targetCPUUtilizationPercentage <= 80`
+	v1OldObjectCondition := `has(oldObject.spec.targetCPUUtilizationPercentage) && oldObject.spec.targetCPUUtilizationPercentage <= 80`
+	v2ObjectCondition := `has(object.spec.metrics) && object.spec.metrics.exists(m, ` +
+		`m.type == "Resource" && ` +
+		`has(m.resource) && ` +
+		`m.resource.name == "cpu" && ` +
+		`has(m.resource.target) && ` +
+		`m.resource.target.type == "Utilization" && ` +
+		`has(m.resource.target.averageUtilization) && ` +
+		`m.resource.target.averageUtilization <= 80)`
+	/*v2OldObjectCondition := `has(oldObject.Spec.Metrics) && oldObject.Spec.Metrics.exists(m, ` +
+	`m.Type == "Resource" && ` +
+	`has(m.Resource) && ` +
+	`m.Resource.Name == "cpu" && ` +
+	`has(m.Resource.Target) && ` +
+	`m.Resource.Target.Type == "Utilization" && ` +
+	`has(m.Resource.Target.AverageUtilization) && ` +
+	`m.Resource.Target.AverageUtilization <= 80)`*/
+	v2OldObjectCondition := `has(oldObject.spec.metrics) && oldObject.spec.metrics.exists(m, ` +
+		`m.type == "Resource" && ` +
+		`has(m.resource) && ` +
+		`m.resource.name == "cpu" && ` +
+		`has(m.resource.target) && ` +
+		`m.resource.target.type == "Utilization" && ` +
+		`has(m.resource.target.averageUtilization) && ` +
+		`m.resource.target.averageUtilization <= 80)`
+
+	var objectCondition, oldObjectCondition string
 	switch sar.Spec.ResourceAttributes.Version {
 	case "v1":
-		condition = `has(object.spec.targetCPUUtilizationPercentage) && object.spec.targetCPUUtilizationPercentage <= 80`
+		objectCondition = v1ObjectCondition
+		oldObjectCondition = v1OldObjectCondition
 	default: // v2, v2beta2, etc.
-		condition = `has(object.spec.metrics) && object.spec.metrics.exists(m, ` +
-			`m.type == "Resource" && ` +
-			`has(m.resource) && ` +
-			`m.resource.name == "cpu" && ` +
-			`has(m.resource.target) && ` +
-			`m.resource.target.type == "Utilization" && ` +
-			`has(m.resource.target.averageUtilization) && ` +
-			`m.resource.target.averageUtilization <= 80)`
+		objectCondition = v2ObjectCondition
+		oldObjectCondition = v2OldObjectCondition
+	}
+
+	var condition string
+	switch sar.Spec.ResourceAttributes.Verb {
+	case "create":
+		condition = objectCondition
+	case "update":
+		condition = objectCondition + " && " + oldObjectCondition
+	default:
+		return
 	}
 
 	sar.Status.ConditionalDecision = &authorizationv1.ConditionsAwareDecision{

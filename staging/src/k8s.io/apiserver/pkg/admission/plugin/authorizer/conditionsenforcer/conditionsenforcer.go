@@ -42,21 +42,22 @@ const (
 // Register registers a plugin
 func Register(plugins *admission.Plugins) {
 	plugins.Register(PluginName, func(config io.Reader) (admission.Interface, error) {
-		return NewConditionalAuthorizationEnforcer(), nil
+		return NewConditionalAuthorizationEnforcer(false), nil // Default off, can be overridden by InspectFeatureGates
 	})
 }
 
-// TODO: Add an integration test that it's not possible to intercept SAR or ACR using this admission controller
-// TODO: Should VAP-related objects be added to the exclusion list for conditions?
+// TODO(luxas): Add an integration test that it's not possible to intercept SAR or ACR using this admission controller
+// TODO(luxas): Should VAP-related objects be added to the exclusion list for conditions? Most likely yes.
 
 var _ admission.Interface = &conditionsEnforcer{}
 var _ admission.ValidationInterface = &conditionsEnforcer{}
 var _ genericadmissioninit.WantsFeatures = &conditionsEnforcer{}
 var _ genericadmissioninit.WantsAuthorizer = &conditionsEnforcer{}
 
-func NewConditionalAuthorizationEnforcer() *conditionsEnforcer {
+// NewConditionalAuthorizationEnforcer instantiates a new authorization conditions enforcer admission plugin
+func NewConditionalAuthorizationEnforcer(featureEnabled bool) *conditionsEnforcer {
 	return &conditionsEnforcer{
-		featureEnabled: false, // Default, can be overridden by InspectFeatureGates
+		featureEnabled: featureEnabled,
 	}
 }
 
@@ -88,15 +89,12 @@ func (c *conditionsEnforcer) Validate(ctx context.Context, a admission.Attribute
 		return nil
 	}
 
-	authzAttrs, err := filters.GetAuthorizerAttributes(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get authorizer attributes: %w", err)
-	}
-
-	// TODO(luxas): Check why GetOldObject is not overridden on VersionedAttributes.
+	// The a.GetObject() and a.GetOldObject() objects are passed to admission using the internal API types. Before
+	// calling EvaluateConditions(), we need to convert them to the request version. For a CRD, however, the
+	// OldObject cannot be converted, and so it stays the same, or worse, partially broken.
 	versionedAttributes, err := admission.NewVersionedAttributes(a, a.GetKind(), o)
 	if err != nil {
-		return fmt.Errorf("failed to convert object version: %w", err)
+		return fmt.Errorf("failed to convert objects to request version: %w", err)
 	}
 
 	data := authorizer.ConditionsData{
@@ -117,6 +115,11 @@ func (c *conditionsEnforcer) Validate(ctx context.Context, a admission.Attribute
 	if err != nil {
 		audit.AddAuditAnnotation(ctx, filters.ReasonAnnotationKey, filters.ReasonError)
 		return apierrors.NewInternalError(err)
+	}
+
+	authzAttrs, err := filters.GetAuthorizerAttributes(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get authorizer attributes: %w", err)
 	}
 
 	klog.V(4).InfoS("Forbidden (during conditional authorization)", "URI", authzAttrs.GetPath(), "reason", reason)

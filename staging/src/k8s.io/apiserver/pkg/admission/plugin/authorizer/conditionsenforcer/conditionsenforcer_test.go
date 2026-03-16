@@ -245,7 +245,7 @@ func makeUpdateRequest(t *testing.T) *http.Request {
 func setupConditionsEnforcer(t *testing.T, auth authorizer.Authorizer) admission.Interface {
 	t.Helper()
 
-	plugin := NewConditionalAuthorizationEnforcer()
+	plugin := NewConditionalAuthorizationEnforcer(false) // default off, configure through the feature gate
 	plugin.InspectFeatureGates(utilfeature.DefaultFeatureGate)
 	plugin.SetAuthorizer(auth)
 	if err := plugin.ValidateInitialization(); err != nil {
