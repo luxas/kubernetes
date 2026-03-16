@@ -714,22 +714,22 @@ func TestSARStatusFromAuthorize(t *testing.T) {
 				return authorizer.ConditionsAwareDecisionAllow("RBAC: allowed", fmt.Errorf("partial error"))
 			},
 			modes: map[string]authorizationapi.SubjectAccessReviewStatus{
-				"featureOffClientOptOut": authorizationapi.SubjectAccessReviewStatus{
+				"featureOffClientOptOut": {
 					Allowed:         true,
 					Reason:          "RBAC: allowed",
 					EvaluationError: "partial error",
 				},
-				"featureOffClientOptIn": authorizationapi.SubjectAccessReviewStatus{
+				"featureOffClientOptIn": {
 					Allowed:         true,
 					Reason:          "RBAC: allowed",
 					EvaluationError: "partial error",
 				},
-				"featureOnClientOptOut": authorizationapi.SubjectAccessReviewStatus{
+				"featureOnClientOptOut": {
 					Allowed:         true,
 					Reason:          "RBAC: allowed",
 					EvaluationError: "partial error",
 				},
-				"featureOnClientOptIn": authorizationapi.SubjectAccessReviewStatus{
+				"featureOnClientOptIn": {
 					Allowed:         true,
 					Reason:          "RBAC: allowed",
 					EvaluationError: "partial error",
@@ -742,19 +742,19 @@ func TestSARStatusFromAuthorize(t *testing.T) {
 				return authorizer.ConditionsAwareDecisionDeny("Node: denied", nil)
 			},
 			modes: map[string]authorizationapi.SubjectAccessReviewStatus{
-				"featureOffClientOptOut": authorizationapi.SubjectAccessReviewStatus{
+				"featureOffClientOptOut": {
 					Denied: true,
 					Reason: "Node: denied",
 				},
-				"featureOffClientOptIn": authorizationapi.SubjectAccessReviewStatus{
+				"featureOffClientOptIn": {
 					Denied: true,
 					Reason: "Node: denied",
 				},
-				"featureOnClientOptOut": authorizationapi.SubjectAccessReviewStatus{
+				"featureOnClientOptOut": {
 					Denied: true,
 					Reason: "Node: denied",
 				},
-				"featureOnClientOptIn": authorizationapi.SubjectAccessReviewStatus{
+				"featureOnClientOptIn": {
 					Denied: true,
 					Reason: "Node: denied",
 				},
@@ -766,16 +766,16 @@ func TestSARStatusFromAuthorize(t *testing.T) {
 				return authorizer.ConditionsAwareDecisionNoOpinion("no rules matched", nil)
 			},
 			modes: map[string]authorizationapi.SubjectAccessReviewStatus{
-				"featureOffClientOptOut": authorizationapi.SubjectAccessReviewStatus{
+				"featureOffClientOptOut": {
 					Reason: "no rules matched",
 				},
-				"featureOffClientOptIn": authorizationapi.SubjectAccessReviewStatus{
+				"featureOffClientOptIn": {
 					Reason: "no rules matched",
 				},
-				"featureOnClientOptOut": authorizationapi.SubjectAccessReviewStatus{
+				"featureOnClientOptOut": {
 					Reason: "no rules matched",
 				},
-				"featureOnClientOptIn": authorizationapi.SubjectAccessReviewStatus{
+				"featureOnClientOptIn": {
 					Reason: "no rules matched",
 				},
 			},
@@ -784,19 +784,19 @@ func TestSARStatusFromAuthorize(t *testing.T) {
 			name:         "conditional allow",
 			makeDecision: makeCondAllowDecision,
 			modes: map[string]authorizationapi.SubjectAccessReviewStatus{
-				"featureOffClientOptOut": authorizationapi.SubjectAccessReviewStatus{
+				"featureOffClientOptOut": {
 					// NoOpinion
 					Reason: "authorizer tried to return conditional decision, but the ConditionalAuthorization feature gate is disabled",
 				},
-				"featureOffClientOptIn": authorizationapi.SubjectAccessReviewStatus{
+				"featureOffClientOptIn": {
 					// NoOpinion
 					Reason: "authorizer tried to return conditional decision, but the ConditionalAuthorization feature gate is disabled",
 				},
-				"featureOnClientOptOut": authorizationapi.SubjectAccessReviewStatus{
+				"featureOnClientOptOut": {
 					// NoOpinion
 					Reason: "failed closed: tried to return conditional decision to conditions-unaware authorizer",
 				},
-				"featureOnClientOptIn": authorizationapi.SubjectAccessReviewStatus{
+				"featureOnClientOptIn": {
 					ConditionalDecision: &authorizationapi.ConditionsAwareDecision{
 						Type: authorizationapi.ConditionsAwareDecisionTypeConditionsMap,
 						ConditionsMap: &authorizationapi.ConditionsMap{
@@ -818,19 +818,19 @@ func TestSARStatusFromAuthorize(t *testing.T) {
 			name:         "conditional deny",
 			makeDecision: makeCondDenyDecision,
 			modes: map[string]authorizationapi.SubjectAccessReviewStatus{
-				"featureOffClientOptOut": authorizationapi.SubjectAccessReviewStatus{
+				"featureOffClientOptOut": {
 					Denied: true, // As the authorizer tried to construct a conditional deny, it fails closed as Deny
 					Reason: "authorizer tried to return conditional decision, but the ConditionalAuthorization feature gate is disabled",
 				},
-				"featureOffClientOptIn": authorizationapi.SubjectAccessReviewStatus{
+				"featureOffClientOptIn": {
 					Denied: true, // As the authorizer tried to construct a conditional deny, it fails closed as Deny
 					Reason: "authorizer tried to return conditional decision, but the ConditionalAuthorization feature gate is disabled",
 				},
-				"featureOnClientOptOut": authorizationapi.SubjectAccessReviewStatus{
+				"featureOnClientOptOut": {
 					Denied: true, // As the authorizer tried to construct a conditional deny, it fails closed as Deny
 					Reason: "failed closed: tried to return conditional decision to conditions-unaware authorizer",
 				},
-				"featureOnClientOptIn": authorizationapi.SubjectAccessReviewStatus{
+				"featureOnClientOptIn": {
 					ConditionalDecision: &authorizationapi.ConditionsAwareDecision{
 						Type: authorizationapi.ConditionsAwareDecisionTypeConditionsMap,
 						ConditionsMap: &authorizationapi.ConditionsMap{
@@ -852,19 +852,19 @@ func TestSARStatusFromAuthorize(t *testing.T) {
 			name:         "union",
 			makeDecision: makeUnionDecision,
 			modes: map[string]authorizationapi.SubjectAccessReviewStatus{
-				"featureOffClientOptOut": authorizationapi.SubjectAccessReviewStatus{
+				"featureOffClientOptOut": {
 					Denied: true, // As the authorizer tried to construct a conditional deny, it fails closed as Deny
 					Reason: "authorizer tried to return conditional decision, but the ConditionalAuthorization feature gate is disabled",
 				},
-				"featureOffClientOptIn": authorizationapi.SubjectAccessReviewStatus{
+				"featureOffClientOptIn": {
 					Denied: true, // As the authorizer tried to construct a conditional deny, it fails closed as Deny
 					Reason: "authorizer tried to return conditional decision, but the ConditionalAuthorization feature gate is disabled",
 				},
-				"featureOnClientOptOut": authorizationapi.SubjectAccessReviewStatus{
+				"featureOnClientOptOut": {
 					Denied: true, // As the authorizer tried to construct a conditional deny, it fails closed as Deny
 					Reason: "failed closed: tried to return conditional decision to conditions-unaware authorizer",
 				},
-				"featureOnClientOptIn": authorizationapi.SubjectAccessReviewStatus{
+				"featureOnClientOptIn": {
 					ConditionalDecision: &authorizationapi.ConditionsAwareDecision{
 						Type: authorizationapi.ConditionsAwareDecisionTypeUnion,
 						Union: []authorizationapi.ConditionsAwareDecision{
