@@ -65,7 +65,8 @@ message AuthorizationConditionsReview {
   optional AuthorizationConditionsResponse response = 3;
 }
 
-// AuthorizationConditionsTargetAdmissionControl contains the data available
+// AuthorizationConditionsTargetAdmissionControl contains the data available during admission control,
+// against which authorization decisions can be written. It follows the same structure as AdmissionReview.
 message AuthorizationConditionsTargetAdmissionControl {
   // RequestKind is the fully-qualified type of the original API request (for example, v1.Pod or autoscaling.v1.Scale).
   // If this is specified and differs from the value in "kind", an equivalent match and conversion was performed.
