@@ -169,7 +169,7 @@ func (r *reloadableAuthorizerResolver) newForConfig(authzConfig *authzconfig.Aut
 					r.initialConfig.CustomDial,
 				)
 				if err != nil {
-					return nil, nil, fmt.Errorf("failed to load conditions review kubeconfig context %q: %v", cr.KubeConfigContextName, err)
+					return nil, nil, fmt.Errorf("failed to load conditions review kubeconfig context %q: %w", cr.KubeConfigContextName, err)
 				}
 				conditionsReviewVersion = cr.Version
 			}

@@ -311,7 +311,7 @@ func withCompoundAuthorization(handler http.Handler, compoundAuthorizer authoriz
 			filters.DecisionAnnotationKey, filters.DecisionForbid,
 			filters.ReasonAnnotationKey, reason)
 		responsewriters.Forbidden(attrs, w, req, reason, s)
-		return
+		// return
 	})
 }
 

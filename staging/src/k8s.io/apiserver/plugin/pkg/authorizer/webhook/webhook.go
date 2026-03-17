@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -283,12 +284,7 @@ func shouldFailWithDeny(decision authorizationv1.ConditionsAwareDecision) bool {
 		}
 		return false
 	case authorizationv1.ConditionsAwareDecisionTypeUnion:
-		for _, subDecision := range decision.Union {
-			if shouldFailWithDeny(subDecision) {
-				return true
-			}
-		}
-		return false
+		return slices.ContainsFunc(decision.Union, shouldFailWithDeny)
 	default:
 		return true
 	}

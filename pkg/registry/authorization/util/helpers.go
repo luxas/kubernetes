@@ -247,7 +247,7 @@ func BuildEvaluationError(evaluationError error, attrs authorizer.AttributesReco
 // SARStatusFromAuthorize invokes the authorizer as appropriate (with or without conditions support), and encodes the result into SAR status.
 func SARStatusFromAuthorize(ctx context.Context, authz authorizer.Authorizer, attrs authorizer.AttributesRecord, conditionalOpts *authorizationapi.ConditionalAuthorizationOptions) authorizationapi.SubjectAccessReviewStatus {
 	// Utilize the conditions-unaware flow when the feature gate is off or the client does not request/support it
-	if !utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) || conditionalOpts == nil || conditionalOpts.Enabled == false {
+	if !utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) || conditionalOpts == nil || !conditionalOpts.Enabled {
 		decision, reason, evaluationErr := authz.Authorize(ctx, attrs)
 
 		return authorizationapi.SubjectAccessReviewStatus{

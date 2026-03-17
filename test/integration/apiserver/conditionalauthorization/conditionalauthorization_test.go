@@ -80,7 +80,7 @@ func runConditionalAuthorizationTests(t *testing.T, featureEnabled bool) {
 	// - "default" context for SAR on /authorize
 	// - "conditions" context for ACR on /conditionsreview
 	kubeconfigPath := filepath.Join(dir, "webhook-kubeconfig.yaml")
-	if err := os.WriteFile(kubeconfigPath, []byte(fmt.Sprintf(`
+	if err := os.WriteFile(kubeconfigPath, fmt.Appendf(nil, `
 apiVersion: v1
 kind: Config
 clusters:
@@ -104,7 +104,7 @@ contexts:
 current-context: default
 users:
 - name: test
-`, webhookServer.server.URL+"/authorize", webhookServer.server.URL+"/conditionsreview")), 0644); err != nil {
+`, webhookServer.server.URL+"/authorize", webhookServer.server.URL+"/conditionsreview"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -117,7 +117,7 @@ users:
       kubeConfigContextName: conditions
       version: v1alpha1`
 	}
-	if err := os.WriteFile(authzConfigPath, []byte(fmt.Sprintf(`
+	if err := os.WriteFile(authzConfigPath, fmt.Appendf(nil, `
 apiVersion: apiserver.config.k8s.io/v1beta1
 kind: AuthorizationConfiguration
 authorizers:
@@ -135,7 +135,7 @@ authorizers:
       kubeConfigFile: %q%s
 - type: RBAC
   name: rbac
-`, kubeconfigPath, conditionsReviewSection)), 0644); err != nil {
+`, kubeconfigPath, conditionsReviewSection), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2279,7 +2279,7 @@ func (h *webhookServerHandler) serveSAR(w http.ResponseWriter, req *http.Request
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer req.Body.Close()
+	defer func() { _ = req.Body.Close() }()
 
 	h.handleSAR(w, body)
 }
@@ -2296,7 +2296,7 @@ func (h *webhookServerHandler) serveACR(w http.ResponseWriter, req *http.Request
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer req.Body.Close()
+	defer func() { _ = req.Body.Close() }()
 
 	h.handleACR(w, body)
 }
