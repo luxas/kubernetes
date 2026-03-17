@@ -284,6 +284,11 @@ func shouldFailWithDeny(decision authorizationv1.ConditionsAwareDecision) bool {
 		}
 		return false
 	case authorizationv1.ConditionsAwareDecisionTypeUnion:
+		// Note: This is slightly stricter than it needs to be, as what is returned is not necessarily pruned
+		// the way the union constructor would do it. For example, Union[NoOpinion, Allow, ConditionsMap],
+		// where the ConditionsMap has some Deny condition, yields shouldFailWithDeny == true, even though
+		// that whole Union is equal to an Allow, in fact. However, the approximation is stricter than it needs
+		// to be here, which is good for safety.
 		return slices.ContainsFunc(decision.Union, shouldFailWithDeny)
 	default:
 		return true
@@ -291,13 +296,7 @@ func shouldFailWithDeny(decision authorizationv1.ConditionsAwareDecision) bool {
 }
 
 func (w *WebhookAuthorizer) ConditionsAwareAuthorize(ctx context.Context, attr authorizer.Attributes) authorizer.ConditionsAwareDecision {
-	r := &authorizationv1.SubjectAccessReview{
-		Spec: authorizationv1.SubjectAccessReviewSpec{
-			ConditionalAuthorization: &authorizationv1.ConditionalAuthorizationOptions{
-				Enabled: true,
-			},
-		},
-	}
+	r := &authorizationv1.SubjectAccessReview{}
 	if user := attr.GetUser(); user != nil {
 		r.Spec = authorizationv1.SubjectAccessReviewSpec{
 			User:   user.GetName(),
@@ -305,6 +304,9 @@ func (w *WebhookAuthorizer) ConditionsAwareAuthorize(ctx context.Context, attr a
 			Groups: user.GetGroups(),
 			Extra:  convertToSARExtra(user.GetExtra()),
 		}
+	}
+	r.Spec.ConditionalAuthorization = &authorizationv1.ConditionalAuthorizationOptions{
+		Enabled: true,
 	}
 
 	if attr.IsResourceRequest() {
@@ -435,6 +437,11 @@ func (w *WebhookAuthorizer) EvaluateConditions(ctx context.Context, decision aut
 		return decision.UnconditionalParts()
 	}
 
+	// Fail closed when evaluation is not supported
+	if w.authorizationConditionsReviewer == nil {
+		return decision.FailClosedDecision(), "failed closed", fmt.Errorf("no authorization conditions review client configured for the webhook authorizer, cannot evaluate conditions")
+	}
+
 	// TODO(luxas): Use builtin evaluators to resolve as much as possible of the ConditionsMap or Union
 
 	r := &authorizationv1alpha1.AuthorizationConditionsReview{
@@ -480,7 +487,7 @@ func (w *WebhookAuthorizer) EvaluateConditions(ctx context.Context, decision aut
 	if err := webhook.WithExponentialBackoff(ctx, w.retryBackoff, func() error {
 		var acrErr error
 		result, _, acrErr = w.authorizationConditionsReviewer.Create(ctx, r, metav1.CreateOptions{})
-		// TODO: add metrics
+		// TODO(luxas): add metrics
 
 		return acrErr
 	}, webhook.DefaultShouldRetry); err != nil {
