@@ -2001,6 +2001,224 @@ authorizers:
 				t.Errorf("expected ConditionalDecision to be nil for unconditional deny, got: %+v", response.Status.ConditionalDecision)
 			}
 		})
+
+		// Tests for conditional decision fold-down behavior.
+		//
+		// When the feature gate is enabled but a request is not subject to conditional
+		// authorization (either because the verb is not an admission verb, or because
+		// the resource is on the admission exclusion list), the conditional decision
+		// returned by the webhook is folded down by the regular Authorize() path:
+		//   - Any Deny condition in the decision → DecisionDeny → HTTP 403
+		//   - No Deny condition → DecisionNoOpinion → passes to next authorizer in chain
+		//
+		// This means that:
+		//  a) Requests not supported by conditional authorization (e.g. GET/LIST):
+		//     the client gets 403 if the fold-down is Deny, or 200 if fold-down is NoOpinion
+		//     and a subsequent authorizer (RBAC) allows it.
+		//  b) Requests for resources excluded from admission (e.g. create SubjectAccessReview):
+		//     same fold-down logic, covering all four combinations of (Deny/NoOpinion) × (no RBAC/RBAC allows).
+
+		// Case (a): GET request (verb not in admissionVerbs, classifier returns false).
+		// The webhook returns a conditional decision, but Authorize() is called, not
+		// ConditionsAwareAuthorize(), so the fold-down logic in Authorize() applies.
+		t.Run("fold down for non-admission verb (GET configmap)", func(t *testing.T) {
+			// Pre-create a ConfigMap as admin for the GET tests.
+			if _, err := adminClient.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{Name: "fold-test-cm"},
+			}, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+				t.Fatal(err)
+			}
+
+			// Conditional with Deny condition → fold to Deny → 403, even without RBAC.
+			t.Run("conditional with deny condition folds to deny", func(t *testing.T) {
+				webhookServer.handler.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
+					if sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "configmaps" {
+						sar.Status.ConditionalDecision = &authorizationv1.ConditionsAwareDecision{
+							Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
+							ConditionsMap: &authorizationv1.ConditionsMap{
+								Conditions: []authorizationv1.Condition{{
+									ID: "deny-all", Effect: authorizationv1.ConditionEffectDeny,
+									Condition: "true", Type: "opaque",
+								}},
+							},
+						}
+					}
+				}
+				userCfg := rest.CopyConfig(server.ClientConfig)
+				userCfg.Impersonate.UserName = "fold-get-deny-user"
+				_, err := clientset.NewForConfigOrDie(userCfg).CoreV1().ConfigMaps("test-ns").Get(context.TODO(), "fold-test-cm", metav1.GetOptions{})
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if !apierrors.IsForbidden(err) && !apierrors.IsUnauthorized(err) {
+					t.Fatalf("expected Forbidden or Unauthorized, got: %v", err)
+				}
+			})
+
+			// Conditional without Deny → fold to NoOpinion → RBAC allows → 200.
+			t.Run("conditional without deny folds to no-opinion, RBAC allows", func(t *testing.T) {
+				// Reset sarHandler to nil first so that the SAR polling inside
+				// GrantUserAuthorization (which checks "get configmaps") is not
+				// intercepted by the previous sub-test's conditional-Deny handler.
+				webhookServer.handler.sarHandler = nil
+				userName := "fold-get-noop-rbac-user"
+				authutil.GrantUserAuthorization(t, t.Context(), adminClient, userName,
+					rbacv1.PolicyRule{
+						Verbs:     []string{"get"},
+						APIGroups: []string{""},
+						Resources: []string{"configmaps"},
+					},
+				)
+				webhookServer.handler.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
+					if sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "configmaps" {
+						sar.Status.ConditionalDecision = &authorizationv1.ConditionsAwareDecision{
+							Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
+							ConditionsMap: &authorizationv1.ConditionsMap{
+								Conditions: []authorizationv1.Condition{{
+									ID: "allow-all", Effect: authorizationv1.ConditionEffectAllow,
+									Condition: "true", Type: "opaque",
+								}},
+							},
+						}
+					}
+				}
+				userCfg := rest.CopyConfig(server.ClientConfig)
+				userCfg.Impersonate.UserName = userName
+				_, err := clientset.NewForConfigOrDie(userCfg).CoreV1().ConfigMaps("test-ns").Get(context.TODO(), "fold-test-cm", metav1.GetOptions{})
+				if err != nil {
+					t.Fatalf("expected request to succeed, got: %v", err)
+				}
+			})
+		})
+
+		// Case (b): SubjectAccessReview create (resource is on the admission exclusion list,
+		// so conditionalRequestClassifier returns false → regular Authorize() path).
+		// Tests all four combinations of fold outcome × RBAC state.
+		t.Run("fold down for SubjectAccessReview create (excluded from admission)", func(t *testing.T) {
+			// newSAR returns a minimal SAR payload to use in each sub-test.
+			newSAR := func() *authorizationv1.SubjectAccessReview {
+				return &authorizationv1.SubjectAccessReview{
+					Spec: authorizationv1.SubjectAccessReviewSpec{
+						ResourceAttributes: &authorizationv1.ResourceAttributes{
+							Verb: "get", Group: "", Version: "v1",
+							Resource: "configmaps", Namespace: "test-ns",
+						},
+						User: "some-subject",
+					},
+				}
+			}
+
+			// setConditionalForSARCreate installs a sarHandler that returns the given
+			// conditional decision when the webhook is asked to authorize a SAR create,
+			// and NoOpinion for all other resources.
+			setConditionalForSARCreate := func(decision *authorizationv1.ConditionsAwareDecision) {
+				webhookServer.handler.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
+					if sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "subjectaccessreviews" {
+						sar.Status.ConditionalDecision = decision
+					}
+				}
+			}
+
+			conditionalWithDeny := &authorizationv1.ConditionsAwareDecision{
+				Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
+				ConditionsMap: &authorizationv1.ConditionsMap{
+					Conditions: []authorizationv1.Condition{{
+						ID: "deny-all", Effect: authorizationv1.ConditionEffectDeny,
+						Condition: "true", Type: "opaque",
+					}},
+				},
+			}
+			conditionalWithoutDeny := &authorizationv1.ConditionsAwareDecision{
+				Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
+				ConditionsMap: &authorizationv1.ConditionsMap{
+					Conditions: []authorizationv1.Condition{{
+						ID: "allow-all", Effect: authorizationv1.ConditionEffectAllow,
+						Condition: "true", Type: "opaque",
+					}},
+				},
+			}
+
+			// Case 1: fold to Deny (has Deny condition), no RBAC → 403.
+			t.Run("fold to deny, no RBAC", func(t *testing.T) {
+				setConditionalForSARCreate(conditionalWithDeny)
+				userCfg := rest.CopyConfig(server.ClientConfig)
+				userCfg.Impersonate.UserName = "fold-sar-deny-no-rbac-user"
+				_, err := clientset.NewForConfigOrDie(userCfg).AuthorizationV1().SubjectAccessReviews().Create(context.TODO(), newSAR(), metav1.CreateOptions{})
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if !apierrors.IsForbidden(err) && !apierrors.IsUnauthorized(err) {
+					t.Fatalf("expected Forbidden or Unauthorized, got: %v", err)
+				}
+			})
+
+			// Case 2: fold to Deny (has Deny condition), RBAC allows SAR creates → 403.
+			// Deny short-circuits the union authorizer chain, so RBAC is never consulted.
+			t.Run("fold to deny, RBAC allows SAR creates", func(t *testing.T) {
+				userName := "fold-sar-deny-with-rbac-user"
+
+				// Reset sarHandler to nil first so that the SAR polling inside
+				// GrantUserAuthorization (which checks "create subjectaccessreviews") is not
+				// intercepted by the previous sub-test's webhook authorizer handler.
+				webhookServer.handler.sarHandler = nil
+				// When this function returns, userName can successfully create SARs
+				authutil.GrantUserAuthorization(t, t.Context(), adminClient, userName,
+					rbacv1.PolicyRule{
+						Verbs:     []string{"create"},
+						APIGroups: []string{"authorization.k8s.io"},
+						Resources: []string{"subjectaccessreviews"},
+					},
+				)
+				setConditionalForSARCreate(conditionalWithDeny)
+				userCfg := rest.CopyConfig(server.ClientConfig)
+				userCfg.Impersonate.UserName = userName
+				_, err = clientset.NewForConfigOrDie(userCfg).AuthorizationV1().SubjectAccessReviews().Create(context.TODO(), newSAR(), metav1.CreateOptions{})
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if !apierrors.IsForbidden(err) && !apierrors.IsUnauthorized(err) {
+					t.Fatalf("expected Forbidden or Unauthorized, got: %v", err)
+				}
+			})
+
+			// Case 3: fold to NoOpinion (no Deny condition), no RBAC → 403.
+			t.Run("fold to no-opinion, no RBAC", func(t *testing.T) {
+				setConditionalForSARCreate(conditionalWithoutDeny)
+				userCfg := rest.CopyConfig(server.ClientConfig)
+				userCfg.Impersonate.UserName = "fold-sar-noop-no-rbac-user"
+				_, err := clientset.NewForConfigOrDie(userCfg).AuthorizationV1().SubjectAccessReviews().Create(context.TODO(), newSAR(), metav1.CreateOptions{})
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if !apierrors.IsForbidden(err) && !apierrors.IsUnauthorized(err) {
+					t.Fatalf("expected Forbidden or Unauthorized, got: %v", err)
+				}
+			})
+
+			// Case 4: fold to NoOpinion (no Deny condition), RBAC allows SAR creates → 200.
+			// NoOpinion passes to the next authorizer in the chain, where RBAC allows.
+			t.Run("fold to no-opinion, RBAC allows SAR creates", func(t *testing.T) {
+				// Reset the sarHandler to no-op so that the SAR polling inside
+				// GrantUserAuthorization is not affected by the previous test's handler.
+				// Then install the conditional handler only after RBAC is ready.
+				webhookServer.handler.sarHandler = nil
+				userName := "fold-sar-noop-with-rbac-user"
+				authutil.GrantUserAuthorization(t, t.Context(), adminClient, userName,
+					rbacv1.PolicyRule{
+						Verbs:     []string{"create"},
+						APIGroups: []string{"authorization.k8s.io"},
+						Resources: []string{"subjectaccessreviews"},
+					},
+				)
+				setConditionalForSARCreate(conditionalWithoutDeny)
+				userCfg := rest.CopyConfig(server.ClientConfig)
+				userCfg.Impersonate.UserName = userName
+				_, err := clientset.NewForConfigOrDie(userCfg).AuthorizationV1().SubjectAccessReviews().Create(context.TODO(), newSAR(), metav1.CreateOptions{})
+				if err != nil {
+					t.Fatalf("expected request to succeed, got: %v", err)
+				}
+			})
+		})
 	}
 }
 
