@@ -729,7 +729,7 @@ func TestConditionsAwareAuthorize_EndToEnd(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -777,7 +777,7 @@ func TestEvaluateConditions_EndToEnd(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer acrServer.Close()
 
@@ -831,7 +831,7 @@ func conditionsReviewConfigFromTLSServer(server *httptest.Server, _ string) (*re
 	if err != nil {
 		return nil, err
 	}
-	defer os.Remove(tempfile.Name())
+	defer func() { _ = os.Remove(tempfile.Name()) }()
 
 	caCertPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
 	config := v1.Config{
