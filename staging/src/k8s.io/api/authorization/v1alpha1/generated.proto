@@ -56,11 +56,11 @@ message AuthorizationConditionsReview {
   // +optional
   optional .k8s.io.apimachinery.pkg.apis.meta.v1.ObjectMeta metadata = 1;
 
-  // Request describes the attributes for the authorization conditions request.
+  // request describes the attributes for the authorization conditions request.
   // +optional
   optional AuthorizationConditionsRequest request = 2;
 
-  // Response describes the attributes for the authorization conditions response.
+  // response describes the attributes for the authorization conditions response.
   // +optional
   optional AuthorizationConditionsResponse response = 3;
 }
@@ -68,7 +68,7 @@ message AuthorizationConditionsReview {
 // AuthorizationConditionsTargetAdmissionControl contains the data available during admission control,
 // against which authorization decisions can be written. It follows the same structure as AdmissionReview.
 message AuthorizationConditionsTargetAdmissionControl {
-  // RequestKind is the fully-qualified type of the original API request (for example, v1.Pod or autoscaling.v1.Scale).
+  // requestKind is the fully-qualified type of the original API request (for example, v1.Pod or autoscaling.v1.Scale).
   // If this is specified and differs from the value in "kind", an equivalent match and conversion was performed.
   //
   // For example, if deployments can be modified via apps/v1 and apps/v1beta1, and a webhook registered a rule of
@@ -81,7 +81,7 @@ message AuthorizationConditionsTargetAdmissionControl {
   // +optional
   optional .k8s.io.apimachinery.pkg.apis.meta.v1.GroupVersionKind requestKind = 14;
 
-  // RequestResource is the fully-qualified resource of the original API request (for example, v1.pods).
+  // requestResource is the fully-qualified resource of the original API request (for example, v1.pods).
   // If this is specified and differs from the value in "resource", an equivalent match and conversion was performed.
   //
   // For example, if deployments can be modified via apps/v1 and apps/v1beta1, and a webhook registered a rule of
@@ -94,42 +94,42 @@ message AuthorizationConditionsTargetAdmissionControl {
   // +optional
   optional .k8s.io.apimachinery.pkg.apis.meta.v1.GroupVersionResource requestResource = 15;
 
-  // RequestSubResource is the name of the subresource of the original API request, if any (for example, "status" or "scale")
+  // requestSubResource is the name of the subresource of the original API request, if any (for example, "status" or "scale")
   // If this is specified and differs from the value in "subResource", an equivalent match and conversion was performed.
   // See documentation for the "matchPolicy" field in the webhook configuration type.
   // +optional
   optional string requestSubResource = 16;
 
-  // Name is the name of the object as presented in the request. On a CREATE operation, the client may omit name and
+  // name is the name of the object as presented in the request. On a CREATE operation, the client may omit name and
   // rely on the server to generate the name. If that is the case, this field will contain an empty string.
   // +optional
   optional string name = 5;
 
-  // Namespace is the namespace associated with the request (if any).
+  // namespace is the namespace associated with the request (if any).
   // +optional
   optional string namespace = 6;
 
-  // Operation is the operation being performed. This may be different than the operation
+  // operation is the operation being performed. This may be different than the operation
   // requested. e.g. a patch can result in either a CREATE or UPDATE Operation.
   optional string operation = 7;
 
-  // UserInfo is information about the requesting user
+  // userInfo is information about the requesting user
   optional .k8s.io.api.authentication.v1.UserInfo userInfo = 9;
 
-  // Object is the object from the incoming request.
+  // object is the object from the incoming request.
   // +optional
   optional .k8s.io.apimachinery.pkg.runtime.RawExtension object = 10;
 
-  // OldObject is the existing object. Only populated for DELETE and UPDATE requests.
+  // oldObject is the existing object. Only populated for DELETE and UPDATE requests.
   // +optional
   optional .k8s.io.apimachinery.pkg.runtime.RawExtension oldObject = 11;
 
-  // DryRun indicates that modifications will definitely not be persisted for this request.
+  // dryRun indicates that modifications will definitely not be persisted for this request.
   // Defaults to false.
   // +optional
   optional bool dryRun = 12;
 
-  // Options is the operation option structure of the operation being performed.
+  // options is the operation option structure of the operation being performed.
   // e.g. `meta.k8s.io/v1.DeleteOptions` or `meta.k8s.io/v1.CreateOptions`. This may be
   // different than the options the caller provided. e.g. for a patch request the performed
   // Operation might be a CREATE, in which case the Options will a
