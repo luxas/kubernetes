@@ -87,6 +87,7 @@ import (
 	"k8s.io/kubernetes/test/integration/framework"
 	testutils "k8s.io/kubernetes/test/utils"
 	"k8s.io/kubernetes/test/utils/ktesting"
+	"k8s.io/utils/ptr"
 )
 
 const (
@@ -814,6 +815,16 @@ func (impersonateAuthorizer) Authorize(ctx context.Context, a authorizer.Attribu
 	return authorizer.DecisionNoOpinion, "I can't allow that.  Go ask alice.", nil
 }
 
+// ConditionsAwareAuthorize is not conditions-aware, converts the Authorize decision.
+func (i impersonateAuthorizer) ConditionsAwareAuthorize(ctx context.Context, a authorizer.Attributes) authorizer.ConditionsAwareDecision {
+	return authorizer.ConditionsAwareDecisionFromParts(i.Authorize(ctx, a))
+}
+
+// EvaluateConditions is not supported by this authorizer.
+func (impersonateAuthorizer) EvaluateConditions(_ context.Context, _ authorizer.ConditionsAwareDecision, _ authorizer.ConditionsData) (authorizer.Decision, string, error) {
+	return authorizer.DecisionDeny, "", authorizer.ErrorConditionEvaluationNotSupported
+}
+
 func TestImpersonateIsForbidden(t *testing.T) {
 	tCtx := ktesting.Init(t)
 	kubeClient, kubeConfig, tearDownFn := framework.StartTestServer(tCtx, t, framework.TestServerSetup{
@@ -1014,7 +1025,7 @@ func TestImpersonateWithUID(t *testing.T) {
 			t.Fatalf("CSR spec was different than expected, -got, +want:\n %s", diff)
 		}
 
-		withUID := allowedImpersonationEvent("create", http.StatusCreated, "alice", "system:authenticated", "certificatesigningrequests", new("impersonate:user-info"))
+		withUID := allowedImpersonationEvent("create", http.StatusCreated, "alice", "system:authenticated", "certificatesigningrequests", ptr.To("impersonate:user-info"))
 		withUID.ImpersonatedUID = "1234"
 		assertImpersonationAuditEventsNoLatency(t, auditLogFile, user.APIServerUser, withUID)
 	})
@@ -1221,7 +1232,7 @@ func TestConstrainedImpersonation(t *testing.T) {
 		assertImpersonationAuditEvents(t, auditLogFile, "bob",
 			deniedImpersonationEvent("list", `pods is forbidden: User "bob" cannot impersonate-on:user-info:list resource "pods" in API group "" at the cluster scope`, "pods"),
 			deniedImpersonationEvent("list", `pods is forbidden: User "bob" cannot impersonate-on:user-info:list resource "pods" in API group "" at the cluster scope`, "pods"),
-			allowedImpersonationEvent("list", http.StatusOK, "alice", "system:authenticated", "pods", new("impersonate:user-info")),
+			allowedImpersonationEvent("list", http.StatusOK, "alice", "system:authenticated", "pods", ptr.To("impersonate:user-info")),
 			deniedImpersonationEvent("watch", `pods is forbidden: User "bob" cannot impersonate-on:user-info:watch resource "pods" in API group "" at the cluster scope`, "pods"),
 		)
 	})
@@ -1305,7 +1316,7 @@ func TestConstrainedImpersonation(t *testing.T) {
 		assertImpersonationAuditEvents(t, auditLogFile, "bob",
 			deniedImpersonationEvent("list", `pods is forbidden: User "bob" cannot impersonate-on:arbitrary-node:list resource "pods" in API group "" at the cluster scope`, "pods"),
 			deniedImpersonationEvent("list", `nodes.authentication.k8s.io "node1" is forbidden: User "bob" cannot impersonate:arbitrary-node resource "nodes" in API group "authentication.k8s.io" at the cluster scope`, "pods"),
-			allowedImpersonationEvent("list", http.StatusOK, "system:node:node1", "system:authenticated,system:nodes", "pods", new("impersonate:arbitrary-node")),
+			allowedImpersonationEvent("list", http.StatusOK, "system:node:node1", "system:authenticated,system:nodes", "pods", ptr.To("impersonate:arbitrary-node")),
 		)
 	})
 
@@ -1386,7 +1397,7 @@ func TestConstrainedImpersonation(t *testing.T) {
 			deniedImpersonationEvent("list", `pods is forbidden: User "system:serviceaccount:default:sa2" cannot impersonate-on:arbitrary-node:list resource "pods" in API group "" at the cluster scope`, "pods"),
 		)
 		assertImpersonationAuditEvents(t, auditLogFile, "system:serviceaccount:default:sa1",
-			allowedImpersonationEvent("list", http.StatusOK, "system:node:node1", "system:authenticated,system:nodes", "pods", new("impersonate:associated-node")),
+			allowedImpersonationEvent("list", http.StatusOK, "system:node:node1", "system:authenticated,system:nodes", "pods", ptr.To("impersonate:associated-node")),
 		)
 	})
 
@@ -1830,6 +1841,16 @@ type trackingAuthorizer struct {
 func (a *trackingAuthorizer) Authorize(ctx context.Context, attributes authorizer.Attributes) (authorizer.Decision, string, error) {
 	a.requestAttributes = append(a.requestAttributes, attributes)
 	return authorizer.DecisionAllow, "", nil
+}
+
+// ConditionsAwareAuthorize is not conditions-aware, converts the Authorize decision.
+func (a *trackingAuthorizer) ConditionsAwareAuthorize(ctx context.Context, attributes authorizer.Attributes) authorizer.ConditionsAwareDecision {
+	return authorizer.ConditionsAwareDecisionFromParts(a.Authorize(ctx, attributes))
+}
+
+// EvaluateConditions is not supported by this authorizer.
+func (a *trackingAuthorizer) EvaluateConditions(_ context.Context, _ authorizer.ConditionsAwareDecision, _ authorizer.ConditionsData) (authorizer.Decision, string, error) {
+	return authorizer.DecisionDeny, "", authorizer.ErrorConditionEvaluationNotSupported
 }
 
 // TestAuthorizationAttributeDetermination tests that authorization attributes are built correctly
