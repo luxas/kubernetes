@@ -35,14 +35,15 @@ type authzResult struct {
 }
 
 type cachingAuthorizer struct {
-	authorizer authorizer.Authorizer
+	authorizer authorizer.UnconditionalAuthorizer
 	decisions  map[string]authzResult
 }
 
 // NewCachingAuthorizer returns an authorizer that caches decisions for the duration
-// of the authorizers use.  Intended to be used for short-lived operations such as
+// of the authorizers use. Intended to be used for short-lived operations such as
 // the handling of a request in the admission chain, and then discarded.
-func NewCachingAuthorizer(in authorizer.Authorizer) authorizer.Authorizer {
+// It only supports functioning as an unconditional authorizer for now.
+func NewCachingAuthorizer(in authorizer.UnconditionalAuthorizer) authorizer.UnconditionalAuthorizer {
 	return &cachingAuthorizer{
 		authorizer: in,
 		decisions:  make(map[string]authzResult),

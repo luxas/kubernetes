@@ -24,6 +24,10 @@ import (
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 )
 
+// alwaysAllowAuthorizer implements the Authorizer and RuleResolver interfaces
+var _ authorizer.Authorizer = alwaysAllowAuthorizer{}
+var _ authorizer.RuleResolver = alwaysAllowAuthorizer{}
+
 // alwaysAllowAuthorizer is an implementation of authorizer.Attributes
 // which always says yes to an authorization request.
 // It is useful in tests and when using kubernetes in an open manner.
@@ -52,6 +56,10 @@ func NewAlwaysAllowAuthorizer() *alwaysAllowAuthorizer {
 	return new(alwaysAllowAuthorizer)
 }
 
+// alwaysDenyAuthorizer implements the Authorizer and RuleResolver interfaces
+var _ authorizer.Authorizer = alwaysDenyAuthorizer{}
+var _ authorizer.RuleResolver = alwaysDenyAuthorizer{}
+
 // alwaysDenyAuthorizer is an implementation of authorizer.Attributes
 // which always says no to an authorization request.
 // It is useful in unit tests to force an operation to be forbidden.
@@ -68,6 +76,9 @@ func (alwaysDenyAuthorizer) RulesFor(ctx context.Context, user user.Info, namesp
 func NewAlwaysDenyAuthorizer() *alwaysDenyAuthorizer {
 	return new(alwaysDenyAuthorizer)
 }
+
+// privilegedGroupAuthorizer implements the Authorizer interface
+var _ authorizer.Authorizer = &privilegedGroupAuthorizer{}
 
 type privilegedGroupAuthorizer struct {
 	groups []string

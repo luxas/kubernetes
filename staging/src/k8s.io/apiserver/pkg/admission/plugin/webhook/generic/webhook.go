@@ -76,17 +76,18 @@ type Webhook struct {
 	objectMatcher     *object.Matcher
 	dispatcher        Dispatcher
 	filterCompiler    cel.ConditionCompiler
-	authorizer        authorizer.Authorizer
+	authorizer        authorizer.UnconditionalAuthorizer
 
 	// Lifecycle.
 	stopCh <-chan struct{}
 }
 
 var (
-	_ genericadmissioninit.WantsExternalKubeClientSet = &Webhook{}
-	_ genericadmissioninit.WantsDrainedNotification   = &Webhook{}
-	_ genericadmissioninit.WantsAPIServerID           = &Webhook{}
-	_ admission.Interface                             = &Webhook{}
+	_ genericadmissioninit.WantsExternalKubeClientSet   = &Webhook{}
+	_ genericadmissioninit.WantsDrainedNotification     = &Webhook{}
+	_ genericadmissioninit.WantsAPIServerID             = &Webhook{}
+	_ genericadmissioninit.WantsUnconditionalAuthorizer = &Webhook{}
+	_ admission.Interface                               = &Webhook{}
 )
 
 type sourceFactory func(f informers.SharedInformerFactory) Source
@@ -195,7 +196,7 @@ func (a *Webhook) SetExternalKubeInformerFactory(f informers.SharedInformerFacto
 	a.apiSource = a.apiSourceFactory(f)
 }
 
-func (a *Webhook) SetAuthorizer(authorizer authorizer.Authorizer) {
+func (a *Webhook) SetUnconditionalAuthorizer(authorizer authorizer.UnconditionalAuthorizer) {
 	a.authorizer = authorizer
 }
 
