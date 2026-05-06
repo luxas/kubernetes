@@ -79,6 +79,7 @@ type Config struct {
 // stopCh is used to shut down config reload goroutines when the server is shutting down.
 //
 // Note: the cel compiler construction depends on feature gates and the compatibility version to be initialized.
+// The full authorizer.Authorizer interface is returned here, as any built Authorizer must implement all methods.
 func (config Config) New(ctx context.Context, serverID string) (authorizer.Authorizer, authorizer.RuleResolver, error) {
 	if len(config.AuthorizationConfiguration.Authorizers) == 0 {
 		return nil, nil, fmt.Errorf("at least one authorization mode must be passed")
