@@ -341,30 +341,32 @@ theorem authorization_equivalence {Attrs Data CM : Type}
     -- Base case: both return .NoOpinion
     rfl
   | cons a rest ih =>
-    -- Inductive case: show the step for authorizer `a` followed by `rest`
-    simp only [idealChain, implChain]
-    -- Case split on what `a.authorize attrs` returns (phase 1 decision)
+    -- Inductive case: show the step for authorizer `a` followed by `rest`.
+    -- We case-split on what `a.authorize attrs` returns (phase 1 decision),
+    -- then use the correctness axioms to rewrite `a.fullAuthorize` in idealChain
+    -- to match implChain. `simp` is used to force iota-reduction of match
+    -- expressions on known constructors after rewriting.
     cases hauth : a.authorize attrs with
     | Allow =>
       -- Phase 1 returned Allow.
       -- By ax_allow: a.fullAuthorize attrs data = .Allow
       -- So idealChain returns .Allow, and implChain returns .Allow.
-      rw [a.ax_allow attrs data hauth]
+      simp [idealChain, implChain, a.ax_allow attrs data hauth, hauth]
     | Deny =>
       -- Phase 1 returned Deny.
       -- By ax_deny: a.fullAuthorize attrs data = .Deny
-      rw [a.ax_deny attrs data hauth]
+      simp [idealChain, implChain, a.ax_deny attrs data hauth, hauth]
     | NoOpinion =>
       -- Phase 1 returned NoOpinion.
       -- By ax_noOpinion: a.fullAuthorize attrs data = .NoOpinion
       -- Both sides recurse on `rest`; apply the induction hypothesis.
-      rw [a.ax_noOpinion attrs data hauth]
+      simp only [idealChain, implChain, hauth, a.ax_noOpinion attrs data hauth]
       exact ih
     | Conditional cm =>
       -- Phase 1 returned Conditional(cm).
       -- By ax_conditional: a.fullAuthorize attrs data = a.evaluateConditions cm data
-      rw [a.ax_conditional attrs data cm hauth]
-      -- Now the goal is:
+      simp only [idealChain, implChain, hauth, a.ax_conditional attrs data cm hauth]
+      -- Now the goal is (after reduction):
       --   (match a.evaluateConditions cm data with
       --    | Allow => Allow | Deny => Deny | NoOpinion => idealChain rest attrs data)
       --   = a.evaluateConditions cm data
@@ -373,10 +375,10 @@ theorem authorization_equivalence {Attrs Data CM : Type}
       cases heval : a.evaluateConditions cm data with
       | Allow =>
         -- match .Allow with ... = .Allow, and RHS = .Allow
-        rfl
+        simp
       | Deny =>
         -- match .Deny with ... = .Deny, and RHS = .Deny
-        rfl
+        simp
       | NoOpinion =>
         -- This case is impossible by ax_no_noop
         exact absurd heval (a.ax_no_noop attrs data cm hauth)
