@@ -9,3 +9,5 @@
 - The transpiled code should be such that the CanBecomeAllowed is directly derived from the ConditionsMap structure, not kept abstract
 - We should make framework to fuzz authorizers against the properties that are desired.
 - The Pipeline should be strengthened, and we should keep WithAuthorization and ConditionsEnforcement separate. Distinguish between 
+- Error handling should be taken into account
+- Make sure there is no user-facing behavioral change between the two, which includes the gotcha of 500 (authorize with error) vs 403.

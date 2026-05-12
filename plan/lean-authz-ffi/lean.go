@@ -3,9 +3,9 @@
 // as the serialization format.
 //
 // Build prerequisites:
-//   1. cd plan/lean-authz && lake build TranspiledAuthzFFI:static TranspiledAuthz:static
-//   2. Ensure gmp and libuv are installed (brew install gmp libuv)
-package leanffi
+//  1. cd plan/lean-authz && lake build TranspiledAuthzFFI:static TranspiledAuthz:static
+//  2. Ensure gmp and libuv are installed (brew install gmp libuv)
+package leanauthzffi
 
 /*
 // Paths are set via CGO_CFLAGS and CGO_LDFLAGS environment variables.

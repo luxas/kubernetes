@@ -1,4 +1,4 @@
-package leanffi
+package leanauthzffi
 
 import (
 	"testing"
@@ -22,7 +22,7 @@ func TestCallLean_SingleAllow(t *testing.T) {
 		Handlers: []HandlerInput{{
 			Authorize:                "Allow",
 			ConditionsAwareAuthorize: "Allow",
-			CmCanBecomeAllowed:      false,
+			CmCanBecomeAllowed:       false,
 			EvaluateConditions:       "Allow",
 		}},
 	})
@@ -42,7 +42,7 @@ func TestCallLean_ConditionalAllow(t *testing.T) {
 		Handlers: []HandlerInput{{
 			Authorize:                "Allow",
 			ConditionsAwareAuthorize: "ConditionsMap",
-			CmCanBecomeAllowed:      true,
+			CmCanBecomeAllowed:       true,
 			EvaluateConditions:       "Allow",
 		}},
 	})
@@ -64,7 +64,7 @@ func TestCallLean_ConditionalDeniedByCBA(t *testing.T) {
 		Handlers: []HandlerInput{{
 			Authorize:                "NoOpinion",
 			ConditionsAwareAuthorize: "ConditionsMap",
-			CmCanBecomeAllowed:      false,
+			CmCanBecomeAllowed:       false,
 			EvaluateConditions:       "NoOpinion",
 		}},
 	})
@@ -92,13 +92,13 @@ func TestCallLean_ChainResumption(t *testing.T) {
 			{
 				Authorize:                "NoOpinion",
 				ConditionsAwareAuthorize: "ConditionsMap",
-				CmCanBecomeAllowed:      true,
+				CmCanBecomeAllowed:       true,
 				EvaluateConditions:       "NoOpinion",
 			},
 			{
 				Authorize:                "Allow",
 				ConditionsAwareAuthorize: "Allow",
-				CmCanBecomeAllowed:      false,
+				CmCanBecomeAllowed:       false,
 				EvaluateConditions:       "Allow",
 			},
 		},
