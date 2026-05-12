@@ -5,3 +5,7 @@
 - It should hold that `!isUnconditional(authorizer.ConditionsAwareAuthorize(...)) => authorizer.ConditionsAwareAuthorize(...) == authorizer.Authorize(...)`
   - One kind of "axiom"/property we want authorizers to satisfy is that `Authorize` always folds down soundly, that is, if it wanted to return a conditional with `effect=Deny`, it must return `decision=Deny`.
   - Another property of authorizers should be that if `authorizer.Authorize(...) == Allow => authorizer.ConditionsAwareAuthorize(...) == Allow`
+- The transpiled Lean code should have also the `Union` type.
+- The transpiled code should be such that the CanBecomeAllowed is directly derived from the ConditionsMap structure, not kept abstract
+- We should make framework to fuzz authorizers against the properties that are desired.
+- The Pipeline should be strengthened, and we should keep WithAuthorization and ConditionsEnforcement separate. Distinguish between 
