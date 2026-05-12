@@ -59,13 +59,26 @@ structure CoherentHandler extends Handler where
 -- Transpiled: union.Authorize (union.go:46-70)
 -- ============================================================================
 
-def Authorize : List Handler → Decision
+def UnionAuthorize : List Handler → Decision
   | [] => .NoOpinion
   | h :: rest =>
     match h.authorize with
     | .Allow     => .Allow
     | .Deny      => .Deny
-    | .NoOpinion => Authorize rest
+    | .NoOpinion => UnionAuthorize rest
+
+-- ============================================================================
+-- Transpiled: union.ConditionsAwareAuthorize (union.go:73-96)
+-- Builds the entry list, short-circuiting on ContainsAllowOrDeny.
+-- ============================================================================
+
+def UnionConditionsAwareAuthorize : List Handler → List (Handler × LeafDecision)
+  | [] => []
+  | h :: rest =>
+    let d := h.conditionsAwareAuthorize
+    match d with
+    | .Allow | .Deny => [(h, d)]  -- ContainsAllowOrDeny → short-circuit
+    | .NoOpinion | .ConditionsMap => (h, d) :: UnionConditionsAwareAuthorize rest
 
 -- ============================================================================
 -- Transpiled: union.EvaluateConditions loop (union.go:117-149)
@@ -75,44 +88,31 @@ def Authorize : List Handler → Decision
 -- `authzHandler[i]` — we pair them as `(Handler × LeafDecision)`.
 -- ============================================================================
 
-def EvaluateEntries : List (Handler × LeafDecision) → Decision
+def UnionEvaluateConditions : List (Handler × LeafDecision) → Decision
   | [] => .NoOpinion
   | (h, d) :: rest =>
     match d with
     | .Allow     => .Allow
     | .Deny      => .Deny
-    | .NoOpinion => EvaluateEntries rest
+    | .NoOpinion => UnionEvaluateConditions rest
     | .ConditionsMap =>
       match h.evaluateConditions with
       | .Allow     => .Allow
       | .Deny      => .Deny
-      | .NoOpinion => EvaluateEntries rest
-
--- ============================================================================
--- Transpiled: union.ConditionsAwareAuthorize (union.go:73-96)
--- Builds the entry list, short-circuiting on ContainsAllowOrDeny.
--- ============================================================================
-
-def BuildEntries : List Handler → List (Handler × LeafDecision)
-  | [] => []
-  | h :: rest =>
-    let d := h.conditionsAwareAuthorize
-    match d with
-    | .Allow | .Deny => [(h, d)]  -- ContainsAllowOrDeny → short-circuit
-    | .NoOpinion | .ConditionsMap => (h, d) :: BuildEntries rest
+      | .NoOpinion => UnionEvaluateConditions rest
 
 -- ============================================================================
 -- Transpiled: unionSlice.CanBecomeAllowed (conditions.go:910-926)
 -- ============================================================================
 
-def SliceCBA : List (Handler × LeafDecision) → Bool
+def UnionSliceCanBecomeAllowed : List (Handler × LeafDecision) → Bool
   | [] => false
   | (h, d) :: rest =>
     match d with
     | .Deny         => false
     | .Allow        => true
-    | .NoOpinion    => SliceCBA rest
-    | .ConditionsMap => h.cmCanBecomeAllowed || SliceCBA rest
+    | .NoOpinion    => UnionSliceCanBecomeAllowed rest
+    | .ConditionsMap => h.cmCanBecomeAllowed || UnionSliceCanBecomeAllowed rest
 
 -- ============================================================================
 -- Transpiled: withAuthorization + conditionsEnforcer combined
@@ -124,15 +124,15 @@ def SliceCBA : List (Handler × LeafDecision) → Bool
 -- ============================================================================
 
 def Pipeline (handlers : List Handler) : Decision :=
-  let entries := BuildEntries handlers
+  let entries := UnionConditionsAwareAuthorize handlers
   -- Step 1 (filter): check if unconditionally allowed.
   -- This happens when the first entry is Allow (short-circuited by BuildEntries).
   -- EvaluateEntries on such an entry returns Allow, so we can uniformly
   -- check CanBecomeAllowed (which is true for an Allow entry).
   -- Step 2 (filter): check CanBecomeAllowed
-  if SliceCBA entries then
+  if UnionSliceCanBecomeAllowed entries then
     -- Step 3 (enforcer): evaluate
-    EvaluateEntries entries
+    UnionEvaluateConditions entries
   else
     .Deny
 
@@ -145,31 +145,31 @@ def Pipeline (handlers : List Handler) : Decision :=
     "This logic directly maps 1:1 with Authorize()" -/
 theorem evaluateEntries_eq_authorize
     (handlers : List CoherentHandler)
-    : EvaluateEntries (BuildEntries (handlers.map CoherentHandler.toHandler))
-    = Authorize (handlers.map CoherentHandler.toHandler) := by
+    : UnionEvaluateConditions (UnionConditionsAwareAuthorize (handlers.map CoherentHandler.toHandler))
+    = UnionAuthorize (handlers.map CoherentHandler.toHandler) := by
   induction handlers with
   | nil => rfl
   | cons ch rest ih =>
-    simp only [List.map, Authorize]
+    simp only [List.map, UnionAuthorize]
     -- Unfold BuildEntries and EvaluateEntries for the head
-    show EvaluateEntries (BuildEntries (ch.toHandler :: rest.map CoherentHandler.toHandler))
+    show UnionEvaluateConditions (UnionConditionsAwareAuthorize (ch.toHandler :: rest.map CoherentHandler.toHandler))
        = match ch.toHandler.authorize with
-         | .Allow => .Allow | .Deny => .Deny | .NoOpinion => Authorize (rest.map CoherentHandler.toHandler)
+         | .Allow => .Allow | .Deny => .Deny | .NoOpinion => UnionAuthorize (rest.map CoherentHandler.toHandler)
     -- Case split on phase-1 result
     cases hca : ch.toHandler.conditionsAwareAuthorize with
     | Allow =>
       -- BuildEntries returns [(ch, Allow)]; EvaluateEntries returns Allow
       -- ax_allow: authorize = Allow
-      simp only [BuildEntries, hca, EvaluateEntries, ch.ax_allow hca]
+      simp only [UnionConditionsAwareAuthorize, hca, UnionEvaluateConditions, ch.ax_allow hca]
     | Deny =>
-      simp only [BuildEntries, hca, EvaluateEntries, ch.ax_deny hca]
+      simp only [UnionConditionsAwareAuthorize, hca, UnionEvaluateConditions, ch.ax_deny hca]
     | NoOpinion =>
       -- BuildEntries continues; both sides recurse
-      simp only [BuildEntries, hca, EvaluateEntries, ch.ax_noOpinion hca]
+      simp only [UnionConditionsAwareAuthorize, hca, UnionEvaluateConditions, ch.ax_noOpinion hca]
       exact ih
     | ConditionsMap =>
       -- BuildEntries continues; EvaluateEntries checks evaluateConditions
-      simp only [BuildEntries, hca, EvaluateEntries]
+      simp only [UnionConditionsAwareAuthorize, hca, UnionEvaluateConditions]
       rw [ch.ax_conditional hca]
       cases heval : ch.toHandler.evaluateConditions with
       | Allow     => simp
@@ -183,35 +183,35 @@ theorem evaluateEntries_eq_authorize
 /-- When `SliceCBA` is false, `EvaluateEntries` never returns Allow. -/
 theorem cba_sound
     (handlers : List CoherentHandler)
-    (hcba : SliceCBA (BuildEntries (handlers.map CoherentHandler.toHandler)) = false)
-    : EvaluateEntries (BuildEntries (handlers.map CoherentHandler.toHandler)) ≠ .Allow := by
+    (hcba : UnionSliceCanBecomeAllowed (UnionConditionsAwareAuthorize (handlers.map CoherentHandler.toHandler)) = false)
+    : UnionEvaluateConditions (UnionConditionsAwareAuthorize (handlers.map CoherentHandler.toHandler)) ≠ .Allow := by
   induction handlers with
-  | nil => simp [BuildEntries, EvaluateEntries]
+  | nil => simp [UnionConditionsAwareAuthorize, UnionEvaluateConditions]
   | cons ch rest ih =>
     simp only [List.map] at *
     -- Unfold BuildEntries in both the goal and hcba, keyed on hca
     cases hca : ch.toHandler.conditionsAwareAuthorize with
     | Allow =>
       -- SliceCBA [(ch, Allow)] = true, contradicts hcba = false
-      simp [BuildEntries, hca, SliceCBA] at hcba
+      simp [UnionConditionsAwareAuthorize, hca, UnionSliceCanBecomeAllowed] at hcba
     | Deny =>
       -- EvaluateEntries [(ch, Deny)] = Deny ≠ Allow
-      simp [BuildEntries, hca, EvaluateEntries]
+      simp [UnionConditionsAwareAuthorize, hca, UnionEvaluateConditions]
     | NoOpinion =>
       -- Recurse: both SliceCBA and EvaluateEntries pass through
-      have hcba' : SliceCBA (BuildEntries (List.map CoherentHandler.toHandler rest)) = false := by
-        simp [BuildEntries, hca, SliceCBA] at hcba; exact hcba
+      have hcba' : UnionSliceCanBecomeAllowed (UnionConditionsAwareAuthorize (List.map CoherentHandler.toHandler rest)) = false := by
+        simp [UnionConditionsAwareAuthorize, hca, UnionSliceCanBecomeAllowed] at hcba; exact hcba
       have goal := ih hcba'
-      simp [BuildEntries, hca, EvaluateEntries]; exact goal
+      simp [UnionConditionsAwareAuthorize, hca, UnionEvaluateConditions]; exact goal
     | ConditionsMap =>
       -- Split hcba into cmCanBecomeAllowed = false ∧ rest cba = false
       have hcba' : ch.toHandler.cmCanBecomeAllowed = false
-                 ∧ SliceCBA (BuildEntries (List.map CoherentHandler.toHandler rest)) = false := by
-        simp [BuildEntries, hca, SliceCBA, Bool.or_eq_false_iff] at hcba; exact hcba
+                 ∧ UnionSliceCanBecomeAllowed (UnionConditionsAwareAuthorize (List.map CoherentHandler.toHandler rest)) = false := by
+        simp [UnionConditionsAwareAuthorize, hca, UnionSliceCanBecomeAllowed, Bool.or_eq_false_iff] at hcba; exact hcba
       obtain ⟨hcba_cm, hcba_rest⟩ := hcba'
       have h_not_allow := ch.ax_cba_sound hca hcba_cm
       -- Unfold and case-split on evaluateConditions
-      simp only [BuildEntries, hca, EvaluateEntries]
+      simp only [UnionConditionsAwareAuthorize, hca, UnionEvaluateConditions]
       cases heval : ch.toHandler.evaluateConditions with
       | Allow     => exact absurd heval h_not_allow
       | Deny      => simp
@@ -229,14 +229,14 @@ def isAllowed : Decision → Bool
     Proven on the transpiled production code — no model gap. -/
 theorem transpiled_allows_iff
     (handlers : List CoherentHandler)
-    : isAllowed (Authorize (handlers.map CoherentHandler.toHandler))
+    : isAllowed (UnionAuthorize (handlers.map CoherentHandler.toHandler))
     = isAllowed (Pipeline (handlers.map CoherentHandler.toHandler)) := by
   simp only [Pipeline]
   -- Rewrite Authorize as EvaluateEntries using the core lemma
   rw [← evaluateEntries_eq_authorize handlers]
   -- Now both sides talk about EvaluateEntries on BuildEntries.
   -- Case split on SliceCBA.
-  cases hcba : SliceCBA (BuildEntries (handlers.map CoherentHandler.toHandler)) with
+  cases hcba : UnionSliceCanBecomeAllowed (UnionConditionsAwareAuthorize (handlers.map CoherentHandler.toHandler)) with
   | true =>
     -- Pipeline evaluates → same result
     simp
@@ -244,7 +244,7 @@ theorem transpiled_allows_iff
     -- Pipeline returns Deny; EvaluateEntries ≠ Allow (by cba_sound)
     simp [isAllowed]
     have h := cba_sound handlers hcba
-    cases heval : EvaluateEntries (BuildEntries (handlers.map CoherentHandler.toHandler)) with
+    cases heval : UnionEvaluateConditions (UnionConditionsAwareAuthorize (handlers.map CoherentHandler.toHandler)) with
     | Allow     => exact absurd heval h
     | Deny      => rfl
     | NoOpinion => rfl
@@ -252,8 +252,8 @@ theorem transpiled_allows_iff
 /-- **Full equality** when the pipeline proceeds (cba = true). -/
 theorem transpiled_eq_when_cba
     (handlers : List CoherentHandler)
-    (hcba : SliceCBA (BuildEntries (handlers.map CoherentHandler.toHandler)) = true)
-    : Authorize (handlers.map CoherentHandler.toHandler)
+    (hcba : UnionSliceCanBecomeAllowed (UnionConditionsAwareAuthorize (handlers.map CoherentHandler.toHandler)) = true)
+    : UnionAuthorize (handlers.map CoherentHandler.toHandler)
     = Pipeline (handlers.map CoherentHandler.toHandler) := by
   simp only [Pipeline, hcba, ite_true]
   exact (evaluateEntries_eq_authorize handlers).symm
