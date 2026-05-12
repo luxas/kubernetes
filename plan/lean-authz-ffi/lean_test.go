@@ -111,7 +111,7 @@ func TestCallLean_ChainResumption(t *testing.T) {
 		t.Errorf("expected Allow, got %s", result.UnionAuthorize)
 	}
 	// Pipeline: first=ConditionsMap(cba=true) → short-circuit collects both →
-	// EvaluateEntries: first evaluates to NoOpinion → continues → second=Allow
+	// UnionEvaluateConditions: first evaluates to NoOpinion → continues → second=Allow
 	if result.Pipeline != "Allow" {
 		t.Errorf("expected Allow pipeline, got %s", result.Pipeline)
 	}

@@ -117,10 +117,10 @@ type HandlerInput struct {
 
 // AuthzOutput contains all results computed by the Lean model.
 type AuthzOutput struct {
-	UnionAuthorize  string `json:"unionAuthorize"`
-	Pipeline        string `json:"pipeline"`
-	EvaluateEntries string `json:"evaluateEntries"`
-	SliceCBA        bool   `json:"sliceCBA"`
+	UnionAuthorize          string `json:"unionAuthorize"`
+	Pipeline                string `json:"pipeline"`
+	UnionEvaluateConditions string `json:"evaluateEntries"`
+	SliceCBA                bool   `json:"sliceCBA"`
 }
 
 // CallLean sends an AuthzInput to the Lean model via the C FFI bridge

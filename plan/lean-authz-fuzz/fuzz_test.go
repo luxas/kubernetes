@@ -145,7 +145,7 @@ func goProductionOracle(input leanauthzffi.AuthzInput) leanauthzffi.AuthzOutput 
 		pipelineDecision = authorizer.DecisionDeny
 	}
 
-	// Build the entries for EvaluateEntries comparison
+	// Build the entries for UnionEvaluateConditions comparison
 	// The union's EvaluateConditions already does this internally,
 	// so pipelineDecision IS the evaluateEntries result when cba=true.
 	evaluateEntriesResult := pipelineDecision
@@ -157,10 +157,10 @@ func goProductionOracle(input leanauthzffi.AuthzInput) leanauthzffi.AuthzOutput 
 	}
 
 	return leanauthzffi.AuthzOutput{
-		UnionAuthorize:  authDecision.String(),
-		Pipeline:        pipelineDecision.String(),
-		EvaluateEntries: evaluateEntriesResult.String(),
-		SliceCBA:        caDecision.CanBecomeAllowed(),
+		UnionAuthorize:          authDecision.String(),
+		Pipeline:                pipelineDecision.String(),
+		UnionEvaluateConditions: evaluateEntriesResult.String(),
+		SliceCBA:                caDecision.CanBecomeAllowed(),
 	}
 }
 
@@ -178,9 +178,9 @@ func compareResults(t testing.TB, inputJSON []byte, leanResult, goResult leanaut
 		t.Errorf("Pipeline: lean=%s go=%s input=%s",
 			leanResult.Pipeline, goResult.Pipeline, inputJSON)
 	}
-	if leanResult.EvaluateEntries != goResult.EvaluateEntries {
-		t.Errorf("EvaluateEntries: lean=%s go=%s input=%s",
-			leanResult.EvaluateEntries, goResult.EvaluateEntries, inputJSON)
+	if leanResult.UnionEvaluateConditions != goResult.UnionEvaluateConditions {
+		t.Errorf("UnionEvaluateConditions: lean=%s go=%s input=%s",
+			leanResult.UnionEvaluateConditions, goResult.UnionEvaluateConditions, inputJSON)
 	}
 	if leanResult.SliceCBA != goResult.SliceCBA {
 		t.Errorf("SliceCBA: lean=%v go=%v input=%s",

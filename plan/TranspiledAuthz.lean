@@ -10,7 +10,7 @@ coherence axiom linking its two-phase output to its single-phase output.
 ## Go source → Lean mapping
 
 - `union.Authorize`                           → `Authorize`
-- `union.ConditionsAwareAuthorize` (loop)     → `BuildEntries`
+- `union.ConditionsAwareAuthorize` (loop)     → `UnionConditionsAwareAuthorize`
 - `union.EvaluateConditions` (loop)           → `EvaluateConditions`
 - `unionSlice.CanBecomeAllowed`               → `SliceCanBecomeAllowed`
 - `withAuthorization` + `conditionsEnforcer`   → `Pipeline`
@@ -126,8 +126,8 @@ def UnionSliceCanBecomeAllowed : List (Handler × LeafDecision) → Bool
 def Pipeline (handlers : List Handler) : Decision :=
   let entries := UnionConditionsAwareAuthorize handlers
   -- Step 1 (filter): check if unconditionally allowed.
-  -- This happens when the first entry is Allow (short-circuited by BuildEntries).
-  -- EvaluateEntries on such an entry returns Allow, so we can uniformly
+  -- This happens when the first entry is Allow (short-circuited by UnionConditionsAwareAuthorize).
+  -- UnionEvaluateConditions on such an entry returns Allow, so we can uniformly
   -- check CanBecomeAllowed (which is true for an Allow entry).
   -- Step 2 (filter): check CanBecomeAllowed
   if UnionSliceCanBecomeAllowed entries then
@@ -140,7 +140,7 @@ def Pipeline (handlers : List Handler) : Decision :=
 -- Core semantic lemma
 -- ============================================================================
 
-/-- `EvaluateEntries` on the entry list from `BuildEntries` equals `Authorize`.
+/-- `UnionEvaluateConditions` on the entry list from `UnionConditionsAwareAuthorize` equals `Authorize`.
     This is the transpilation of the Go comment at union.go:111:
     "This logic directly maps 1:1 with Authorize()" -/
 theorem evaluateEntries_eq_authorize
@@ -151,24 +151,24 @@ theorem evaluateEntries_eq_authorize
   | nil => rfl
   | cons ch rest ih =>
     simp only [List.map, UnionAuthorize]
-    -- Unfold BuildEntries and EvaluateEntries for the head
+    -- Unfold UnionConditionsAwareAuthorize and UnionEvaluateConditions for the head
     show UnionEvaluateConditions (UnionConditionsAwareAuthorize (ch.toHandler :: rest.map CoherentHandler.toHandler))
        = match ch.toHandler.authorize with
          | .Allow => .Allow | .Deny => .Deny | .NoOpinion => UnionAuthorize (rest.map CoherentHandler.toHandler)
     -- Case split on phase-1 result
     cases hca : ch.toHandler.conditionsAwareAuthorize with
     | Allow =>
-      -- BuildEntries returns [(ch, Allow)]; EvaluateEntries returns Allow
+      -- UnionConditionsAwareAuthorize returns [(ch, Allow)]; UnionEvaluateConditions returns Allow
       -- ax_allow: authorize = Allow
       simp only [UnionConditionsAwareAuthorize, hca, UnionEvaluateConditions, ch.ax_allow hca]
     | Deny =>
       simp only [UnionConditionsAwareAuthorize, hca, UnionEvaluateConditions, ch.ax_deny hca]
     | NoOpinion =>
-      -- BuildEntries continues; both sides recurse
+      -- UnionConditionsAwareAuthorize continues; both sides recurse
       simp only [UnionConditionsAwareAuthorize, hca, UnionEvaluateConditions, ch.ax_noOpinion hca]
       exact ih
     | ConditionsMap =>
-      -- BuildEntries continues; EvaluateEntries checks evaluateConditions
+      -- UnionConditionsAwareAuthorize continues; UnionEvaluateConditions checks evaluateConditions
       simp only [UnionConditionsAwareAuthorize, hca, UnionEvaluateConditions]
       rw [ch.ax_conditional hca]
       cases heval : ch.toHandler.evaluateConditions with
@@ -180,7 +180,7 @@ theorem evaluateEntries_eq_authorize
 -- CanBecomeAllowed soundness
 -- ============================================================================
 
-/-- When `SliceCBA` is false, `EvaluateEntries` never returns Allow. -/
+/-- When `SliceCBA` is false, `UnionEvaluateConditions` never returns Allow. -/
 theorem cba_sound
     (handlers : List CoherentHandler)
     (hcba : UnionSliceCanBecomeAllowed (UnionConditionsAwareAuthorize (handlers.map CoherentHandler.toHandler)) = false)
@@ -189,16 +189,16 @@ theorem cba_sound
   | nil => simp [UnionConditionsAwareAuthorize, UnionEvaluateConditions]
   | cons ch rest ih =>
     simp only [List.map] at *
-    -- Unfold BuildEntries in both the goal and hcba, keyed on hca
+    -- Unfold UnionConditionsAwareAuthorize in both the goal and hcba, keyed on hca
     cases hca : ch.toHandler.conditionsAwareAuthorize with
     | Allow =>
       -- SliceCBA [(ch, Allow)] = true, contradicts hcba = false
       simp [UnionConditionsAwareAuthorize, hca, UnionSliceCanBecomeAllowed] at hcba
     | Deny =>
-      -- EvaluateEntries [(ch, Deny)] = Deny ≠ Allow
+      -- UnionEvaluateConditions [(ch, Deny)] = Deny ≠ Allow
       simp [UnionConditionsAwareAuthorize, hca, UnionEvaluateConditions]
     | NoOpinion =>
-      -- Recurse: both SliceCBA and EvaluateEntries pass through
+      -- Recurse: both SliceCBA and UnionEvaluateConditions pass through
       have hcba' : UnionSliceCanBecomeAllowed (UnionConditionsAwareAuthorize (List.map CoherentHandler.toHandler rest)) = false := by
         simp [UnionConditionsAwareAuthorize, hca, UnionSliceCanBecomeAllowed] at hcba; exact hcba
       have goal := ih hcba'
@@ -232,16 +232,16 @@ theorem transpiled_allows_iff
     : isAllowed (UnionAuthorize (handlers.map CoherentHandler.toHandler))
     = isAllowed (Pipeline (handlers.map CoherentHandler.toHandler)) := by
   simp only [Pipeline]
-  -- Rewrite Authorize as EvaluateEntries using the core lemma
+  -- Rewrite Authorize as UnionEvaluateConditions using the core lemma
   rw [← evaluateEntries_eq_authorize handlers]
-  -- Now both sides talk about EvaluateEntries on BuildEntries.
+  -- Now both sides talk about UnionEvaluateConditions on UnionConditionsAwareAuthorize.
   -- Case split on SliceCBA.
   cases hcba : UnionSliceCanBecomeAllowed (UnionConditionsAwareAuthorize (handlers.map CoherentHandler.toHandler)) with
   | true =>
     -- Pipeline evaluates → same result
     simp
   | false =>
-    -- Pipeline returns Deny; EvaluateEntries ≠ Allow (by cba_sound)
+    -- Pipeline returns Deny; UnionEvaluateConditions ≠ Allow (by cba_sound)
     simp [isAllowed]
     have h := cba_sound handlers hcba
     cases heval : UnionEvaluateConditions (UnionConditionsAwareAuthorize (handlers.map CoherentHandler.toHandler)) with

@@ -11,7 +11,7 @@ format for inputs and outputs.
 ## Exported C functions
 
 - `lean_authz_evaluate(ByteArray) → String`: Given a JSON-encoded list of
-  handler descriptions, computes UnionAuthorize, Pipeline, EvaluateEntries,
+  handler descriptions, computes UnionAuthorize, Pipeline, UnionEvaluateConditions,
   and SliceCBA, returning all results as a JSON string.
 -/
 

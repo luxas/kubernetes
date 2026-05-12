@@ -125,11 +125,11 @@ unsafe def leanAuthzEvaluate (input : ByteArray) : String :=
   | .error e => s!"\{\"error\": \"{e}\"}"
   | .ok inp =>
     let handlers := inp.handlers.map toHandler
-    let entries := BuildEntries handlers
+    let entries := UnionConditionsAwareAuthorize handlers
     let result : AuthzOutput := {
       authorize_result := decisionToString (Authorize handlers)
       pipeline_result := decisionToString (Pipeline handlers)
-      evaluate_entries_result := decisionToString (EvaluateEntries entries)
+      evaluate_entries_result := decisionToString (UnionEvaluateConditions entries)
       slice_cba := SliceCBA entries
     }
     toString (Lean.toJson result)
@@ -259,7 +259,7 @@ type HandlerInput struct {
 type AuthzOutput struct {
     AuthorizeResult        string `json:"authorize_result"`
     PipelineResult         string `json:"pipeline_result"`
-    EvaluateEntriesResult  string `json:"evaluate_entries_result"`
+    UnionEvaluateConditionsResult  string `json:"evaluate_entries_result"`
     SliceCBA               bool   `json:"slice_cba"`
 }
 
@@ -368,9 +368,9 @@ func FuzzAuthorizeEquivalence(f *testing.F) {
             t.Errorf("Pipeline mismatch: lean=%s go=%s input=%s",
                 leanResult.PipelineResult, goResult.PipelineResult, string(data))
         }
-        if leanResult.EvaluateEntriesResult != goResult.EvaluateEntriesResult {
-            t.Errorf("EvaluateEntries mismatch: lean=%s go=%s input=%s",
-                leanResult.EvaluateEntriesResult, goResult.EvaluateEntriesResult, string(data))
+        if leanResult.UnionEvaluateConditionsResult != goResult.UnionEvaluateConditionsResult {
+            t.Errorf("UnionEvaluateConditions mismatch: lean=%s go=%s input=%s",
+                leanResult.UnionEvaluateConditionsResult, goResult.UnionEvaluateConditionsResult, string(data))
         }
         if leanResult.SliceCBA != goResult.SliceCBA {
             t.Errorf("SliceCBA mismatch: lean=%v go=%v input=%s",
@@ -430,7 +430,7 @@ func goOracle(input leanffi.AuthzInput) leanffi.AuthzOutput {
     return leanffi.AuthzOutput{
         AuthorizeResult:       decisionString(authDecision),
         PipelineResult:        decisionString(pipelineDecision),
-        EvaluateEntriesResult: decisionString(pipelineDecision), // same
+        UnionEvaluateConditionsResult: decisionString(pipelineDecision), // same
         SliceCBA:              caDecision.CanBecomeAllowed(),
     }
 }
