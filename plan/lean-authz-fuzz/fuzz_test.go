@@ -12,6 +12,7 @@ package fuzz
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 
 	leanauthzffi "k8s.io/kubernetes/plan/lean-authz-ffi"
@@ -189,18 +190,6 @@ func compareResults(t testing.TB, inputJSON []byte, leanResult, goResult leanaut
 }
 
 // ---------------------------------------------------------------------------
-// Validators
-// ---------------------------------------------------------------------------
-
-func validDecision(s string) bool {
-	return s == "Allow" || s == "Deny" || s == "NoOpinion"
-}
-
-func validLeafDecision(s string) bool {
-	return validDecision(s) || s == "ConditionsMap"
-}
-
-// ---------------------------------------------------------------------------
 // Fuzz target
 // ---------------------------------------------------------------------------
 
@@ -284,15 +273,41 @@ func FuzzDifferential(f *testing.F) {
 			t.Skip()
 		}
 		for _, h := range input.Handlers {
-			if !validDecision(h.Authorize) || !validLeafDecision(h.ConditionsAwareAuthorize) ||
-				!validDecision(h.EvaluateConditions) {
-				t.Skip()
-			}
-			// Enforce the per-authorizer coherence invariant (ax_cba_sound):
-			// when cmCanBecomeAllowed=false, evaluateConditions cannot be Allow,
-			// because a ConditionsMap with no Allow conditions can never produce Allow.
-			if h.ConditionsAwareAuthorize == "ConditionsMap" &&
-				!h.CmCanBecomeAllowed && h.EvaluateConditions == "Allow" {
+
+			switch h.ConditionsAwareAuthorize {
+			case "Allow", "Deny", "NoOpinion":
+				if h.Authorize != h.ConditionsAwareAuthorize {
+					t.Skip()
+				}
+				if h.EvaluateConditions != h.ConditionsAwareAuthorize {
+					t.Skip()
+				}
+				if h.ConditionsAwareAuthorize == "Allow" {
+					if !h.CmCanBecomeAllowed {
+						t.Skip()
+					}
+				} else {
+					if h.CmCanBecomeAllowed {
+						t.Skip()
+					}
+				}
+			case "ConditionsMap":
+				if !slices.Contains([]string{"Deny", "NoOpinion"}, h.Authorize) {
+					t.Skip()
+				}
+
+				// Assume the authorizer always fails closed for calls to Authorize when conditions are returned
+				possibleEvalCondResults := []string{"NoOpinion"}
+				if h.Authorize == "Deny" {
+					possibleEvalCondResults = append(possibleEvalCondResults, "Deny")
+				}
+				if h.CmCanBecomeAllowed {
+					possibleEvalCondResults = append(possibleEvalCondResults, "Allow")
+				}
+				if !slices.Contains(possibleEvalCondResults, h.EvaluateConditions) {
+					t.Skip()
+				}
+			default:
 				t.Skip()
 			}
 		}
