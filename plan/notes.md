@@ -11,3 +11,4 @@
 - The Pipeline should be strengthened, and we should keep WithAuthorization and ConditionsEnforcement separate. Distinguish between 
 - Error handling should be taken into account
 - Make sure there is no user-facing behavioral change between the two, which includes the gotcha of 500 (authorize with error) vs 403.
+- Actually guard against authorizers misbehaving (returning Allow or Deny when there were no such effects in the conditions) in our framework instead of this assumption

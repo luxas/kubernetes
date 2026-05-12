@@ -165,6 +165,30 @@ func goProductionOracle(input leanauthzffi.AuthzInput) leanauthzffi.AuthzOutput 
 }
 
 // ---------------------------------------------------------------------------
+// Differential comparison (shared with hegel_test.go)
+// ---------------------------------------------------------------------------
+
+func compareResults(t testing.TB, inputJSON []byte, leanResult, goResult leanauthzffi.AuthzOutput) {
+	t.Helper()
+	if leanResult.UnionAuthorize != goResult.UnionAuthorize {
+		t.Errorf("UnionAuthorize: lean=%s go=%s input=%s",
+			leanResult.UnionAuthorize, goResult.UnionAuthorize, inputJSON)
+	}
+	if leanResult.Pipeline != goResult.Pipeline {
+		t.Errorf("Pipeline: lean=%s go=%s input=%s",
+			leanResult.Pipeline, goResult.Pipeline, inputJSON)
+	}
+	if leanResult.EvaluateEntries != goResult.EvaluateEntries {
+		t.Errorf("EvaluateEntries: lean=%s go=%s input=%s",
+			leanResult.EvaluateEntries, goResult.EvaluateEntries, inputJSON)
+	}
+	if leanResult.SliceCBA != goResult.SliceCBA {
+		t.Errorf("SliceCBA: lean=%v go=%v input=%s",
+			leanResult.SliceCBA, goResult.SliceCBA, inputJSON)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Validators
 // ---------------------------------------------------------------------------
 
@@ -282,22 +306,6 @@ func FuzzDifferential(f *testing.F) {
 		// Production Go code
 		goResult := goProductionOracle(input)
 
-		// Compare all outputs
-		if leanResult.UnionAuthorize != goResult.UnionAuthorize {
-			t.Errorf("UnionAuthorize: lean=%s go=%s input=%s",
-				leanResult.UnionAuthorize, goResult.UnionAuthorize, data)
-		}
-		if leanResult.Pipeline != goResult.Pipeline {
-			t.Errorf("Pipeline: lean=%s go=%s input=%s",
-				leanResult.Pipeline, goResult.Pipeline, data)
-		}
-		if leanResult.EvaluateEntries != goResult.EvaluateEntries {
-			t.Errorf("EvaluateEntries: lean=%s go=%s input=%s",
-				leanResult.EvaluateEntries, goResult.EvaluateEntries, data)
-		}
-		if leanResult.SliceCBA != goResult.SliceCBA {
-			t.Errorf("SliceCBA: lean=%v go=%v input=%s",
-				leanResult.SliceCBA, goResult.SliceCBA, data)
-		}
+		compareResults(t, data, leanResult, goResult)
 	})
 }
