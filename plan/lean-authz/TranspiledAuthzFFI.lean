@@ -29,7 +29,7 @@ structure HandlerJson where
   deriving FromJson, ToJson
 
 structure AuthzInput where
-  handlers : List HandlerJson
+  handlers : Option (List HandlerJson) := none
   deriving FromJson, ToJson
 
 structure AuthzOutput where
@@ -86,7 +86,7 @@ unsafe def leanAuthzEvaluate (input : @& ByteArray) : String :=
   match Json.parse inputStr >>= fromJson? (α := AuthzInput) with
   | .error e => toString (toJson (ErrorOutput.mk s!"parse error: {e}"))
   | .ok inp =>
-    let handlers := inp.handlers.map toHandler
+    let handlers := (inp.handlers.getD []).map toHandler
     let entries := UnionConditionsAwareAuthorize handlers
     let result : AuthzOutput := {
       unionAuthorize := decisionToString (UnionAuthorize handlers)

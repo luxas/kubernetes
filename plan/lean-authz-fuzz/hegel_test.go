@@ -52,7 +52,7 @@ func TestHegelDifferential(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func genChain() hegel.Generator[[]leanauthzffi.HandlerInput] {
-	return hegel.Lists(genHandler()).MinSize(1).MaxSize(10)
+	return hegel.Lists(genHandler()).MinSize(0).MaxSize(10)
 }
 
 func genHandler() hegel.Generator[leanauthzffi.HandlerInput] {
