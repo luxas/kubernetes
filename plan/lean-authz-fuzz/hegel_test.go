@@ -68,22 +68,22 @@ func genHandler() hegel.Generator[leanauthzffi.HandlerInput] {
 				canBecomeAllowed = true
 			}
 		case "ConditionsMap":
-			// Assume the authorizer always fails closed for calls to Authorize when conditions are returned
+			// Generate the condition evaluation result based on what condition effects exist.
 			possibleEvalCondResults := []string{"NoOpinion"}
 			hasDenyEffectCondition := hegel.Draw(tc, hegel.Booleans())
 			if hasDenyEffectCondition {
-				authorize = "Deny"
 				possibleEvalCondResults = append(possibleEvalCondResults, "Deny")
-			} else {
-				authorize = "NoOpinion"
 			}
-			// when there is no Allow effect, the authorizer shall not return Allow. TODO: Actually guard against authorizers misbehaving in our framework instead of this assumption
 			hasAllowEffectCondition := hegel.Draw(tc, hegel.Booleans())
 			if hasAllowEffectCondition {
 				possibleEvalCondResults = append(possibleEvalCondResults, "Allow")
 				canBecomeAllowed = true
 			}
 			evalCond = hegel.Draw(tc, hegel.SampledFrom(possibleEvalCondResults))
+			// authorize = evaluateConditions: the ideal single-phase result equals
+			// what the conditions evaluate to with full data. This is the coherence
+			// axiom (ax_conditional) in the Lean model.
+			authorize = evalCond
 		default:
 			tc.Errorf("unexpected condAware=%s generated", condAware)
 		}

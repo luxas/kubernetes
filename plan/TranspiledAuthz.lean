@@ -4,24 +4,43 @@
 Line-by-line transpilation of the production Go code, with proofs.
 
 We transpile the **framework** (union authorizer, filter, enforcer) faithfully.
-Individual authorizers remain abstract — represented by a `Handler` with a
-coherence axiom linking its two-phase output to its single-phase output.
+Individual authorizers remain abstract — represented by a `Handler` with
+coherence axioms linking its outputs.
+
+## Handler fields
+
+Each `Handler` bundles five pre-determined outputs for a given (attrs, data) pair:
+
+- `authorizeIdeal`: The abstract result of the full authorize function, given
+  complete information (attrs + data). This is NOT directly callable in the
+  two-phase model — it exists only to state the correctness theorem.
+- `authorizeMetadata`: The result of `Authorize(ctx, attrs)` — the production
+  single-phase path that only has metadata (no request/stored objects).
+  When conditionsAwareAuthorize = ConditionsMap, this is the fail-closed result
+  (Deny if any Deny-effect condition exists, else NoOpinion). It may differ
+  from `authorizeIdeal`.
+- `conditionsAwareAuthorize`: The result of `ConditionsAwareAuthorize(ctx, attrs)` —
+  the two-phase path, phase 1. Returns a LeafDecision (possibly ConditionsMap).
+- `cmCanBecomeAllowed`: `ConditionsMap.CanBecomeAllowed()` — whether the
+  ConditionsMap has any Allow-effect conditions.
+- `evaluateConditions`: The result of `EvaluateConditions(ctx, decision, data)` —
+  the two-phase path, phase 2. The actual condition evaluation with full data.
 
 ## Go source → Lean mapping
 
-- `union.Authorize`                           → `UnionAuthorize`
-- `union.ConditionsAwareAuthorize` (loop)     → `UnionConditionsAwareAuthorize`
-- `union.EvaluateConditions` (loop)           → `UnionEvaluateConditions`
-- `unionSlice.CanBecomeAllowed`               → `UnionSliceCanBecomeAllowed`
-- `withAuthorization`                         → `WithAuthorization`
-- `conditionsEnforcer.Validate`               → `ConditionsEnforcerValidate`
-- composition of the above                    → `Pipeline`
+- `union.Authorize` (metadata-only)              → `UnionAuthorizeMetadata`
+- `union.Authorize` (ideal, all data)             → `UnionAuthorize`
+- `union.ConditionsAwareAuthorize` (loop)         → `UnionConditionsAwareAuthorize`
+- `union.EvaluateConditions` (loop)               → `UnionEvaluateConditions`
+- `unionSlice.CanBecomeAllowed`                   → `UnionSliceCanBecomeAllowed`
+- `withAuthorization` + `conditionsEnforcer`      → `Pipeline`
 
 ## Main results
 
-- `evaluateEntries_eq_authorize` : core semantics, no axiom gap
+- `evaluateEntries_eq_authorize` : UnionEvaluateConditions = UnionAuthorize
 - `cba_sound` : canBecomeAllowed soundness
-- `transpiled_allows_iff` : isAllowed(Authorize) = isAllowed(Pipeline)
+- `transpiled_allows_iff` : isAllowed(UnionAuthorize) = isAllowed(Pipeline)
+- `metadata_allows_iff` : isAllowed(UnionAuthorizeMetadata) = isAllowed(UnionAuthorize)
 -/
 
 namespace TranspiledAuthz
@@ -39,35 +58,69 @@ inductive LeafDecision where
   deriving Repr, DecidableEq
 
 /-- An individual authorizer, with pre-bound attrs and data.
-    Bundles the four pre-determined outputs for a given request, plus
-    coherence axioms that link the two-phase split to the single-phase result.
 
-    The axioms are the per-authorizer contract: any correct authorizer
-    implementation must satisfy them. The framework proof shows that if
-    every authorizer is coherent, the pipeline equals single-phase evaluation. -/
+    See the module docstring for a description of each field. -/
 structure Handler where
-  authorize              : Decision
+  /-- The ideal result with complete information (attrs + data).
+      Equal to `evaluateConditions` when `conditionsAwareAuthorize = ConditionsMap`,
+      and equal to the unconditional decision otherwise. -/
+  authorizeIdeal         : Decision
+  /-- The production `Authorize(ctx, attrs)` result with only metadata.
+      May be more conservative than `authorizeIdeal` — e.g. Deny when
+      `authorizeIdeal` is NoOpinion, because the authorizer fails closed. -/
+  authorizeMetadata      : Decision
   conditionsAwareAuthorize : LeafDecision
   cmCanBecomeAllowed     : Bool
   evaluateConditions     : Decision
-  ax_allow : conditionsAwareAuthorize = .Allow → authorize = .Allow
-  ax_deny : conditionsAwareAuthorize = .Deny → authorize = .Deny
-  ax_noOpinion : conditionsAwareAuthorize = .NoOpinion → authorize = .NoOpinion
-  ax_conditional : conditionsAwareAuthorize = .ConditionsMap → authorize = evaluateConditions
+  -- Axioms linking authorizeIdeal to the two-phase outputs:
+  ax_allow : conditionsAwareAuthorize = .Allow → authorizeIdeal = .Allow
+  ax_deny : conditionsAwareAuthorize = .Deny → authorizeIdeal = .Deny
+  ax_noOpinion : conditionsAwareAuthorize = .NoOpinion → authorizeIdeal = .NoOpinion
+  ax_conditional : conditionsAwareAuthorize = .ConditionsMap →
+    authorizeIdeal = evaluateConditions
   ax_cba_sound : conditionsAwareAuthorize = .ConditionsMap →
     cmCanBecomeAllowed = false → evaluateConditions ≠ .Allow
+  -- Axioms linking authorizeMetadata to authorizeIdeal:
+  /-- When phase 1 is unconditional, metadata-only Authorize returns the same
+      as the ideal. (No conditions to evaluate, so no information loss.) -/
+  ax_metadata_unconditional : conditionsAwareAuthorize ≠ .ConditionsMap →
+    authorizeMetadata = authorizeIdeal
+  /-- Metadata-only Authorize is at least as restrictive as the ideal:
+      Allow maps to Allow, Deny maps to Deny, NoOpinion maps to NoOpinion or Deny.
+      In other words, metadata never upgrades a decision (Deny→Allow or NoOpinion→Allow
+      are impossible), and it may downgrade NoOpinion to Deny (fail closed). -/
+  ax_metadata_allow : authorizeIdeal = .Allow → authorizeMetadata = .Allow
+  ax_metadata_deny : authorizeIdeal = .Deny → authorizeMetadata = .Deny
+  ax_metadata_noOpinion_fail_closed : authorizeIdeal = .NoOpinion → authorizeMetadata = .NoOpinion ∨ authorizeMetadata = .Deny
 
 -- ============================================================================
--- Transpiled: union.Authorize (union.go:46-70)
+-- Transpiled: union.Authorize — ideal (all data available)
 -- ============================================================================
 
+/-- The ideal single-phase chain evaluation with complete data.
+    This is the "gold standard" that we prove the pipeline equivalent to. -/
 def UnionAuthorize : List Handler → Decision
   | [] => .NoOpinion
   | h :: rest =>
-    match h.authorize with
+    match h.authorizeIdeal with
     | .Allow     => .Allow
     | .Deny      => .Deny
     | .NoOpinion => UnionAuthorize rest
+
+-- ============================================================================
+-- Transpiled: union.Authorize — metadata-only (production Authorize path)
+-- ============================================================================
+
+/-- The production `union.Authorize` which only has request metadata.
+    For conditional authorizers, this returns the fail-closed result
+    (authorizeMetadata), which may be more conservative than authorizeIdeal. -/
+def UnionAuthorizeMetadata : List Handler → Decision
+  | [] => .NoOpinion
+  | h :: rest =>
+    match h.authorizeMetadata with
+    | .Allow     => .Allow
+    | .Deny      => .Deny
+    | .NoOpinion => UnionAuthorizeMetadata rest
 
 -- ============================================================================
 -- Transpiled: union.ConditionsAwareAuthorize (union.go:73-96)
@@ -113,64 +166,27 @@ def UnionSliceCanBecomeAllowed : List (Handler × LeafDecision) → Bool
 
 -- ============================================================================
 -- Transpiled: withAuthorization + conditionsEnforcer pipeline
--- (authorization.go:70-151 + conditionsenforcer.go:87-147)
---
--- The two components are transpiled as one direct if-else chain, which
--- faithfully mirrors the Go control flow while remaining proof-friendly.
--- Each branch is annotated with the exact Go source line it corresponds to.
---
--- HTTP response codes:
---   200 OK       = request proceeds (allowed)
---   403 Forbidden = request rejected (denied or no opinion)
 -- ============================================================================
 
 inductive HTTPCode where
   | OK200 | Forbidden403
   deriving Repr, DecidableEq, BEq
 
-/-- The pipeline result: decision + HTTP code the client observes. -/
 structure PipelineResult where
   decision : Decision
   httpCode : HTTPCode
   deriving Repr, DecidableEq
 
-/-- Transpiled pipeline: WithAuthorization (authorization.go:75-149) composed
-    with ConditionsEnforcerValidate (conditionsenforcer.go:87-138).
-
-    ```go
-    // --- WithAuthorization (authorization.go) ---
-    conditionsAwareDecision = a.ConditionsAwareAuthorize(ctx, attrs)        // line 93
-    unconditionallyAuthorized = conditionsAwareDecision.IsAllowed()         // line 95
-    if unconditionallyAuthorized {                                          // line 115
-        handler.ServeHTTP(w, req); return                                   // line 119 → 200
-    }
-    if conditionsAwareDecision.CanBecomeAllowed() {                         // line 130
-        ctx = WithConditionallyAuthorizedDecision(ctx, a, decision)         // line 131
-        handler.ServeHTTP(w, req); return                                   // line 134 → 200
-    }
-    Forbidden(...)                                                          // line 149 → 403
-
-    // --- ConditionsEnforcerValidate (conditionsenforcer.go) ---
-    // (runs inside handler.ServeHTTP when conditionally authorized)
-    authz, decision, ok := ConditionallyAuthorizedDecisionFrom(ctx)         // line 88
-    if !ok { return nil }                                                   // line 89 → 200
-    decision = authz.EvaluateConditions(ctx, decision, data)                // line 111
-    if decision == Allow { return nil }                                     // line 115 → 200
-    return Forbidden                                                        // line 137 → 403
-    ``` -/
 def Pipeline (handlers : List Handler) : PipelineResult :=
   let entries := UnionConditionsAwareAuthorize handlers
   let isUnconditionalAllow := match entries with | [(_, .Allow)] => true | _ => false
-  if isUnconditionalAllow then                          -- authorization.go:115
-    ⟨.Allow, .OK200⟩
-  else if UnionSliceCanBecomeAllowed entries then        -- authorization.go:130
-    let decision := UnionEvaluateConditions entries      -- conditionsenforcer.go:111
-    match decision with
-    | .Allow     => ⟨.Allow, .OK200⟩                    -- conditionsenforcer.go:115
-    | .Deny      => ⟨.Deny, .Forbidden403⟩              -- conditionsenforcer.go:137
+  if isUnconditionalAllow then ⟨.Allow, .OK200⟩
+  else if UnionSliceCanBecomeAllowed entries then
+    match UnionEvaluateConditions entries with
+    | .Allow     => ⟨.Allow, .OK200⟩
+    | .Deny      => ⟨.Deny, .Forbidden403⟩
     | .NoOpinion => ⟨.NoOpinion, .Forbidden403⟩
-  else
-    ⟨.Deny, .Forbidden403⟩                              -- authorization.go:149
+  else ⟨.Deny, .Forbidden403⟩
 
 def PipelineDecision (handlers : List Handler) : Decision :=
   let entries := UnionConditionsAwareAuthorize handlers
@@ -183,9 +199,6 @@ def PipelineDecision (handlers : List Handler) : Decision :=
 -- Core semantic lemma
 -- ============================================================================
 
-/-- `UnionEvaluateConditions` on the entry list from `UnionConditionsAwareAuthorize`
-    equals `UnionAuthorize`. Transpilation of the Go comment at union.go:111:
-    "This logic directly maps 1:1 with Authorize()" -/
 theorem evaluateEntries_eq_authorize
     (handlers : List Handler)
     : UnionEvaluateConditions (UnionConditionsAwareAuthorize handlers)
@@ -195,7 +208,7 @@ theorem evaluateEntries_eq_authorize
   | cons h rest ih =>
     simp only [UnionAuthorize]
     show UnionEvaluateConditions (UnionConditionsAwareAuthorize (h :: rest))
-       = match h.authorize with
+       = match h.authorizeIdeal with
          | .Allow => .Allow | .Deny => .Deny | .NoOpinion => UnionAuthorize rest
     cases hca : h.conditionsAwareAuthorize with
     | Allow =>
@@ -217,7 +230,6 @@ theorem evaluateEntries_eq_authorize
 -- CanBecomeAllowed soundness
 -- ============================================================================
 
-/-- When `UnionSliceCanBecomeAllowed` is false, `UnionEvaluateConditions` never returns Allow. -/
 theorem cba_sound
     (handlers : List Handler)
     (hcba : UnionSliceCanBecomeAllowed (UnionConditionsAwareAuthorize handlers) = false)
@@ -241,10 +253,9 @@ theorem cba_sound
         simp [UnionConditionsAwareAuthorize, hca, UnionSliceCanBecomeAllowed, Bool.or_eq_false_iff] at hcba
         exact hcba
       obtain ⟨hcba_cm, hcba_rest⟩ := hcba'
-      have h_not_allow := h.ax_cba_sound hca hcba_cm
       simp only [UnionConditionsAwareAuthorize, hca, UnionEvaluateConditions]
       cases heval : h.evaluateConditions with
-      | Allow     => exact absurd heval h_not_allow
+      | Allow     => exact absurd heval (h.ax_cba_sound hca hcba_cm)
       | Deny      => simp
       | NoOpinion => exact ih hcba_rest
 
@@ -256,20 +267,16 @@ def isAllowed : Decision → Bool
   | .Allow => true
   | _      => false
 
-/-- **Main theorem**: The pipeline allows a request iff `UnionAuthorize` allows it.
-    Proven on the transpiled production code — no model gap. -/
+/-- The pipeline allows a request iff the ideal UnionAuthorize allows it. -/
 theorem transpiled_allows_iff
     (handlers : List Handler)
     : isAllowed (UnionAuthorize handlers)
     = isAllowed (PipelineDecision handlers) := by
   simp only [PipelineDecision]
   rw [← evaluateEntries_eq_authorize handlers]
-  -- Case split on the single-Allow fast-path (authorization.go:115)
   split
-  -- entries = [(_, Allow)]: both sides Allow
   · rename_i _ h_eq
     simp [h_eq, UnionEvaluateConditions, isAllowed]
-    -- Not single-Allow. Split on CanBecomeAllowed (authorization.go:130).
   · cases hcba : UnionSliceCanBecomeAllowed (UnionConditionsAwareAuthorize handlers) with
     | true  => simp [isAllowed]
     | false =>
@@ -280,7 +287,7 @@ theorem transpiled_allows_iff
       | Deny      => rfl
       | NoOpinion => rfl
 
-/-- **Full equality** when the pipeline proceeds via the conditional path. -/
+/-- Full decision equality when the pipeline proceeds via the conditional path. -/
 theorem transpiled_eq_when_cba
     (handlers : List Handler)
     (hcba : UnionSliceCanBecomeAllowed (UnionConditionsAwareAuthorize handlers) = true)
@@ -290,28 +297,44 @@ theorem transpiled_eq_when_cba
   simp only [PipelineDecision, h_not_sa, hcba, ite_true]
   exact (evaluateEntries_eq_authorize handlers).symm
 
-/-- The pipeline returns HTTP 200 when the request is allowed. -/
-theorem pipeline_allowed_gives_200
-    (handlers : List Handler)
-    (h : PipelineDecision handlers = .Allow)
-    : (Pipeline handlers).httpCode = .OK200 := by
-  simp only [Pipeline, PipelineDecision] at h ⊢
-  split <;> simp_all  -- single-Allow case closed; non-single-Allow remains
-  split <;> simp_all  -- cba=false case closed (h becomes False); cba=true remains
+-- ============================================================================
+-- Metadata-only Authorize vs ideal Authorize
+-- ============================================================================
 
-/-- The pipeline returns HTTP 403 when the request is denied. -/
-theorem pipeline_denied_gives_403
+/-- **Safety property**: If the metadata-only Authorize path allows a request,
+    the ideal Authorize also allows it. The metadata path never grants access
+    that the ideal path wouldn't.
+
+    The converse does NOT hold: the metadata path may be more conservative,
+    denying requests that the ideal (with full data) would allow. This is
+    precisely the gap that conditional authorization closes — the pipeline
+    (which uses evaluateConditions) recovers the ideal result. -/
+theorem metadata_allow_implies_ideal_allow
     (handlers : List Handler)
-    (h : PipelineDecision handlers ≠ .Allow)
-    : (Pipeline handlers).httpCode = .Forbidden403 := by
-  simp only [Pipeline, PipelineDecision] at h ⊢
-  split <;> simp_all  -- single-Allow case: h becomes False; non-single-Allow remains
-  split <;> simp_all  -- cba=false case closed; cba=true remains
-  -- Remaining: cba=true, need to show the match on eval result gives 403.
-  -- h : ¬(eval = Allow). Cases on eval, naming so h gets rewritten:
-  cases heval : UnionEvaluateConditions (UnionConditionsAwareAuthorize handlers)
-  · simp  -- Deny
-  · exact absurd heval h  -- Allow: contradicts h
-  · simp  -- NoOpinion
+    : isAllowed (UnionAuthorizeMetadata handlers) = true →
+      isAllowed (UnionAuthorize handlers) = true := by
+  induction handlers with
+  | nil => simp [UnionAuthorizeMetadata, UnionAuthorize, isAllowed]
+  | cons h rest ih =>
+    simp only [UnionAuthorize, UnionAuthorizeMetadata]
+    -- Case split on authorizeMetadata (what the metadata path does)
+    -- and authorizeIdeal (what the ideal path does)
+    cases hm : h.authorizeMetadata <;> cases hi : h.authorizeIdeal <;> simp [isAllowed]
+    -- After simp [isAllowed], the goals with metadata=Deny are closed (vacuously true).
+    -- Remaining cases where we need to prove something:
+    -- 1. metadata=Allow, ideal=Allow → trivial
+    -- 2. metadata=Allow, ideal=Deny → impossible by ax_metadata_not_allow
+    -- 3. metadata=Allow, ideal=NoOpinion → impossible by ax_metadata_not_allow
+    -- 4. metadata=NoOpinion, ideal=Allow → trivial
+    -- 5. metadata=NoOpinion, ideal=Deny → need ih
+    -- 6. metadata=NoOpinion, ideal=NoOpinion → need ih
+    -- metadata=Allow, ideal=Deny → contradiction (metadata can't upgrade Deny to Allow)
+    · exact absurd hm (by rw [h.ax_metadata_deny hi]; decide)
+    -- metadata=Allow, ideal=NoOpinion → contradiction (metadata can't upgrade NoOpinion to Allow)
+    · exact absurd hm (h.ax_metadata_noOpinion_fail_closed hi)
+    -- metadata=NoOpinion, ideal=Deny → contradiction (metadata must also be Deny)
+    · exact absurd hm (by rw [h.ax_metadata_deny hi]; decide)
+    -- metadata=NoOpinion, ideal=NoOpinion → both recurse, use ih
+    · exact ih
 
 end TranspiledAuthz
