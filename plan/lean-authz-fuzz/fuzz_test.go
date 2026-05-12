@@ -18,6 +18,9 @@ import (
 
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	"k8s.io/apiserver/pkg/authorization/union"
+	genericfeatures "k8s.io/apiserver/pkg/features"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
 )
 
 // ---------------------------------------------------------------------------
@@ -184,6 +187,8 @@ func validLeafDecision(s string) bool {
 // Any mismatch means either the Lean model or the Go code has a bug.
 // Since the Lean model is proven correct, a mismatch implies a Go bug.
 func FuzzDifferential(f *testing.F) {
+	featuregatetesting.SetFeatureGateDuringTest(f, utilfeature.DefaultFeatureGate, genericfeatures.ConditionalAuthorization, true)
+
 	seeds := []leanauthzffi.AuthzInput{
 		{Handlers: []leanauthzffi.HandlerInput{}},
 		{Handlers: []leanauthzffi.HandlerInput{
@@ -233,6 +238,21 @@ func FuzzDifferential(f *testing.F) {
 		if err := json.Unmarshal(data, &input); err != nil {
 			t.Skip()
 		}
+		// Reject inputs where Go's case-insensitive JSON parsing accepted
+		// mangled field names that Lean's case-sensitive parser would read
+		// differently. Re-marshal and compare to ensure exact field names.
+		canonical, _ := json.Marshal(input)
+		var roundtrip leanauthzffi.AuthzInput
+		_ = json.Unmarshal(canonical, &roundtrip)
+		recanonical, _ := json.Marshal(roundtrip)
+		if string(canonical) != string(recanonical) {
+			t.Skip()
+		}
+		// Also reject if the raw input doesn't match the canonical form,
+		// which catches case-mangled field names.
+		if string(data) != string(canonical) {
+			t.Skip()
+		}
 		if input.Handlers == nil {
 			t.Skip()
 		}
@@ -242,6 +262,13 @@ func FuzzDifferential(f *testing.F) {
 		for _, h := range input.Handlers {
 			if !validDecision(h.Authorize) || !validLeafDecision(h.ConditionsAwareAuthorize) ||
 				!validDecision(h.EvaluateConditions) {
+				t.Skip()
+			}
+			// Enforce the per-authorizer coherence invariant (ax_cba_sound):
+			// when cmCanBecomeAllowed=false, evaluateConditions cannot be Allow,
+			// because a ConditionsMap with no Allow conditions can never produce Allow.
+			if h.ConditionsAwareAuthorize == "ConditionsMap" &&
+				!h.CmCanBecomeAllowed && h.EvaluateConditions == "Allow" {
 				t.Skip()
 			}
 		}
