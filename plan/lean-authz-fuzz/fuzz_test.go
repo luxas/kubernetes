@@ -12,7 +12,6 @@ package fuzz
 import (
 	"context"
 	"encoding/json"
-	"slices"
 	"testing"
 
 	leanauthzffi "k8s.io/kubernetes/plan/lean-authz-ffi"
@@ -45,9 +44,9 @@ func parseDecision(s string) authorizer.Decision {
 	}
 }
 
-// Authorize implements the old single-phase path.
+// Authorize implements the old single-phase path (metadata-only).
 func (h *fuzzHandler) Authorize(_ context.Context, _ authorizer.Attributes) (authorizer.Decision, string, error) {
-	return parseDecision(h.input.Authorize), "", nil
+	return parseDecision(h.input.AuthorizeMetadata), "", nil
 }
 
 // ConditionsAwareAuthorize implements the new two-phase path (phase 1).
@@ -158,7 +157,8 @@ func goProductionOracle(input leanauthzffi.AuthzInput) leanauthzffi.AuthzOutput 
 	}
 
 	return leanauthzffi.AuthzOutput{
-		UnionAuthorize:          authDecision.String(),
+		UnionAuthorize:          "n/a", // Go can't compute authorizeIdeal directly; Lean does this
+		UnionAuthorizeMetadata:  authDecision.String(),
 		Pipeline:                pipelineDecision.String(),
 		UnionEvaluateConditions: evaluateEntriesResult.String(),
 		SliceCBA:                caDecision.CanBecomeAllowed(),
@@ -171,9 +171,11 @@ func goProductionOracle(input leanauthzffi.AuthzInput) leanauthzffi.AuthzOutput 
 
 func compareResults(t testing.TB, inputJSON []byte, leanResult, goResult leanauthzffi.AuthzOutput) {
 	t.Helper()
-	if leanResult.UnionAuthorize != goResult.UnionAuthorize {
-		t.Errorf("UnionAuthorize: lean=%s go=%s input=%s",
-			leanResult.UnionAuthorize, goResult.UnionAuthorize, inputJSON)
+	// UnionAuthorize (ideal) is only computed by Lean — skip comparing it with Go.
+	// Compare UnionAuthorizeMetadata (production Authorize path).
+	if leanResult.UnionAuthorizeMetadata != goResult.UnionAuthorizeMetadata {
+		t.Errorf("UnionAuthorizeMetadata: lean=%s go=%s input=%s",
+			leanResult.UnionAuthorizeMetadata, goResult.UnionAuthorizeMetadata, inputJSON)
 	}
 	if leanResult.Pipeline != goResult.Pipeline {
 		t.Errorf("Pipeline: lean=%s go=%s input=%s",
@@ -187,6 +189,18 @@ func compareResults(t testing.TB, inputJSON []byte, leanResult, goResult leanaut
 		t.Errorf("SliceCBA: lean=%v go=%v input=%s",
 			leanResult.SliceCBA, goResult.SliceCBA, inputJSON)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Validators
+// ---------------------------------------------------------------------------
+
+func validDecision(s string) bool {
+	return s == "Allow" || s == "Deny" || s == "NoOpinion"
+}
+
+func validLeafDecision(s string) bool {
+	return validDecision(s) || s == "ConditionsMap"
 }
 
 // ---------------------------------------------------------------------------
@@ -205,39 +219,55 @@ func FuzzDifferential(f *testing.F) {
 	seeds := []leanauthzffi.AuthzInput{
 		{Handlers: []leanauthzffi.HandlerInput{}},
 		{Handlers: []leanauthzffi.HandlerInput{
-			{Authorize: "Allow", ConditionsAwareAuthorize: "Allow",
+			{AuthorizeIdeal: "Allow", AuthorizeMetadata: "Allow",
+				ConditionsAwareAuthorize: "Allow",
 				CmCanBecomeAllowed: false, EvaluateConditions: "Allow"},
 		}},
 		{Handlers: []leanauthzffi.HandlerInput{
-			{Authorize: "Deny", ConditionsAwareAuthorize: "Deny",
+			{AuthorizeIdeal: "Deny", AuthorizeMetadata: "Deny",
+				ConditionsAwareAuthorize: "Deny",
 				CmCanBecomeAllowed: false, EvaluateConditions: "Deny"},
 		}},
 		{Handlers: []leanauthzffi.HandlerInput{
-			{Authorize: "NoOpinion", ConditionsAwareAuthorize: "NoOpinion",
+			{AuthorizeIdeal: "NoOpinion", AuthorizeMetadata: "NoOpinion",
+				ConditionsAwareAuthorize: "NoOpinion",
 				CmCanBecomeAllowed: false, EvaluateConditions: "NoOpinion"},
 		}},
 		{Handlers: []leanauthzffi.HandlerInput{
-			{Authorize: "Allow", ConditionsAwareAuthorize: "ConditionsMap",
+			{AuthorizeIdeal: "Allow", AuthorizeMetadata: "Allow",
+				ConditionsAwareAuthorize: "ConditionsMap",
 				CmCanBecomeAllowed: true, EvaluateConditions: "Allow"},
 		}},
 		{Handlers: []leanauthzffi.HandlerInput{
-			{Authorize: "NoOpinion", ConditionsAwareAuthorize: "ConditionsMap",
+			{AuthorizeIdeal: "NoOpinion", AuthorizeMetadata: "NoOpinion",
+				ConditionsAwareAuthorize: "ConditionsMap",
+				CmCanBecomeAllowed: false, EvaluateConditions: "NoOpinion"},
+		}},
+		// Fail-closed: ideal=NoOpinion but metadata=Deny
+		{Handlers: []leanauthzffi.HandlerInput{
+			{AuthorizeIdeal: "NoOpinion", AuthorizeMetadata: "Deny",
+				ConditionsAwareAuthorize: "ConditionsMap",
 				CmCanBecomeAllowed: false, EvaluateConditions: "NoOpinion"},
 		}},
 		// Chain resumption: Conditional→NoOpinion, then Allow
 		{Handlers: []leanauthzffi.HandlerInput{
-			{Authorize: "NoOpinion", ConditionsAwareAuthorize: "ConditionsMap",
+			{AuthorizeIdeal: "NoOpinion", AuthorizeMetadata: "NoOpinion",
+				ConditionsAwareAuthorize: "ConditionsMap",
 				CmCanBecomeAllowed: true, EvaluateConditions: "NoOpinion"},
-			{Authorize: "Allow", ConditionsAwareAuthorize: "Allow",
+			{AuthorizeIdeal: "Allow", AuthorizeMetadata: "Allow",
+				ConditionsAwareAuthorize: "Allow",
 				CmCanBecomeAllowed: false, EvaluateConditions: "Allow"},
 		}},
 		// Three-authorizer chain with conditional deny in the middle
 		{Handlers: []leanauthzffi.HandlerInput{
-			{Authorize: "NoOpinion", ConditionsAwareAuthorize: "ConditionsMap",
+			{AuthorizeIdeal: "Deny", AuthorizeMetadata: "Deny",
+				ConditionsAwareAuthorize: "ConditionsMap",
 				CmCanBecomeAllowed: true, EvaluateConditions: "Deny"},
-			{Authorize: "NoOpinion", ConditionsAwareAuthorize: "NoOpinion",
+			{AuthorizeIdeal: "NoOpinion", AuthorizeMetadata: "NoOpinion",
+				ConditionsAwareAuthorize: "NoOpinion",
 				CmCanBecomeAllowed: false, EvaluateConditions: "NoOpinion"},
-			{Authorize: "Allow", ConditionsAwareAuthorize: "Allow",
+			{AuthorizeIdeal: "Allow", AuthorizeMetadata: "Allow",
+				ConditionsAwareAuthorize: "Allow",
 				CmCanBecomeAllowed: false, EvaluateConditions: "Allow"},
 		}},
 	}
@@ -273,39 +303,40 @@ func FuzzDifferential(f *testing.F) {
 			t.Skip()
 		}
 		for _, h := range input.Handlers {
-
+			if !validDecision(h.AuthorizeIdeal) || !validDecision(h.AuthorizeMetadata) ||
+				!validLeafDecision(h.ConditionsAwareAuthorize) || !validDecision(h.EvaluateConditions) {
+				t.Skip()
+			}
 			switch h.ConditionsAwareAuthorize {
 			case "Allow", "Deny", "NoOpinion":
-				if h.Authorize != h.ConditionsAwareAuthorize {
+				// ax_metadata_unconditional: ideal = metadata = ca
+				if h.AuthorizeIdeal != h.ConditionsAwareAuthorize ||
+					h.AuthorizeMetadata != h.ConditionsAwareAuthorize {
 					t.Skip()
-				}
-				if h.EvaluateConditions != h.ConditionsAwareAuthorize {
-					t.Skip()
-				}
-				if h.ConditionsAwareAuthorize == "Allow" {
-					if !h.CmCanBecomeAllowed {
-						t.Skip()
-					}
-				} else {
-					if h.CmCanBecomeAllowed {
-						t.Skip()
-					}
 				}
 			case "ConditionsMap":
-				if !slices.Contains([]string{"Deny", "NoOpinion"}, h.Authorize) {
+				// ax_conditional: ideal = evaluateConditions
+				if h.AuthorizeIdeal != h.EvaluateConditions {
 					t.Skip()
 				}
-
-				// Assume the authorizer always fails closed for calls to Authorize when conditions are returned
-				possibleEvalCondResults := []string{"NoOpinion"}
-				if h.Authorize == "Deny" {
-					possibleEvalCondResults = append(possibleEvalCondResults, "Deny")
-				}
-				if h.CmCanBecomeAllowed {
-					possibleEvalCondResults = append(possibleEvalCondResults, "Allow")
-				}
-				if !slices.Contains(possibleEvalCondResults, h.EvaluateConditions) {
+				// ax_cba_sound: !cba → eval ≠ Allow
+				if !h.CmCanBecomeAllowed && h.EvaluateConditions == "Allow" {
 					t.Skip()
+				}
+				// ax_metadata_allow/deny/noOpinion_fail_closed
+				switch h.AuthorizeIdeal {
+				case "Allow":
+					if h.AuthorizeMetadata != "Allow" {
+						t.Skip()
+					}
+				case "Deny":
+					if h.AuthorizeMetadata != "Deny" {
+						t.Skip()
+					}
+				case "NoOpinion":
+					if h.AuthorizeMetadata != "NoOpinion" && h.AuthorizeMetadata != "Deny" {
+						t.Skip()
+					}
 				}
 			default:
 				t.Skip()

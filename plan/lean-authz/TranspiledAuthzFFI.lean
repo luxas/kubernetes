@@ -20,7 +20,8 @@ open TranspiledAuthz Lean
 -- ============================================================================
 
 structure HandlerJson where
-  authorize              : String
+  authorizeIdeal         : String
+  authorizeMetadata      : String
   conditionsAwareAuthorize : String
   cmCanBecomeAllowed     : Bool
   evaluateConditions     : String
@@ -31,10 +32,11 @@ structure AuthzInput where
   deriving FromJson, ToJson
 
 structure AuthzOutput where
-  unionAuthorize        : String
-  pipeline              : String
-  evaluateEntries       : String
-  sliceCBA              : Bool
+  unionAuthorize         : String
+  unionAuthorizeMetadata : String
+  pipeline               : String
+  evaluateEntries        : String
+  sliceCBA               : Bool
   deriving FromJson, ToJson
 
 structure ErrorOutput where
@@ -64,59 +66,125 @@ def decisionToString : Decision → String
   | .Deny      => "Deny"
   | .NoOpinion => "NoOpinion"
 
-/-- Validate and construct a Handler from JSON, or return an error if the
-    per-authorizer coherence axioms would not hold. This makes the axioms
-    true by construction — no `sorry` or `unsafe` needed. -/
+/-- Validate and construct a Handler from JSON. Rejects incoherent inputs
+    so that all axioms hold by construction. -/
 def toHandler (h : HandlerJson) : Except String Handler :=
-  let auth := parseDecision h.authorize
+  let ideal := parseDecision h.authorizeIdeal
+  let md := parseDecision h.authorizeMetadata
   let ca := parseLeafDecision h.conditionsAwareAuthorize
   let cba := h.cmCanBecomeAllowed
   let eval := parseDecision h.evaluateConditions
-  -- Validate coherence: the two-phase split must agree with the single-phase result.
   match ca with
   | .Allow =>
-    if auth != .Allow then .error s!"incoherent: conditionsAwareAuthorize=Allow but authorize={h.authorize}"
-    else .ok { authorize := .Allow, conditionsAwareAuthorize := .Allow,
-               cmCanBecomeAllowed := cba, evaluateConditions := eval,
-               ax_allow := fun _ => rfl, ax_deny := fun h => absurd h (by decide),
-               ax_noOpinion := fun h => absurd h (by decide),
-               ax_conditional := fun h => absurd h (by decide),
-               ax_cba_sound := fun h => absurd h (by decide) }
+    -- ax_allow: ideal = Allow; ax_metadata_unconditional: meta = ideal
+    match ideal, md with
+    | .Allow, .Allow =>
+      .ok { authorizeIdeal := .Allow, authorizeMetadata := .Allow,
+            conditionsAwareAuthorize := .Allow,
+            cmCanBecomeAllowed := cba, evaluateConditions := eval,
+            ax_allow := fun _ => rfl, ax_deny := fun h => absurd h (by decide),
+            ax_noOpinion := fun h => absurd h (by decide),
+            ax_conditional := fun h => absurd h (by decide),
+            ax_cba_sound := fun h => absurd h (by decide),
+            ax_metadata_unconditional := fun _ => rfl,
+            ax_metadata_allow := fun _ => rfl,
+            ax_metadata_deny := fun h => absurd h (by decide),
+            ax_metadata_noOpinion_fail_closed := fun h => absurd h (by decide) }
+    | _, _ => .error s!"incoherent: ca=Allow requires ideal=Allow, meta=Allow"
   | .Deny =>
-    if auth != .Deny then .error s!"incoherent: conditionsAwareAuthorize=Deny but authorize={h.authorize}"
-    else .ok { authorize := .Deny, conditionsAwareAuthorize := .Deny,
-               cmCanBecomeAllowed := cba, evaluateConditions := eval,
-               ax_allow := fun h => absurd h (by decide), ax_deny := fun _ => rfl,
-               ax_noOpinion := fun h => absurd h (by decide),
-               ax_conditional := fun h => absurd h (by decide),
-               ax_cba_sound := fun h => absurd h (by decide) }
+    match ideal, md with
+    | .Deny, .Deny =>
+      .ok { authorizeIdeal := .Deny, authorizeMetadata := .Deny,
+            conditionsAwareAuthorize := .Deny,
+            cmCanBecomeAllowed := cba, evaluateConditions := eval,
+            ax_allow := fun h => absurd h (by decide), ax_deny := fun _ => rfl,
+            ax_noOpinion := fun h => absurd h (by decide),
+            ax_conditional := fun h => absurd h (by decide),
+            ax_cba_sound := fun h => absurd h (by decide),
+            ax_metadata_unconditional := fun _ => rfl,
+            ax_metadata_allow := fun h => absurd h (by decide),
+            ax_metadata_deny := fun _ => rfl,
+            ax_metadata_noOpinion_fail_closed := fun h => absurd h (by decide) }
+    | _, _ => .error s!"incoherent: ca=Deny requires ideal=Deny, meta=Deny"
   | .NoOpinion =>
-    if auth != .NoOpinion then .error s!"incoherent: conditionsAwareAuthorize=NoOpinion but authorize={h.authorize}"
-    else .ok { authorize := .NoOpinion, conditionsAwareAuthorize := .NoOpinion,
-               cmCanBecomeAllowed := cba, evaluateConditions := eval,
-               ax_allow := fun h => absurd h (by decide), ax_deny := fun h => absurd h (by decide),
-               ax_noOpinion := fun _ => rfl,
-               ax_conditional := fun h => absurd h (by decide),
-               ax_cba_sound := fun h => absurd h (by decide) }
+    match ideal, md with
+    | .NoOpinion, .NoOpinion =>
+      .ok { authorizeIdeal := .NoOpinion, authorizeMetadata := .NoOpinion,
+            conditionsAwareAuthorize := .NoOpinion,
+            cmCanBecomeAllowed := cba, evaluateConditions := eval,
+            ax_allow := fun h => absurd h (by decide),
+            ax_deny := fun h => absurd h (by decide),
+            ax_noOpinion := fun _ => rfl,
+            ax_conditional := fun h => absurd h (by decide),
+            ax_cba_sound := fun h => absurd h (by decide),
+            ax_metadata_unconditional := fun _ => rfl,
+            ax_metadata_allow := fun h => absurd h (by decide),
+            ax_metadata_deny := fun h => absurd h (by decide),
+            ax_metadata_noOpinion_fail_closed := fun _ => .inl rfl }
+    | _, _ => .error s!"incoherent: ca=NoOpinion requires ideal=NoOpinion, meta=NoOpinion"
   | .ConditionsMap =>
-    -- Match on (authorize, evaluateConditions) concretely to make axioms hold by rfl.
-    -- Reject incoherent combinations (auth ≠ eval, or cba=false with eval=Allow).
-    let mk (d : Decision) (cba_ok : cba = false → d ≠ .Allow) : Except String Handler :=
-      .ok { authorize := d, conditionsAwareAuthorize := .ConditionsMap,
-            cmCanBecomeAllowed := cba, evaluateConditions := d,
+    -- ax_conditional: ideal = eval
+    -- ax_metadata_*: meta follows ideal with possible fail-closed
+    -- ax_cba_sound: cba=false → eval ≠ Allow
+    if ideal != eval then .error s!"incoherent: ca=ConditionsMap requires ideal=eval"
+    else
+    match eval, md with
+    | .Allow, .Allow =>
+      if hcba : cba = false
+      then .error "incoherent: cba=false but eval=Allow"
+      else .ok { authorizeIdeal := .Allow, authorizeMetadata := .Allow,
+                 conditionsAwareAuthorize := .ConditionsMap,
+                 cmCanBecomeAllowed := cba, evaluateConditions := .Allow,
+                 ax_allow := fun h => absurd h (by decide),
+                 ax_deny := fun h => absurd h (by decide),
+                 ax_noOpinion := fun h => absurd h (by decide),
+                 ax_conditional := fun _ => rfl,
+                 ax_cba_sound := fun _ h => absurd h hcba,
+                 ax_metadata_unconditional := fun h => absurd rfl h,
+                 ax_metadata_allow := fun _ => rfl,
+                 ax_metadata_deny := fun h => absurd h (by decide),
+                 ax_metadata_noOpinion_fail_closed := fun h => absurd h (by decide) }
+    | .Deny, .Deny =>
+      .ok { authorizeIdeal := .Deny, authorizeMetadata := .Deny,
+            conditionsAwareAuthorize := .ConditionsMap,
+            cmCanBecomeAllowed := cba, evaluateConditions := .Deny,
             ax_allow := fun h => absurd h (by decide),
             ax_deny := fun h => absurd h (by decide),
             ax_noOpinion := fun h => absurd h (by decide),
             ax_conditional := fun _ => rfl,
-            ax_cba_sound := fun _ => cba_ok }
-    match parseDecision h.authorize, parseDecision h.evaluateConditions with
-    | .Allow, .Allow =>
-      if hcba : cba = false
-      then .error "incoherent: cmCanBecomeAllowed=false but evaluateConditions=Allow"
-      else mk .Allow (fun h => absurd h hcba)
-    | .Deny, .Deny => mk .Deny (fun _ h => absurd h (by decide))
-    | .NoOpinion, .NoOpinion => mk .NoOpinion (fun _ h => absurd h (by decide))
-    | _, _ => .error s!"incoherent: authorize={h.authorize} ≠ evaluateConditions={h.evaluateConditions}"
+            ax_cba_sound := fun _ _ h => absurd h (by decide),
+            ax_metadata_unconditional := fun h => absurd rfl h,
+            ax_metadata_allow := fun h => absurd h (by decide),
+            ax_metadata_deny := fun _ => rfl,
+            ax_metadata_noOpinion_fail_closed := fun h => absurd h (by decide) }
+    | .NoOpinion, .NoOpinion =>
+      .ok { authorizeIdeal := .NoOpinion, authorizeMetadata := .NoOpinion,
+            conditionsAwareAuthorize := .ConditionsMap,
+            cmCanBecomeAllowed := cba, evaluateConditions := .NoOpinion,
+            ax_allow := fun h => absurd h (by decide),
+            ax_deny := fun h => absurd h (by decide),
+            ax_noOpinion := fun h => absurd h (by decide),
+            ax_conditional := fun _ => rfl,
+            ax_cba_sound := fun _ _ h => absurd h (by decide),
+            ax_metadata_unconditional := fun h => absurd rfl h,
+            ax_metadata_allow := fun h => absurd h (by decide),
+            ax_metadata_deny := fun h => absurd h (by decide),
+            ax_metadata_noOpinion_fail_closed := fun _ => .inl rfl }
+    | .NoOpinion, .Deny =>
+      -- Fail-closed: ideal=NoOpinion but metadata=Deny (allowed by ax_metadata_noOpinion_fail_closed)
+      .ok { authorizeIdeal := .NoOpinion, authorizeMetadata := .Deny,
+            conditionsAwareAuthorize := .ConditionsMap,
+            cmCanBecomeAllowed := cba, evaluateConditions := .NoOpinion,
+            ax_allow := fun h => absurd h (by decide),
+            ax_deny := fun h => absurd h (by decide),
+            ax_noOpinion := fun h => absurd h (by decide),
+            ax_conditional := fun _ => rfl,
+            ax_cba_sound := fun _ _ h => absurd h (by decide),
+            ax_metadata_unconditional := fun h => absurd rfl h,
+            ax_metadata_allow := fun h => absurd h (by decide),
+            ax_metadata_deny := fun h => absurd h (by decide),
+            ax_metadata_noOpinion_fail_closed := fun _ => .inr rfl }
+    | _, _ => .error s!"incoherent: ca=ConditionsMap, eval={h.evaluateConditions}, meta={h.authorizeMetadata} not valid"
 
 -- ============================================================================
 -- Core FFI function
@@ -134,6 +202,7 @@ def leanAuthzEvaluate (input : @& ByteArray) : String :=
       let entries := UnionConditionsAwareAuthorize handlers
       let result : AuthzOutput := {
         unionAuthorize := decisionToString (UnionAuthorize handlers)
+        unionAuthorizeMetadata := decisionToString (UnionAuthorizeMetadata handlers)
         pipeline := decisionToString (PipelineDecision handlers)
         evaluateEntries := decisionToString (UnionEvaluateConditions entries)
         sliceCBA := UnionSliceCanBecomeAllowed entries

@@ -95,11 +95,17 @@ type AuthzInput struct {
 	Handlers []HandlerInput `json:"handlers"`
 }
 
-// HandlerInput describes one authorizer's pre-bound behavior.
+// HandlerInput describes one authorizer's pre-bound behavior for a specific request.
 type HandlerInput struct {
-	// Authorize is the result of the old single-phase Authorize() path.
-	// Valid values: "Allow", "Deny", "NoOpinion"
-	Authorize string `json:"authorize"`
+	// AuthorizeIdeal is the abstract ideal result given complete information
+	// (attrs + data). Equal to EvaluateConditions when ConditionsAwareAuthorize
+	// is "ConditionsMap", and equal to the unconditional decision otherwise.
+	AuthorizeIdeal string `json:"authorizeIdeal"`
+
+	// AuthorizeMetadata is the production Authorize(ctx, attrs) result with only
+	// metadata. May be more conservative than AuthorizeIdeal (e.g. Deny when ideal
+	// is NoOpinion due to fail-closed behavior).
+	AuthorizeMetadata string `json:"authorizeMetadata"`
 
 	// ConditionsAwareAuthorize is the result of the new two-phase ConditionsAwareAuthorize().
 	// Valid values: "Allow", "Deny", "NoOpinion", "ConditionsMap"
@@ -118,6 +124,7 @@ type HandlerInput struct {
 // AuthzOutput contains all results computed by the Lean model.
 type AuthzOutput struct {
 	UnionAuthorize          string `json:"unionAuthorize"`
+	UnionAuthorizeMetadata  string `json:"unionAuthorizeMetadata"`
 	Pipeline                string `json:"pipeline"`
 	UnionEvaluateConditions string `json:"evaluateEntries"`
 	SliceCBA                bool   `json:"sliceCBA"`

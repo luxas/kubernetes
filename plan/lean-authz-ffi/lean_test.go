@@ -20,10 +20,9 @@ func TestCallLean_EmptyChain(t *testing.T) {
 func TestCallLean_SingleAllow(t *testing.T) {
 	result, err := CallLean(AuthzInput{
 		Handlers: []HandlerInput{{
-			Authorize:                "Allow",
+			AuthorizeIdeal: "Allow", AuthorizeMetadata: "Allow",
 			ConditionsAwareAuthorize: "Allow",
-			CmCanBecomeAllowed:       false,
-			EvaluateConditions:       "Allow",
+			CmCanBecomeAllowed: false, EvaluateConditions: "Allow",
 		}},
 	})
 	if err != nil {
@@ -31,6 +30,9 @@ func TestCallLean_SingleAllow(t *testing.T) {
 	}
 	if result.UnionAuthorize != "Allow" {
 		t.Errorf("expected Allow, got %s", result.UnionAuthorize)
+	}
+	if result.UnionAuthorizeMetadata != "Allow" {
+		t.Errorf("expected metadata Allow, got %s", result.UnionAuthorizeMetadata)
 	}
 	if result.Pipeline != "Allow" {
 		t.Errorf("expected Allow pipeline, got %s", result.Pipeline)
@@ -40,16 +42,15 @@ func TestCallLean_SingleAllow(t *testing.T) {
 func TestCallLean_ConditionalAllow(t *testing.T) {
 	result, err := CallLean(AuthzInput{
 		Handlers: []HandlerInput{{
-			Authorize:                "Allow",
+			AuthorizeIdeal: "Allow", AuthorizeMetadata: "Allow",
 			ConditionsAwareAuthorize: "ConditionsMap",
-			CmCanBecomeAllowed:       true,
-			EvaluateConditions:       "Allow",
+			CmCanBecomeAllowed: true, EvaluateConditions: "Allow",
 		}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// UnionAuthorize uses the old path: handler.authorize = Allow
+	// UnionAuthorize uses the ideal path: authorizeIdeal = Allow
 	if result.UnionAuthorize != "Allow" {
 		t.Errorf("expected Allow, got %s", result.UnionAuthorize)
 	}
@@ -59,27 +60,23 @@ func TestCallLean_ConditionalAllow(t *testing.T) {
 	}
 }
 
-func TestCallLean_ConditionalDeniedByCBA(t *testing.T) {
+func TestCallLean_FailClosed(t *testing.T) {
+	// ideal=NoOpinion, metadata=Deny (fail-closed)
 	result, err := CallLean(AuthzInput{
 		Handlers: []HandlerInput{{
-			Authorize:                "NoOpinion",
+			AuthorizeIdeal: "NoOpinion", AuthorizeMetadata: "Deny",
 			ConditionsAwareAuthorize: "ConditionsMap",
-			CmCanBecomeAllowed:       false,
-			EvaluateConditions:       "NoOpinion",
+			CmCanBecomeAllowed: false, EvaluateConditions: "NoOpinion",
 		}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.UnionAuthorize != "NoOpinion" {
-		t.Errorf("expected NoOpinion, got %s", result.UnionAuthorize)
+		t.Errorf("expected ideal NoOpinion, got %s", result.UnionAuthorize)
 	}
-	// Pipeline: cba=false → Deny
-	if result.Pipeline != "Deny" {
-		t.Errorf("expected Deny pipeline, got %s", result.Pipeline)
-	}
-	if result.SliceCBA != false {
-		t.Errorf("expected sliceCBA=false")
+	if result.UnionAuthorizeMetadata != "Deny" {
+		t.Errorf("expected metadata Deny (fail-closed), got %s", result.UnionAuthorizeMetadata)
 	}
 }
 
@@ -90,16 +87,14 @@ func TestCallLean_ChainResumption(t *testing.T) {
 	result, err := CallLean(AuthzInput{
 		Handlers: []HandlerInput{
 			{
-				Authorize:                "NoOpinion",
+				AuthorizeIdeal: "NoOpinion", AuthorizeMetadata: "NoOpinion",
 				ConditionsAwareAuthorize: "ConditionsMap",
-				CmCanBecomeAllowed:       true,
-				EvaluateConditions:       "NoOpinion",
+				CmCanBecomeAllowed: true, EvaluateConditions: "NoOpinion",
 			},
 			{
-				Authorize:                "Allow",
+				AuthorizeIdeal: "Allow", AuthorizeMetadata: "Allow",
 				ConditionsAwareAuthorize: "Allow",
-				CmCanBecomeAllowed:       false,
-				EvaluateConditions:       "Allow",
+				CmCanBecomeAllowed: false, EvaluateConditions: "Allow",
 			},
 		},
 	})

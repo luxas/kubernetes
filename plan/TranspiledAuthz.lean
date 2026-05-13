@@ -330,8 +330,10 @@ theorem metadata_allow_implies_ideal_allow
     -- 6. metadata=NoOpinion, ideal=NoOpinion → need ih
     -- metadata=Allow, ideal=Deny → contradiction (metadata can't upgrade Deny to Allow)
     · exact absurd hm (by rw [h.ax_metadata_deny hi]; decide)
-    -- metadata=Allow, ideal=NoOpinion → contradiction (metadata can't upgrade NoOpinion to Allow)
-    · exact absurd hm (h.ax_metadata_noOpinion_fail_closed hi)
+    -- metadata=Allow, ideal=NoOpinion → contradiction (metadata is NoOpinion or Deny, not Allow)
+    · cases h.ax_metadata_noOpinion_fail_closed hi with
+      | inl h => exact absurd hm (by rw [h]; decide)
+      | inr h => exact absurd hm (by rw [h]; decide)
     -- metadata=NoOpinion, ideal=Deny → contradiction (metadata must also be Deny)
     · exact absurd hm (by rw [h.ax_metadata_deny hi]; decide)
     -- metadata=NoOpinion, ideal=NoOpinion → both recurse, use ih

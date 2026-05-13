@@ -58,11 +58,14 @@ func genChain() hegel.Generator[[]leanauthzffi.HandlerInput] {
 func genHandler() hegel.Generator[leanauthzffi.HandlerInput] {
 	return hegel.Composite(func(tc *hegel.TestCase) leanauthzffi.HandlerInput {
 		condAware := hegel.Draw(tc, hegel.SampledFrom([]string{"Allow", "Deny", "NoOpinion", "ConditionsMap"}))
-		var authorize, evalCond string
+		var ideal, metadata, evalCond string
 		var canBecomeAllowed bool
 		switch condAware {
 		case "Allow", "Deny", "NoOpinion":
-			authorize = condAware
+			// Unconditional: ideal = metadata = the decision itself.
+			// (ax_metadata_unconditional: ca ≠ ConditionsMap → metadata = ideal)
+			ideal = condAware
+			metadata = condAware
 			evalCond = condAware
 			if condAware == "Allow" {
 				canBecomeAllowed = true
@@ -80,16 +83,32 @@ func genHandler() hegel.Generator[leanauthzffi.HandlerInput] {
 				canBecomeAllowed = true
 			}
 			evalCond = hegel.Draw(tc, hegel.SampledFrom(possibleEvalCondResults))
-			// authorize = evaluateConditions: the ideal single-phase result equals
-			// what the conditions evaluate to with full data. This is the coherence
-			// axiom (ax_conditional) in the Lean model.
-			authorize = evalCond
+
+			// ax_conditional: ideal = evaluateConditions
+			ideal = evalCond
+
+			// ax_metadata_*: metadata is at least as restrictive as ideal.
+			// Allow→Allow, Deny→Deny, NoOpinion→NoOpinion or Deny (fail-closed).
+			switch ideal {
+			case "Allow":
+				metadata = "Allow" // ax_metadata_allow
+			case "Deny":
+				metadata = "Deny" // ax_metadata_deny
+			case "NoOpinion":
+				// ax_metadata_noOpinion_fail_closed: NoOpinion or Deny
+				if hegel.Draw(tc, hegel.Booleans()) {
+					metadata = "Deny" // fail closed
+				} else {
+					metadata = "NoOpinion"
+				}
+			}
 		default:
 			tc.Errorf("unexpected condAware=%s generated", condAware)
 		}
 
 		return leanauthzffi.HandlerInput{
-			Authorize:                authorize,
+			AuthorizeIdeal:           ideal,
+			AuthorizeMetadata:        metadata,
 			ConditionsAwareAuthorize: condAware,
 			CmCanBecomeAllowed:       canBecomeAllowed,
 			EvaluateConditions:       evalCond,
