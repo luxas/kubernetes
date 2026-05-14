@@ -53,13 +53,73 @@ inductive UnconditionalDecision where
   | Deny | Allow | NoOpinion
   deriving Repr, DecidableEq, BEq
 
+structure ConditionsMap where
+  hasDenyCondition : Bool
+  hasAllowCondition : Bool
+
+  ax_at_least_one_allow_or_deny: hasDenyCondition = true ∨ hasAllowCondition = true
+  deriving Repr, DecidableEq
+
+def ConditionsMap.FailClosedDecision (c : ConditionsMap) : UnconditionalDecision :=
+  if c.hasDenyCondition then .Deny else .NoOpinion
+
+def ConditionsMap.CanBecomeAllowed (c : ConditionsMap) : Bool :=
+  c.hasAllowCondition
+
 inductive LeafDecision where
   | Allow
   | Deny
   | NoOpinion
-  | ConditionsMap (hasDenyCondition hasAllowCondition : Bool) (either_allow_or_deny : hasDenyCondition = true ∨ hasAllowCondition = true)
+  | ConditionsMap (cm: ConditionsMap)
   deriving Repr, DecidableEq
 
+/-- A conditions-aware decision: either a leaf decision, or a union (chain) of decisions.
+    Mirrors Go's `ConditionsAwareDecision`. -/
+inductive Decision where
+  | Leaf  (leaf : LeafDecision)
+  | Union (decisions : List Decision)
+  deriving Repr
+
+/-- Returns the decision to fail closed with when processing fails.
+    If the decision contains any Deny (leaf or condition), we must fail closed with Deny —
+    otherwise NoOpinion. -/
+def Decision.FailClosedDecision : Decision → UnconditionalDecision
+  | .Leaf .Allow     => .NoOpinion
+  | .Leaf .NoOpinion => .NoOpinion
+  | .Leaf .Deny      => .Deny
+  | .Leaf (.ConditionsMap c) => c.FailClosedDecision
+  | .Union ds => foldFailClosed ds
+where
+  foldFailClosed : List Decision → UnconditionalDecision
+    | []      => .NoOpinion
+    | d :: ds =>
+      match d.FailClosedDecision with
+      | .Deny => .Deny
+      | _     => foldFailClosed ds
+
+/-- Returns true if the decision tree contains at least one Allow or Deny leaf. -/
+def Decision.ContainsAllowOrDeny : Decision → Bool
+  | .Leaf .Allow     => true
+  | .Leaf .Deny      => true
+  | .Leaf .NoOpinion => false
+  | .Leaf (.ConditionsMap _) => false
+  | .Union ds => anyContainsAllowOrDeny ds
+where
+  anyContainsAllowOrDeny : List Decision → Bool
+    | []      => false
+    | d :: ds => d.ContainsAllowOrDeny || anyContainsAllowOrDeny ds
+
+/-- Returns true if there exists some ConditionsData for which the decision could evaluate to Allow. -/
+def Decision.CanBecomeAllowed : Decision → Bool
+  | .Leaf .Allow     => true
+  | .Leaf .Deny      => false
+  | .Leaf .NoOpinion => false
+  | .Leaf (.ConditionsMap c) => c.CanBecomeAllowed
+  | .Union ds => anyCanBecomeAllowed ds
+where
+  anyCanBecomeAllowed : List Decision → Bool
+    | []      => false
+    | d :: ds => d.CanBecomeAllowed || anyCanBecomeAllowed ds
 
 -- The axioms of the authorizer
 def AuthorizerContract (conditionsAwareAuthorize : LeafDecision)
@@ -68,12 +128,12 @@ def AuthorizerContract (conditionsAwareAuthorize : LeafDecision)
   | .Allow     => idealAuthorize = .Allow ∧ metadataAuthorize = .Allow ∧ evaluateConditions = .Deny
   | .Deny      => idealAuthorize = .Deny ∧ metadataAuthorize = .Deny ∧ evaluateConditions = .Deny
   | .NoOpinion => idealAuthorize = .NoOpinion ∧ metadataAuthorize = .NoOpinion ∧ evaluateConditions = .Deny
-  | .ConditionsMap hasDeny hasAllow _ =>
+  | .ConditionsMap c =>
       idealAuthorize = evaluateConditions ∧
-      (hasDeny → metadataAuthorize = .Deny) ∧
-      (¬hasDeny → metadataAuthorize = .NoOpinion) ∧
-      (¬hasDeny → evaluateConditions ≠ .Deny) ∧
-      (¬hasAllow → evaluateConditions ≠ .Allow)
+      (c.hasDenyCondition → metadataAuthorize = .Deny) ∧
+      (¬c.hasDenyCondition → metadataAuthorize = .NoOpinion) ∧
+      (¬c.hasDenyCondition → evaluateConditions ≠ .Deny) ∧
+      (¬c.hasAllowCondition → evaluateConditions ≠ .Allow)
 
 /-- An individual authorizer, with pre-bound attrs and data.
 
@@ -113,38 +173,38 @@ theorem unconditional_noopinion (a : Authorizer) (h : a.conditionsAwareAuthorize
   exact hc
 
 theorem conditional_hasDeny (a : Authorizer)
-    (h : ∃ hasAllow p, a.conditionsAwareAuthorize = .ConditionsMap true hasAllow p) :
+    (h : ∃ cm: ConditionsMap, a.conditionsAwareAuthorize = .ConditionsMap (cm) ∧ cm.hasDenyCondition = true) :
     a.metadataAuthorize = .Deny := by
-  obtain ⟨hasAllow, p, heq⟩ := h
+  obtain ⟨cm, h₁, h₂⟩ := h
   have hc := a.ax_authorizer
-  rewrite [heq] at hc
-  simp [AuthorizerContract] at hc
+  rewrite [h₁] at hc
+  simp [AuthorizerContract, h₂] at hc
   exact hc.2.1
 
 theorem conditional_noDeny (a : Authorizer)
-    (h : ∃ hasAllow p, a.conditionsAwareAuthorize = .ConditionsMap false hasAllow p) :
+    (h : ∃ cm: ConditionsMap, a.conditionsAwareAuthorize = .ConditionsMap (cm) ∧ cm.hasDenyCondition = false) :
     a.metadataAuthorize = .NoOpinion ∧ a.evaluateConditions ≠ .Deny := by
-  obtain ⟨hasAllow, p, heq⟩ := h
+  obtain ⟨cm, h₁, h₂⟩ := h
   have hc := a.ax_authorizer
-  rewrite [heq] at hc
-  simp [AuthorizerContract] at hc
+  rewrite [h₁] at hc
+  simp [AuthorizerContract, h₂] at hc
   exact ⟨hc.2.1, hc.2.2.1⟩
 
 theorem conditional_noAllow (a : Authorizer)
-    (h : ∃ hasDeny p, a.conditionsAwareAuthorize = .ConditionsMap hasDeny false p) :
+    (h : ∃ cm: ConditionsMap, a.conditionsAwareAuthorize = .ConditionsMap (cm) ∧ cm.hasAllowCondition = false) :
     a.evaluateConditions ≠ .Allow := by
-  obtain ⟨hasDeny, p, heq⟩ := h
+  obtain ⟨cm, h₁, h₂⟩ := h
   have hc := a.ax_authorizer
-  rewrite [heq] at hc
-  simp [AuthorizerContract] at hc
+  rewrite [h₁] at hc
+  simp [AuthorizerContract, h₂] at hc
   exact hc.2.2.2.2
 
 theorem conditional_ideal_evaluate (a : Authorizer)
-    (h : ∃ f1 f2 p, a.conditionsAwareAuthorize = .ConditionsMap f1 f2 p) :
+    (h : ∃ cm: ConditionsMap, a.conditionsAwareAuthorize = .ConditionsMap (cm)) :
     a.idealAuthorize = a.evaluateConditions := by
-  obtain ⟨f1, f2, p, heq⟩ := h
+  obtain ⟨cm, h₁⟩ := h
   have hc := a.ax_authorizer
-  rewrite [heq] at hc
+  rewrite [h₁] at hc
   simp [AuthorizerContract] at hc
   exact hc.1
 
