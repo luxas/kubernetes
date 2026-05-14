@@ -285,11 +285,9 @@ theorem evaluate_eq_ideal
       | Deny      => rfl
       | NoOpinion => exact ih
 
+mutual
 /-- When `FailClosedDecision` does not produce Deny, `Ideal` also cannot produce Deny.
-    Any path to Deny in the ideal (a `.Deny` leaf or a `ConditionsMap` with `evaluate = Deny`)
-    also makes `FailClosedDecision` return Deny. For `ConditionsMap`, this follows from
-    `ax_no_deny_cond_implies_never_deny`: if `hasDenyCondition = false` then
-    `evaluate ≠ Deny`, and if `hasDenyCondition = true` then `FailClosedDecision = Deny`. -/
+    Proved mutually with the list version (for Union's sub-decisions). -/
 theorem failClosed_not_deny_implies_ideal_not_deny
     (d : ConditionsAwareDecision)
     (h : d.FailClosedDecision ≠ .Deny)
@@ -306,48 +304,38 @@ theorem failClosed_not_deny_implies_ideal_not_deny
     | false => exact cm.ax_no_deny_cond_implies_never_deny (by simp [hdeny])
   | Union ds =>
     simp [ConditionsAwareDecision.FailClosedDecision, ConditionsAwareDecision.Ideal] at h ⊢
-    exact foldNotDeny ds h
-where
-  -- Auxiliary: same property on a list, for the Union case.
-  -- Nested Unions recurse into the sub-list (unionIdealAuthorize flattens them).
-  foldNotDeny (ds : List ConditionsAwareDecision)
-      (h : ConditionsAwareDecision.FailClosedDecision.foldFailClosed ds ≠ .Deny)
-      : unionIdealAuthorize ds ≠ .Deny := by
-    induction ds with
-    | nil => simp [unionIdealAuthorize]
-    | cons d rest ih =>
-      unfold unionIdealAuthorize
-      unfold ConditionsAwareDecision.FailClosedDecision.foldFailClosed at h
-      cases d with
-      | Allow => simp
-      | Deny => simp [ConditionsAwareDecision.FailClosedDecision] at h
-      | NoOpinion =>
-        simp [ConditionsAwareDecision.FailClosedDecision] at h
-        exact ih h
-      | ConditionsMap cm =>
-        simp only [ConditionsMap.Ideal]
-        cases hdeny : cm.hasDenyCondition with
-        | true =>
-          simp [ConditionsAwareDecision.FailClosedDecision, ConditionsMap.FailClosedDecision, hdeny] at h
-        | false =>
-          have : ConditionsAwareDecision.FailClosedDecision.foldFailClosed rest ≠ .Deny := by
-            simp [ConditionsAwareDecision.FailClosedDecision, ConditionsMap.FailClosedDecision, hdeny] at h
-            exact h
-          exact cm.ax_no_deny_cond_implies_never_deny (by simp [hdeny])
-      | Union subDs =>
-        -- unionIdealAuthorize (Union subDs :: rest) = unionIdealAuthorize subDs
-        -- FailClosedDecision(Union subDs) = foldFailClosed subDs
-        -- If foldFailClosed subDs = Deny, the outer fold returns Deny → contradiction
-        -- If foldFailClosed subDs ≠ Deny, we need foldNotDeny subDs
-        simp [ConditionsAwareDecision.FailClosedDecision] at h
-        cases hfold : ConditionsAwareDecision.FailClosedDecision.foldFailClosed subDs with
-        | Deny => simp [hfold] at h
-        | Allow =>
-          simp [hfold] at h
-          sorry -- Need well-founded recursion on the tree structure
-        | NoOpinion =>
-          simp [hfold] at h
-          sorry -- Same: need well-founded recursion
+    exact foldFailClosed_not_deny_implies_ideal_not_deny ds h
+
+theorem foldFailClosed_not_deny_implies_ideal_not_deny
+    (ds : List ConditionsAwareDecision)
+    (h : ConditionsAwareDecision.FailClosedDecision.foldFailClosed ds ≠ .Deny)
+    : unionIdealAuthorize ds ≠ .Deny := by
+  match ds with
+  | [] => simp [unionIdealAuthorize]
+  | d :: rest =>
+    unfold unionIdealAuthorize
+    unfold ConditionsAwareDecision.FailClosedDecision.foldFailClosed at h
+    match hd : d with
+    | .Allow => simp
+    | .Deny => simp [ConditionsAwareDecision.FailClosedDecision] at h
+    | .NoOpinion =>
+      simp [ConditionsAwareDecision.FailClosedDecision] at h
+      exact foldFailClosed_not_deny_implies_ideal_not_deny rest h
+    | .ConditionsMap cm =>
+      simp only [ConditionsMap.Ideal]
+      cases hdeny : cm.hasDenyCondition with
+      | true =>
+        simp [ConditionsAwareDecision.FailClosedDecision, ConditionsMap.FailClosedDecision, hdeny] at h
+      | false =>
+        exact cm.ax_no_deny_cond_implies_never_deny (by simp [hdeny])
+    | .Union subDs =>
+      have h_fc : (ConditionsAwareDecision.Union subDs).FailClosedDecision ≠ .Deny := by
+        simp [ConditionsAwareDecision.FailClosedDecision] at h ⊢
+        intro hfold; simp [hfold] at h
+      have := failClosed_not_deny_implies_ideal_not_deny (.Union subDs) h_fc
+      simp [ConditionsAwareDecision.Ideal] at this
+      exact this
+end
 
 /-- **Safety**: if metadata-only Authorize allows, ideal also allows.
     The metadata path never grants unauthorized access. -/
