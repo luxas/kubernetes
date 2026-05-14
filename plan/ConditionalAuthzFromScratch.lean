@@ -111,12 +111,241 @@ def AuthorizerContract (conditionsAwareAuthorize : ConditionsAwareDecision)
       | .Deny => authorize = .Deny
       | _ => authorize = .NoOpinion
 
-/-- An individual authorizer, with pre-bound attrs and data.
-    See the module docstring for a description of each field. -/
+/-- An individual authorizer, with pre-bound attrs and data. -/
 structure Authorizer where
-  authorize      : Decision
+  /-- The production Authorize(ctx, attrs) result — metadata-only, possibly fail-closed. -/
+  authorize : Decision
+  /-- The phase-1 result of ConditionsAwareAuthorize(ctx, attrs). -/
   conditionsAwareAuthorize : ConditionsAwareDecision
-  evaluateConditions     : Decision
+  /-- The phase-2 result of EvaluateConditions(ctx, decision, data). -/
+  evaluateConditions : Decision
 
-  -- Axioms where an exhaustive match
+  /-- The per-authorizer coherence contract. -/
   ax_authorizer : AuthorizerContract conditionsAwareAuthorize authorize evaluateConditions
+
+/-- The ideal result of an authorizer: what it would return with full information. -/
+def Authorizer.idealAuthorize (a : Authorizer) : Decision :=
+  a.conditionsAwareAuthorize.Ideal
+
+-- ============================================================================
+-- Transpiled: union.Authorize — metadata-only (union.go:46-70)
+--
+-- ```go
+-- for _, curr := range authzHandler {
+--     decision, _, _ := curr.Authorize(ctx, a)
+--     switch decision {
+--     case DecisionAllow, DecisionDeny: return decision, ...
+--     case DecisionNoOpinion: // continue
+--     }
+-- }
+-- return DecisionNoOpinion, ...
+-- ```
+-- ============================================================================
+
+def unionAuthorize : List Authorizer → Decision
+  | [] => .NoOpinion
+  | h :: rest =>
+    match h.authorize with
+    | .Allow     => .Allow
+    | .Deny      => .Deny
+    | .NoOpinion => unionAuthorize rest
+
+-- ============================================================================
+-- Transpiled: union.ConditionsAwareAuthorize (union.go:73-96)
+--
+-- ```go
+-- var decisions []ConditionsAwareDecision
+-- for _, curr := range authzHandler {
+--     decision := curr.ConditionsAwareAuthorize(ctx, a)
+--     decisions = append(decisions, decision)
+--     if decision.ContainsAllowOrDeny() { return DecisionUnion(decisions...) }
+-- }
+-- return DecisionUnion(decisions...)
+-- ```
+--
+-- Returns the collected (authorizer, decision) entries. The decisions[i] ↔
+-- authzHandler[i] index correlation is modelled as explicit pairing.
+-- ============================================================================
+
+def unionConditionsAwareAuthorize : List Authorizer → List (Authorizer × ConditionsAwareDecision)
+  | [] => []
+  | h :: rest =>
+    let d := h.conditionsAwareAuthorize
+    match d with
+    | .Allow | .Deny => [(h, d)]  -- ContainsAllowOrDeny → short-circuit
+    | .NoOpinion | .ConditionsMap _ => (h, d) :: unionConditionsAwareAuthorize rest
+    | .Union _ => (h, d) :: unionConditionsAwareAuthorize rest  -- Union from individual authorizer treated like conditional
+
+-- ============================================================================
+-- Transpiled: union.EvaluateConditions (union.go:99-152)
+--
+-- ```go
+-- for i, subD := range unionedDecisions {
+--     if subD.IsAllowed() || subD.IsDenied() { return subD.UnconditionalParts() }
+--     var decision Decision
+--     if subD.IsNoOpinion() { decision = NoOpinion }
+--     else { decision = authzHandler[i].EvaluateConditions(...) }
+--     switch decision {
+--     case Allow, Deny: return decision, ...
+--     case NoOpinion: // continue
+--     }
+-- }
+-- return NoOpinion, ...
+-- ```
+-- ============================================================================
+
+def unionEvaluateConditions : List (Authorizer × ConditionsAwareDecision) → Decision
+  | [] => .NoOpinion
+  | (h, d) :: rest =>
+    match d with
+    | .Allow     => .Allow
+    | .Deny      => .Deny
+    | .NoOpinion => unionEvaluateConditions rest
+    | .ConditionsMap _ | .Union _ =>
+      -- decision = authzHandler[i].EvaluateConditions(ctx, subD, data)
+      match h.evaluateConditions with
+      | .Allow     => .Allow
+      | .Deny      => .Deny
+      | .NoOpinion => unionEvaluateConditions rest
+
+-- ============================================================================
+-- The ideal single-phase chain result
+-- ============================================================================
+
+def unionIdeal : List Authorizer → Decision
+  | [] => .NoOpinion
+  | h :: rest =>
+    match h.idealAuthorize with
+    | .Allow     => .Allow
+    | .Deny      => .Deny
+    | .NoOpinion => unionIdeal rest
+
+-- ============================================================================
+-- Proofs
+-- ============================================================================
+
+/-- Helper: extract the authorize and evaluateConditions from the contract
+    for the ConditionsMap case. -/
+private theorem contract_conditional (a : Authorizer) (cm : ConditionsMap)
+    (hca : a.conditionsAwareAuthorize = .ConditionsMap cm)
+    : a.evaluateConditions = cm.evaluate
+    ∧ (cm.hasDenyCondition = true → a.authorize = .Deny)
+    ∧ (cm.hasDenyCondition = false → a.authorize = .NoOpinion) := by
+  have hc := a.ax_authorizer
+  rw [hca] at hc
+  simp [AuthorizerContract, ConditionsAwareDecision.Ideal, ConditionsMap.Ideal,
+        ConditionsAwareDecision.FailClosedDecision, ConditionsMap.FailClosedDecision] at hc
+  obtain ⟨heval, hmeta⟩ := hc
+  constructor
+  · exact heval
+  · split at hmeta
+    · exact ⟨fun _ => hmeta, fun h => by rename_i h'; simp_all⟩
+    · exact ⟨fun h => by rename_i h'; simp_all, fun _ => hmeta⟩
+
+/-- **Core lemma**: evaluating the union entries equals the ideal chain.
+    union.go:111: "This logic directly maps 1:1 with Authorize()" -/
+theorem evaluate_eq_ideal
+    (handlers : List Authorizer)
+    : unionEvaluateConditions (unionConditionsAwareAuthorize handlers)
+    = unionIdeal handlers := by
+  induction handlers with
+  | nil => rfl
+  | cons h rest ih =>
+    simp only [unionIdeal, Authorizer.idealAuthorize]
+    -- Show LHS = match h.conditionsAwareAuthorize.Ideal with ...
+    show unionEvaluateConditions (unionConditionsAwareAuthorize (h :: rest))
+       = match h.conditionsAwareAuthorize.Ideal with
+         | .Allow => .Allow | .Deny => .Deny | .NoOpinion => unionIdeal rest
+    cases hca : h.conditionsAwareAuthorize with
+    | Allow =>
+      simp [unionConditionsAwareAuthorize, hca, unionEvaluateConditions, ConditionsAwareDecision.Ideal]
+    | Deny =>
+      simp [unionConditionsAwareAuthorize, hca, unionEvaluateConditions, ConditionsAwareDecision.Ideal]
+    | NoOpinion =>
+      simp [unionConditionsAwareAuthorize, hca, unionEvaluateConditions, ConditionsAwareDecision.Ideal]
+      exact ih
+    | ConditionsMap cm =>
+      have ⟨heval, _, _⟩ := contract_conditional h cm hca
+      simp [unionConditionsAwareAuthorize, hca, unionEvaluateConditions,
+            ConditionsAwareDecision.Ideal, ConditionsMap.Ideal, heval]
+      cases cm.evaluate with
+      | Allow     => rfl
+      | Deny      => rfl
+      | NoOpinion => exact ih
+    | Union ds =>
+      -- Individual authorizers returning Union is uncommon but handled for totality.
+      -- The contract says evaluateConditions = Ideal(Union ds).
+      have hc := h.ax_authorizer
+      rw [hca] at hc
+      simp [AuthorizerContract, ConditionsAwareDecision.Ideal] at hc
+      obtain ⟨heval, _⟩ := hc
+      simp [unionConditionsAwareAuthorize, hca, unionEvaluateConditions, ConditionsAwareDecision.Ideal, heval]
+      cases unionIdealAuthorize ds with
+      | Allow     => rfl
+      | Deny      => rfl
+      | NoOpinion => exact ih
+
+/-- **Safety**: if metadata-only Authorize allows, ideal also allows.
+    The metadata path never grants unauthorized access. -/
+theorem metadata_allow_implies_ideal_allow
+    (handlers : List Authorizer)
+    : unionAuthorize handlers = .Allow →
+      unionIdeal handlers = .Allow := by
+  induction handlers with
+  | nil => simp [unionAuthorize]
+  | cons h rest ih =>
+    simp only [unionAuthorize, unionIdeal, Authorizer.idealAuthorize]
+    cases hca : h.conditionsAwareAuthorize with
+    | Allow =>
+      have hc := h.ax_authorizer; rw [hca] at hc
+      simp [AuthorizerContract] at hc
+      simp [hc.1, ConditionsAwareDecision.Ideal]
+    | Deny =>
+      have hc := h.ax_authorizer; rw [hca] at hc
+      simp [AuthorizerContract] at hc
+      simp [hc.1]
+    | NoOpinion =>
+      have hc := h.ax_authorizer; rw [hca] at hc
+      simp [AuthorizerContract] at hc
+      simp [hc.1, ConditionsAwareDecision.Ideal]
+      exact ih
+    | ConditionsMap cm =>
+      have ⟨_, h_deny, h_nodeny⟩ := contract_conditional h cm hca
+      simp [ConditionsAwareDecision.Ideal, ConditionsMap.Ideal]
+      cases hdeny : cm.hasDenyCondition with
+      | true =>
+        -- authorize = Deny → metadata path returns Deny, can't be Allow
+        simp [h_deny hdeny]
+      | false =>
+        -- authorize = NoOpinion → metadata path recurses
+        simp [h_nodeny hdeny]
+        -- Goal: unionAuthorize rest = Allow → match cm.evaluate with ... = Allow
+        intro hrest_allow
+        have hrest_ideal := ih hrest_allow
+        cases heval : cm.evaluate with
+        | Allow     => rfl
+        | Deny      => exact absurd heval (cm.ax_no_deny_cond_implies_never_deny (by simp [hdeny]))
+        | NoOpinion => exact hrest_ideal
+    | Union ds =>
+      have hc := h.ax_authorizer; rw [hca] at hc
+      simp [AuthorizerContract, ConditionsAwareDecision.FailClosedDecision, ConditionsAwareDecision.Ideal] at hc
+      obtain ⟨_, hmeta⟩ := hc
+      simp [ConditionsAwareDecision.Ideal]
+      -- metadata is either Deny or NoOpinion (from FailClosedDecision)
+      split at hmeta
+      · -- FailClosed = Deny → authorize = Deny → can't be Allow
+        simp [hmeta]
+      · -- FailClosed ≠ Deny → authorize = NoOpinion → recurse
+        simp [hmeta]
+        intro hrest_allow
+        have hrest_ideal := ih hrest_allow
+        cases unionIdealAuthorize ds with
+        | Allow     => rfl
+        | Deny      =>
+          -- This case is not provable with the current AuthorizerContract:
+          -- ideal=Deny but metadata=NoOpinion is allowed by the contract when
+          -- FailClosedDecision ≠ Deny (i.e. no Deny-effect conditions, but
+          -- evaluation still yields Deny from e.g. error handling).
+          -- A stronger contract would need: ideal=Deny → metadata=Deny.
+          sorry
+        | NoOpinion => exact hrest_ideal
