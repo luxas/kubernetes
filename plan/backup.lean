@@ -1,5 +1,5 @@
 
-namespace ConditionalAuthzFromScratch
+namespace backup
 
 -- ============================================================================
 -- Types
@@ -9,20 +9,11 @@ inductive Decision where
   | Deny | Allow | NoOpinion
   deriving Repr, DecidableEq, BEq
 
-structure ConditionsData where
-  foo: Bool -- TODO
-
 structure ConditionsMap where
   hasDenyCondition : Bool
   hasAllowCondition : Bool
-  evaluate : Decision -- Data -> Allow/Deny/NoOpinion
+  evaluate : Decision
 
-  -- condition: Data -> bool
-  -- allowConditions: List Condition
-  -- denyConditions: List Condition
-  -- noOpinionConditions: List Condition
-
-  -- TODO: externalize this
   ax_at_least_one_allow_or_deny: hasDenyCondition = true ∨ hasAllowCondition = true
   ax_no_allow_cond_implies_never_allow : ¬hasAllowCondition → evaluate ≠ .Allow
   ax_no_deny_cond_implies_never_deny : ¬hasDenyCondition → evaluate ≠ .Deny
@@ -97,16 +88,9 @@ def unionIdealAuthorize(decisions : List ConditionsAwareDecision) : Decision :=
     | .Deny      => .Deny
     | .NoOpinion => unionIdealAuthorize rest
     | .ConditionsMap cm => cm.Ideal
-    | .Union subDecisions => unionIdealAuthorize subDecisions -- TODO: Continue with rest
+    | .Union subDecisions => unionIdealAuthorize subDecisions
 
-/-- Returns the idealized unconditional decision from a Decision tree.
-  Ideal:
-  Authorize : InternalState x Attributes x ConditionsData -> Decision
-
-  Practical:
-  ConditionalAuthorize : InternalState x Attributes -> ConditionsAwareDecision
-  EvaluateConditions : ConditionsAwareDecision x ConditionsData -> Decision
--/
+/-- Returns the idealized unconditional decision from a Decision tree. -/
 def ConditionsAwareDecision.Ideal : ConditionsAwareDecision → Decision
   | .Allow     => .Allow
   | .Deny      => .Deny
@@ -115,7 +99,6 @@ def ConditionsAwareDecision.Ideal : ConditionsAwareDecision → Decision
   | .Union decisions => unionIdealAuthorize decisions
 
 -- The axioms of the authorizer. The conditionsAwareAuthorize "controls" what authorize and evaluateConditions should return
--- inductive definition instead? hypothesis and split the cases
 def AuthorizerContract (conditionsAwareAuthorize : ConditionsAwareDecision)
     (authorize evaluateConditions : Decision) : Prop :=
   match conditionsAwareAuthorize with
@@ -130,17 +113,11 @@ def AuthorizerContract (conditionsAwareAuthorize : ConditionsAwareDecision)
 
 /-- An individual authorizer, with pre-bound attrs and data. -/
 structure Authorizer where
-  /-- The production Authorize(ctx, attrs) result — metadata-only, possibly fail-closed.
-    AuthorizeMetadata: InternalState x Attributes -> Decision
-  -/
+  /-- The production Authorize(ctx, attrs) result — metadata-only, possibly fail-closed. -/
   authorize : Decision
-  /-- The phase-1 result of ConditionsAwareAuthorize(ctx, attrs).
-    ConditionsAwareAuthorize: InternalState x Attributes -> ConditionsAwareDecision
-  -/
+  /-- The phase-1 result of ConditionsAwareAuthorize(ctx, attrs). -/
   conditionsAwareAuthorize : ConditionsAwareDecision
-  /-- The phase-2 result of EvaluateConditions(ctx, decision, data).
-    EvaluateConditions: ConditionsAwareDecision x ConditionsData -> Decision
-  -/
+  /-- The phase-2 result of EvaluateConditions(ctx, decision, data). -/
   evaluateConditions : Decision
 
   /-- The per-authorizer coherence contract. -/
@@ -149,13 +126,6 @@ structure Authorizer where
 /-- The ideal result of an authorizer: what it would return with full information. -/
 def Authorizer.idealAuthorize (a : Authorizer) : Decision :=
   a.conditionsAwareAuthorize.Ideal
-
--- theorem: all authorizers in a List are authorizers -> AuthorizerContract mkUnionAuthorizer
--- allows ignoring local errors when properties are not needed
--- e.g. ignore well-formed set behaviors
-
-def mkUnionAuthorizer (authorizers: List Authorizer): Authorizer :=
-  TODO
 
 -- ============================================================================
 -- Transpiled: union.Authorize — metadata-only (union.go:46-70)
@@ -435,52 +405,3 @@ theorem metadata_allow_implies_ideal_allow
           have := failClosed_not_deny_implies_ideal_not_deny (.Union ds) h_fc
           simp [ConditionsAwareDecision.Ideal, heval] at this
         | NoOpinion => exact hrest_ideal
-
--- add theorems for the intermediate result as well
--- make sure that can become allowed stuff is sound
-
--- ============================================================================
--- Constructing the union as an Authorizer instance
--- ============================================================================
-
-/-- When no sub-handler's conditionsAwareAuthorize is Allow or Deny,
-    unionAuthorize can only return Deny or NoOpinion (never Allow).
-    This is because each sub-handler's `authorize` is Deny or NoOpinion
-    by their individual contracts. -/
-theorem unionAuthorize_no_allow_when_no_unconditional
-    (handlers : List Authorizer)
-    (h : ∀ a ∈ handlers,
-      a.conditionsAwareAuthorize ≠ .Allow ∧ a.conditionsAwareAuthorize ≠ .Deny)
-    : unionAuthorize handlers ≠ .Allow := by
-  induction handlers with
-  | nil => simp [unionAuthorize]
-  | cons a rest ih =>
-    simp only [unionAuthorize]
-    have hab := h a (by simp)
-    have ih' := ih (fun a' ha' => h a' (by simp [ha']))
-    have hc := a.ax_authorizer
-    -- a.conditionsAwareAuthorize is not Allow or Deny, so by contract
-    -- a.authorize is Deny or NoOpinion
-    cases hca : a.conditionsAwareAuthorize with
-    | Allow => exact absurd hca hab.1
-    | Deny => exact absurd hca hab.2
-    | NoOpinion =>
-      rw [hca] at hc; simp [AuthorizerContract] at hc
-      simp [hc.1]; exact ih'
-    | ConditionsMap cm =>
-      rw [hca] at hc
-      simp [AuthorizerContract, ConditionsAwareDecision.FailClosedDecision,
-            ConditionsMap.FailClosedDecision] at hc
-      obtain ⟨_, hmeta⟩ := hc
-      split at hmeta
-      · simp [hmeta]
-      · simp [hmeta]; exact ih'
-    | Union ds =>
-      rw [hca] at hc
-      simp [AuthorizerContract, ConditionsAwareDecision.FailClosedDecision] at hc
-      obtain ⟨_, hmeta⟩ := hc
-      split at hmeta
-      · simp [hmeta]
-      · simp [hmeta]; exact ih'
-
-end ConditionalAuthzFromScratch
