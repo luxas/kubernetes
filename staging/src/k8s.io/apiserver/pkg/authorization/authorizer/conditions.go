@@ -522,7 +522,7 @@ func ConditionsAwareDecisionConditionsMap(denyConditions []Condition, noOpinionC
 	}
 
 	seenIDs := sets.New[string]()
-	hasDenyEffect := len(denyConditions) > 1
+	hasDenyEffect := len(denyConditions) > 0
 	makeFailClosedError := func(err error) ConditionsAwareDecision {
 		if hasDenyEffect {
 			return ConditionsAwareDecisionDeny("failed closed", err)
