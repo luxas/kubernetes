@@ -165,7 +165,6 @@ func (d ConditionsAwareDecision) IsUnconditional() bool {
 	return d.IsAllow() || d.IsDeny() || d.IsNoOpinion()
 }
 
-/*
 // UnconditionalParts turns a ConditionsAwareDecision into the
 // triple that Authorizer.Authorize expects. If the decision is
 // conditional, the returned condition is Deny if there were at least
@@ -177,9 +176,9 @@ func (d ConditionsAwareDecision) IsUnconditional() bool {
 // Authorize() as "return self.ConditionsAwareAuthorize(ctx, attrs).UnconditionalParts()"
 func (d ConditionsAwareDecision) UnconditionalParts() (Decision, string, error) {
 	switch {
-	case d.IsAllowed():
+	case d.IsAllow():
 		return DecisionAllow, d.Reason(), d.Error()
-	case d.IsDenied():
+	case d.IsDeny():
 		return DecisionDeny, d.Reason(), d.Error()
 	case d.IsNoOpinion():
 		return DecisionNoOpinion, d.Reason(), d.Error()
@@ -191,7 +190,6 @@ func (d ConditionsAwareDecision) UnconditionalParts() (Decision, string, error) 
 		return d.FailClosedDecision(), "failed closed: tried to return conditional decision to conditions-unaware authorizer", nil
 	}
 }
-*/
 
 // FailClosedDecision returns either a Deny or NoOpinion decision to fail closed
 // whenever processing a decision fails. If the decision contains one or
@@ -691,14 +689,10 @@ func (c ConditionsMap) Evaluate(ctx context.Context, data ConditionsData, evalua
 		// there is some matching NoOpinion/Allow condition or not. This means that we need to return another, possibly refined ConditionsMap
 		// TODO: Use the real constructor or replace altogether.
 		if len(unevaluatedDenyConditions) != 0 {
-			return ConditionsAwareDecision{
-				decisionType: conditionsAwareDecisionTypeConditionsMap,
-				conditionsMap: ConditionsMap{
-					denyConditions:      unevaluatedDenyConditions,
-					noOpinionConditions: deepCopyConditions(c.noOpinionConditions),
-					allowConditions:     deepCopyConditions(c.allowConditions),
-				},
-			}
+			return ConditionsAwareDecisionConditionsMap(
+				unevaluatedDenyConditions,
+				deepCopyConditions(c.noOpinionConditions),
+				deepCopyConditions(c.allowConditions))
 		}
 	}
 	// If we got here, all Deny conditions could be evaluated, and evaluated to false, nil
@@ -747,17 +741,10 @@ func (c ConditionsMap) Evaluate(ctx context.Context, data ConditionsData, evalua
 			}
 
 			// Otherwise, the possible outcomes are [NoOpinion, Allow]. Return a possibly refined ConditionsMap.
-			// TODO: Use the real constructor or replace altogether.
-			return ConditionsAwareDecision{
-				decisionType: conditionsAwareDecisionTypeConditionsMap,
-				conditionsMap: ConditionsMap{
-					denyConditions:      nil,
-					noOpinionConditions: unevaluatedNoOpinionConditions,
-					// Technically, one could greedily try evaluating the Allow conditions and whether none of them evaluate to true,
-					// directly fold to NoOpinion, even though there are unevaluated NoOpinion conditions.
-					allowConditions: deepCopyConditions(c.allowConditions),
-				},
-			}
+			return ConditionsAwareDecisionConditionsMap(
+				nil,
+				unevaluatedNoOpinionConditions,
+				deepCopyConditions(c.allowConditions))
 		}
 	}
 	// If we got here, all Deny and NoOpinion conditions could be evaluated, and evaluated to false, nil
@@ -797,16 +784,8 @@ func (c ConditionsMap) Evaluate(ctx context.Context, data ConditionsData, evalua
 		}
 		// When len(unevaluatedAllowConditions) != 0, the possible outcomes are [NoOpinion, Allow].
 		// Return a possibly refined ConditionsMap with the Allow conditions that could not be evaluated.
-		// TODO: Use the real constructor or replace altogether.
 		if len(unevaluatedAllowConditions) != 0 {
-			return ConditionsAwareDecision{
-				decisionType: conditionsAwareDecisionTypeConditionsMap,
-				conditionsMap: ConditionsMap{
-					denyConditions:      nil,
-					noOpinionConditions: nil,
-					allowConditions:     unevaluatedAllowConditions,
-				},
-			}
+			return ConditionsAwareDecisionConditionsMap(nil, nil, unevaluatedAllowConditions)
 		}
 	}
 
