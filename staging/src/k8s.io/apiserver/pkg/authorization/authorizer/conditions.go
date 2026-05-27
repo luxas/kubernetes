@@ -416,12 +416,13 @@ func (r ConditionEvaluationResult) IsUnevaluatable() bool {
 type Condition interface {
 	// GetID uniquely identifies this condition within the scope of the authorizer
 	// that authored it. Validated as a Kubernetes label key.
+	// Any domain of form *.k8s.io or *.kubernetes.io is reserved for Kubernetes use.
 	// Required.
 	GetID() string
 
 	// GetType describes the type of the condition, if there are multiple possibilities.
 	// Should be formatted as a Kubernetes label key.
-	// Any domain suffix of *.k8s.io or *.kubernetes.io is reserved for Kubernetes use.
+	// Any domain of form *.k8s.io or *.kubernetes.io is reserved for Kubernetes use.
 	// Optional. Can be omitted if the authorizer already knows how to evaluate the condition.
 	GetType() string
 
