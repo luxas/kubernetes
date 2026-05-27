@@ -120,7 +120,7 @@ func (authzHandler unionAuthzHandler) EvaluateConditions(ctx context.Context, un
 		// Precondition: All previously seen leaf decisions were or evaluated to NoOpinion, or some unrecognized mode.
 
 		// If we get to an Allow or Deny in the union chain, we have our answer.
-		if unevaluatedSubDecision.IsAllowed() || unevaluatedSubDecision.IsDenied() {
+		if unevaluatedSubDecision.IsAllow() || unevaluatedSubDecision.IsDeny() {
 			return unevaluatedSubDecision.UnconditionalParts()
 		}
 

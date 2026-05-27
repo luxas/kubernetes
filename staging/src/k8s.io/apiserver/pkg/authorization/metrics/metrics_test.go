@@ -175,7 +175,8 @@ func TestRecordAuthorizationDecisionsTotal(t *testing.T) {
 
 	t.Run("conditional emits a metric (conditional authorizer via ConditionsAwareAuthorize)", func(t *testing.T) {
 		dummyConditionalAuthorizer.authorizeDecision = authorizer.ConditionsAwareDecisionConditionsMap(
-			authorizer.GenericCondition{ID: "foo", Effect: authorizer.ConditionEffectAllow},
+			nil, nil,
+			[]authorizer.Condition{authorizer.GenericCondition{ID: "foo"}},
 		)
 		_ = ac.ConditionsAwareAuthorize(context.Background(), nil)
 		_ = ac.ConditionsAwareAuthorize(context.Background(), nil)

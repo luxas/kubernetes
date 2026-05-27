@@ -30,8 +30,6 @@ import (
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apiserver/pkg/authentication/user"
-	genericfeatures "k8s.io/apiserver/pkg/features"
-	utilfeature "k8s.io/apiserver/pkg/util/feature"
 )
 
 // ErrorConditionEvaluationNotSupported is returned by authorizer implementations
@@ -167,7 +165,6 @@ func (d ConditionsAwareDecision) IsUnconditional() bool {
 	return d.IsAllow() || d.IsDeny() || d.IsNoOpinion()
 }
 
-/*
 // UnconditionalParts turns a ConditionsAwareDecision into the
 // triple that Authorizer.Authorize expects. If the decision is
 // conditional, the returned condition is Deny if there were at least
@@ -179,9 +176,9 @@ func (d ConditionsAwareDecision) IsUnconditional() bool {
 // Authorize() as "return self.ConditionsAwareAuthorize(ctx, attrs).UnconditionalParts()"
 func (d ConditionsAwareDecision) UnconditionalParts() (Decision, string, error) {
 	switch {
-	case d.IsAllowed():
+	case d.IsAllow():
 		return DecisionAllow, d.Reason(), d.Error()
-	case d.IsDenied():
+	case d.IsDeny():
 		return DecisionDeny, d.Reason(), d.Error()
 	case d.IsNoOpinion():
 		return DecisionNoOpinion, d.Reason(), d.Error()
@@ -193,7 +190,6 @@ func (d ConditionsAwareDecision) UnconditionalParts() (Decision, string, error) 
 		return d.FailClosedDecision(), "failed closed: tried to return conditional decision to conditions-unaware authorizer", nil
 	}
 }
-*/
 
 // FailClosedDecision returns either a Deny or NoOpinion decision to fail closed
 // whenever processing a decision fails. If the decision contains one or
@@ -318,31 +314,6 @@ func (d ConditionsAwareDecision) String() string {
 	return fmt.Sprintf("Deny%s", paramsStr())
 }
 
-// ConditionEffect specifies how a condition evaluating to true should be handled.
-type ConditionEffect string
-
-const (
-	// ConditionEffectDeny means that if this condition evaluates to true,
-	// the ConditionsMap necessarily evaluates to Deny. No further authorizers
-	// are consulted.
-	ConditionEffectDeny ConditionEffect = "Deny"
-
-	// ConditionEffectNoOpinion means that if this condition evaluates to true,
-	// the given authorizer's ConditionsMap cannot evaluate to Allow anymore, but
-	// necessarily Deny or NoOpinion, depending on whether there are any true
-	// EffectDeny conditions.
-	// However, later authorizers in the chain can still Allow or Deny.
-	// It is effectively a softer deny that just overrides the authorizer's own
-	// allow policies.
-	ConditionEffectNoOpinion ConditionEffect = "NoOpinion"
-
-	// ConditionEffectAllow means that if this condition evaluates to true,
-	// the ConditionsMap evaluates to Allow, unless any Deny/NoOpinion condition
-	// also evaluates to true (in which case the Deny/NoOpinion conditions have
-	// precedence).
-	ConditionEffectAllow ConditionEffect = "Allow"
-)
-
 // ConditionsMap is a map of conditions of a given type, and represents
 // the conditional decision from the authorizer.
 // It must be constructed through ConditionsAwareDecisionConditionsMap.
@@ -364,73 +335,92 @@ type ConditionsMap struct {
 // more Deny decisions or conditions, one must fail closed with Deny, as that could or would
 // have been the if the condition evaluation did not error. Otherwise, NoOpinion is returned.
 func (c ConditionsMap) FailClosedDecision() Decision {
-	for cond := range c.Conditions() {
-		if cond.GetEffect() == ConditionEffectDeny {
-			return DecisionDeny
-		}
+	if len(c.denyConditions) > 0 {
+		return DecisionDeny
 	}
 	return DecisionNoOpinion
 }
+
+// conditionEvaluationResultType is a small enum for the type of ConditionEvaluationResult
+type conditionEvaluationResultType int
+
+const (
+	conditionEvaluationResultTypeUnevaluatable conditionEvaluationResultType = iota
+	conditionEvaluationResultTypeTrue
+	conditionEvaluationResultTypeFalse
+	conditionEvaluationResultTypeError
+)
 
 // ConditionEvaluationResult is an enum type with four variants:
 // - true and false: Evaluation was successful, and evaluated to this value
 // - error: The condition could be evaluated, but errored during eval.
 // - unevaluatable: The condition cannot readily be evaluated. This is the struct zero value.
 type ConditionEvaluationResult struct {
-	isTrue  bool
-	isFalse bool
-	err     error
+	resultType conditionEvaluationResultType
+	err        error
 }
 
 // ConditionEvaluationResultBoolean constructs an evaluation result with a boolean value.
 func ConditionEvaluationResultBoolean(evalResult bool) ConditionEvaluationResult {
 	if evalResult {
-		return ConditionEvaluationResult{isTrue: true}
+		return ConditionEvaluationResult{resultType: conditionEvaluationResultTypeTrue}
 	}
-	return ConditionEvaluationResult{isFalse: true}
+	return ConditionEvaluationResult{resultType: conditionEvaluationResultTypeFalse}
 }
 
 // ConditionEvaluationResultError indicates that the condition could be evaluated, but failed.
+// TODO: What to do if err == nil
 func ConditionEvaluationResultError(err error) ConditionEvaluationResult {
-	return ConditionEvaluationResult{err: err}
+	return ConditionEvaluationResult{
+		resultType: conditionEvaluationResultTypeError,
+		err:        err,
+	}
 }
 
 // ConditionsEvaluationResultUnevaluatable indicates direct conditions evaluation is not possible.
 func ConditionsEvaluationResultUnevaluatable() ConditionEvaluationResult {
-	return ConditionEvaluationResult{}
+	return ConditionEvaluationResult{
+		resultType: conditionEvaluationResultTypeUnevaluatable, // == 0 (which matches the zero value of the struct)
+	}
 }
 
 // IsTrue indicates that the conditions evaluation was successful, and evaluated to true, which means it influences the ConditionsMap decision.
-func (r ConditionEvaluationResult) IsTrue() bool { return r.isTrue }
+func (r ConditionEvaluationResult) IsTrue() bool {
+	return r.resultType == conditionEvaluationResultTypeTrue
+}
 
 // IsFalse indicates that the conditions evaluation was successful, but evaluated to false, and it not thus taken into account.
-func (r ConditionEvaluationResult) IsFalse() bool { return r.isFalse }
+func (r ConditionEvaluationResult) IsFalse() bool {
+	return r.resultType == conditionEvaluationResultTypeFalse
+}
 
 // IsError indicates whether conditions evaluation failed.
-func (r ConditionEvaluationResult) IsError() bool { return r.err != nil }
+func (r ConditionEvaluationResult) IsError() bool {
+	return r.resultType == conditionEvaluationResultTypeError
+}
 
 // Error returns the evaluation error, if any.
 func (r ConditionEvaluationResult) Error() error { return r.err }
 
 // IsUnevaluatable is true whenever none of the other variants is, that is, the zero value.
 func (r ConditionEvaluationResult) IsUnevaluatable() bool {
-	return !r.IsTrue() && !r.IsFalse() && !r.IsError()
+	return r.resultType == conditionEvaluationResultTypeUnevaluatable
 }
 
 // Condition represents one authorization condition that is part of a ConditionsMap.
+// The effect of a condition is defined by whether it is part of the Deny/NoOpinion/Allow
+// conditions list in the ConditionsMap.
+// TODO: Make this a struct, again, with an optional EvaluateFunc
 type Condition interface {
 	// GetID uniquely identifies this condition within the scope of the authorizer
 	// that authored it. Validated as a Kubernetes label key.
+	// Any domain of form *.k8s.io or *.kubernetes.io is reserved for Kubernetes use.
 	// Required.
 	GetID() string
 
-	// GetEffect specifies how the condition evaluating to "true" should be treated.
-	// Required.
-	GetEffect() ConditionEffect
-
 	// GetType describes the type of the condition, if there are multiple possibilities.
 	// Should be formatted as a Kubernetes label key.
-	// Any domain suffix of *.k8s.io or *.kubernetes.io is reserved for Kubernetes use.
+	// Any domain of form *.k8s.io or *.kubernetes.io is reserved for Kubernetes use.
 	// Optional. Can be omitted if the authorizer already knows how to evaluate the condition.
 	GetType() string
 
@@ -438,10 +428,12 @@ type Condition interface {
 	// It is a pure, deterministic function from ConditionsData to a boolean (or error).
 	// Might or might not be human-readable.
 	// Optional, if the ID alone is enough for the authorizer to know how to evaluate the condition.
+	// TODO: If we go for a struct, this should be a lazy function
 	GetCondition() string
 
 	// GetDescription is an optional human-friendly description that can be shown
 	// as an error message or for debugging. Optional.
+	// TODO: If we go for a struct, this should be a lazy function
 	GetDescription() string
 
 	// DeepCopy returns a deep copy of the Condition.
@@ -459,28 +451,6 @@ type Condition interface {
 // Length returns the number of elements in the map.
 func (c ConditionsMap) Length() int {
 	return len(c.denyConditions) + len(c.noOpinionConditions) + len(c.allowConditions)
-}
-
-// Conditions returns all conditions in this map.
-// The order in which elements are returned is deterministic but undefined.
-func (c ConditionsMap) Conditions() iter.Seq[Condition] {
-	return func(yield func(Condition) bool) {
-		for _, cond := range c.denyConditions {
-			if !yield(cond) {
-				return
-			}
-		}
-		for _, cond := range c.noOpinionConditions {
-			if !yield(cond) {
-				return
-			}
-		}
-		for _, cond := range c.allowConditions {
-			if !yield(cond) {
-				return
-			}
-		}
-	}
 }
 
 // DenyConditions returns the Deny conditions in this map.
@@ -519,105 +489,53 @@ func (c ConditionsMap) AllowConditions() iter.Seq[Condition] {
 	}
 }
 
-const (
-	// MaxConditionsPerMap is the maximum number of conditions allowed in a single ConditionsMap.
-	MaxConditionsPerMap = 128
-)
+// MaxConditionsPerMap is the maximum number of conditions allowed in a single ConditionsMap.
+const MaxConditionsPerMap = 128
 
 // ConditionsAwareDecisionConditionsMap creates a ConditionsMap decision.
-func ConditionsAwareDecisionConditionsMap(conditions ...Condition) ConditionsAwareDecision {
+// The conditions are grouped by their effects: Deny, NoOpinion and Allow, that function as follows:
+//   - Deny: If a Deny condition evaluates to true, the ConditionsMap necessarily evaluates to Deny.
+//     In this case, no further authorizers are consulted.
+//   - NoOpinion: If a NoOpinion condition evaluates to true, the given authorizer's ConditionsMap cannot
+//     evaluate to Allow anymore, but necessarily Deny or NoOpinion, depending on whether there are any true
+//     Deny conditions. However, later authorizers in the chain can still Allow or Deny.
+//     It is effectively a softer deny that just overrides the authorizer's own allow policies.
+//   - Allow: If any Allow condition evaluates to true, the ConditionsMap evaluates to Allow,
+//     unless any Deny/NoOpinion condition also evaluates to true (in which case the Deny/NoOpinion conditions
+//     have precedence).
+func ConditionsAwareDecisionConditionsMap(denyConditions []Condition, noOpinionConditions []Condition, allowConditions []Condition) ConditionsAwareDecision {
 
-	// enforce maximum amount of conditions per map
-	if len(conditions) > MaxConditionsPerMap {
-		return ConditionsAwareDecisionDeny("failed closed", fmt.Errorf("too many conditions: %d exceeds maximum of %d", len(conditions), MaxConditionsPerMap))
+	// enforce minimum 1 and maximum amount of conditions per map
+	conditionsAmount := len(denyConditions) + len(noOpinionConditions) + len(allowConditions)
+	if conditionsAmount > MaxConditionsPerMap {
+		return ConditionsAwareDecisionDeny("failed closed", fmt.Errorf("too many conditions: %d exceeds maximum of %d", conditionsAmount, MaxConditionsPerMap))
+	}
+	if conditionsAmount <= 0 {
+		return ConditionsAwareDecisionNoOpinion("no conditions", fmt.Errorf("at least one condition must be passed to ConditionsAwareDecisionConditionsMap(), got none"))
+	}
+	// short-circuit case: if only NoOpinion conditions exist, we can short-circuit to a NoOpinion directly, as no matter
+	// what the conditions evaluate to, the output will be NoOpinion
+	if len(denyConditions) == 0 && len(noOpinionConditions) != 0 && len(allowConditions) == 0 {
+		return ConditionsAwareDecisionNoOpinion("", nil)
 	}
 
-	denyConditions := []Condition{}
-	noOpinionConditions := []Condition{}
-	allowConditions := []Condition{}
 	seenIDs := sets.New[string]()
-	errlist := []error{}
-	hasDenyEffect := false
+	hasDenyEffect := len(denyConditions) > 0
 	makeFailClosedError := func(err error) ConditionsAwareDecision {
 		if hasDenyEffect {
 			return ConditionsAwareDecisionDeny("failed closed", err)
 		}
 		return ConditionsAwareDecisionNoOpinion("failed closed", err)
 	}
-	for _, condition := range conditions {
-		// ignore nil conditions.
-		if isNilValue(condition) {
-			continue
-		}
 
-		// Fail closed using Deny if there was at least one Deny condition in the map.
-		effect := condition.GetEffect()
-		if effect == ConditionEffectDeny {
-			hasDenyEffect = true
-		}
-
-		id := condition.GetID()
-		if seenIDs.Has(id) {
-			errlist = append(errlist, fmt.Errorf("duplicate condition ID %q", id))
-			continue
-		}
-		seenIDs.Insert(id)
-
-		// Validate ID as a label key.
-		if errs := content.IsLabelKey(id); len(errs) > 0 {
-			errlist = append(errlist, fmt.Errorf("invalid condition ID %q: %s", id, strings.Join(errs, "; ")))
-			continue
-		}
-
-		// Validate type as a label key, if set.
-		if conditionType := condition.GetType(); len(conditionType) != 0 {
-			if errs := content.IsLabelKey(conditionType); len(errs) > 0 {
-				errlist = append(errlist, fmt.Errorf("invalid condition type %q: %s", conditionType, strings.Join(errs, "; ")))
-				continue
-			}
-		}
-
-		// TODO(luxas): Add condition and description byte limits here or in authorizationapivalidation?
-
-		switch effect {
-		case ConditionEffectDeny:
-			denyConditions = append(denyConditions, condition)
-		case ConditionEffectNoOpinion:
-			noOpinionConditions = append(noOpinionConditions, condition)
-		case ConditionEffectAllow:
-			allowConditions = append(allowConditions, condition)
-		default:
-			// Fail closed if there are unknown effects
-			return ConditionsAwareDecisionDeny("failed closed", fmt.Errorf("condition effect %q not supported. Supported effects are: [Deny, NoOpinion, Allow]", effect))
-		}
-	}
-
-	// check errors before len(ConditionsMap) == 0, as some errors might have made the map be empty
-	// although there were items in the iterator
-	if err := utilerrors.NewAggregate(errlist); err != nil {
-		// the error is returned first here, not in the loop, to make sure we saw all conditions,
-		// and fail closed with deny if there were any deny conditions
+	if err := validateConditions(seenIDs, denyConditions); err != nil {
 		return makeFailClosedError(err)
 	}
-
-	// an empty ConditionsMap always evaluates to NoOpinion
-	// ignore conditionType being invalid or the feature gate not being set in this case, as it does not matter
-	// This must be done as the invariant of the decision's IsConditionsMap is whether the map has non-zero length.
-	totalLen := len(denyConditions) + len(noOpinionConditions) + len(allowConditions)
-	if totalLen == 0 {
-		return ConditionsAwareDecisionNoOpinion("empty ConditionsMap", nil)
+	if err := validateConditions(seenIDs, noOpinionConditions); err != nil {
+		return makeFailClosedError(err)
 	}
-
-	// Do not allow constructing Conditional decisions when the feature gate is off
-	if !utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
-		// Fail closed "softer" than makeFailClosedError, as in this case the authorizer isn't malfunctioning, but the _caller_ of the
-		// authorizer just called ConditionsAwareAuthorize even though the feature is off. The caller _shouldn't_ do this, but there is
-		// no way of us preventing it. However, instead of returning an error, which could lead to a response code 500, just tell the caller
-		// through the reason that as the feature gate is off, the returned decision is "rounded down" (which most likely yields a 403).
-		if hasDenyEffect {
-			return ConditionsAwareDecisionDeny("authorizer tried to return conditional decision, but the ConditionalAuthorization feature gate is disabled", nil)
-		}
-		return ConditionsAwareDecisionNoOpinion("authorizer tried to return conditional decision, but the ConditionalAuthorization feature gate is disabled", nil)
+	if err := validateConditions(seenIDs, allowConditions); err != nil {
+		return makeFailClosedError(err)
 	}
 
 	return ConditionsAwareDecision{
@@ -628,6 +546,33 @@ func ConditionsAwareDecisionConditionsMap(conditions ...Condition) ConditionsAwa
 			allowConditions:     allowConditions,
 		},
 	}
+}
+func validateConditions(seenIDs sets.Set[string], conditions []Condition) error {
+	for _, condition := range conditions {
+		if isNilValue(condition) {
+			return fmt.Errorf("encountered nil condition")
+		}
+
+		id := condition.GetID()
+		if seenIDs.Has(id) {
+			return fmt.Errorf("duplicate condition ID %q", id)
+		}
+		seenIDs.Insert(id)
+
+		// Validate ID as a label key.
+		if errs := content.IsLabelKey(id); len(errs) > 0 {
+			return fmt.Errorf("invalid condition ID %q: %s", id, strings.Join(errs, "; "))
+		}
+
+		// Validate type as a label key, if set.
+		if conditionType := condition.GetType(); len(conditionType) != 0 {
+			if errs := content.IsLabelKey(conditionType); len(errs) > 0 {
+				return fmt.Errorf("invalid condition type %q: %s", conditionType, strings.Join(errs, "; "))
+			}
+		}
+		// TODO(luxas): Add condition and description byte limits here or in authorizationapivalidation?
+	}
+	return nil
 }
 
 func isNilValue(i interface{}) bool {
@@ -651,7 +596,6 @@ func isNilValue(i interface{}) bool {
 // setting EvaluateFunc non-nil.
 type GenericCondition struct {
 	ID           string
-	Effect       ConditionEffect
 	Condition    string
 	Type         string
 	Description  string
@@ -662,9 +606,6 @@ var _ Condition = GenericCondition{}
 
 func (c GenericCondition) GetID() string {
 	return c.ID
-}
-func (c GenericCondition) GetEffect() ConditionEffect {
-	return c.Effect
 }
 func (c GenericCondition) GetCondition() string {
 	return c.Condition
@@ -693,7 +634,7 @@ func (c GenericCondition) DeepCopy() Condition {
 // conditions evaluators that support a certain conditions type), returning ConditionsEvaluationResultUnevaluatable
 // for conditions that the evaluator does not recognize. In the latter case, a partially evaluated, deep copied
 // ConditionsMap might be returned.
-func (c *ConditionsMap) Evaluate(ctx context.Context, data ConditionsData, evaluateFunc func(context.Context, ConditionsData, Condition) ConditionEvaluationResult) ConditionsAwareDecision {
+func (c ConditionsMap) Evaluate(ctx context.Context, data ConditionsData, evaluateFunc func(context.Context, ConditionsData, Condition) ConditionEvaluationResult) ConditionsAwareDecision {
 	evalCond := func(cond Condition) ConditionEvaluationResult {
 		return cond.Evaluate(ctx, data)
 	}
@@ -748,14 +689,10 @@ func (c *ConditionsMap) Evaluate(ctx context.Context, data ConditionsData, evalu
 		// there is some matching NoOpinion/Allow condition or not. This means that we need to return another, possibly refined ConditionsMap
 		// TODO: Use the real constructor or replace altogether.
 		if len(unevaluatedDenyConditions) != 0 {
-			return ConditionsAwareDecision{
-				decisionType: conditionsAwareDecisionTypeConditionsMap,
-				conditionsMap: ConditionsMap{
-					denyConditions:      unevaluatedDenyConditions,
-					noOpinionConditions: deepCopyConditions(c.noOpinionConditions),
-					allowConditions:     deepCopyConditions(c.allowConditions),
-				},
-			}
+			return ConditionsAwareDecisionConditionsMap(
+				unevaluatedDenyConditions,
+				deepCopyConditions(c.noOpinionConditions),
+				deepCopyConditions(c.allowConditions))
 		}
 	}
 	// If we got here, all Deny conditions could be evaluated, and evaluated to false, nil
@@ -804,17 +741,10 @@ func (c *ConditionsMap) Evaluate(ctx context.Context, data ConditionsData, evalu
 			}
 
 			// Otherwise, the possible outcomes are [NoOpinion, Allow]. Return a possibly refined ConditionsMap.
-			// TODO: Use the real constructor or replace altogether.
-			return ConditionsAwareDecision{
-				decisionType: conditionsAwareDecisionTypeConditionsMap,
-				conditionsMap: ConditionsMap{
-					denyConditions:      nil,
-					noOpinionConditions: unevaluatedNoOpinionConditions,
-					// Technically, one could greedily try evaluating the Allow conditions and whether none of them evaluate to true,
-					// directly fold to NoOpinion, even though there are unevaluated NoOpinion conditions.
-					allowConditions: deepCopyConditions(c.allowConditions),
-				},
-			}
+			return ConditionsAwareDecisionConditionsMap(
+				nil,
+				unevaluatedNoOpinionConditions,
+				deepCopyConditions(c.allowConditions))
 		}
 	}
 	// If we got here, all Deny and NoOpinion conditions could be evaluated, and evaluated to false, nil
@@ -854,16 +784,8 @@ func (c *ConditionsMap) Evaluate(ctx context.Context, data ConditionsData, evalu
 		}
 		// When len(unevaluatedAllowConditions) != 0, the possible outcomes are [NoOpinion, Allow].
 		// Return a possibly refined ConditionsMap with the Allow conditions that could not be evaluated.
-		// TODO: Use the real constructor or replace altogether.
 		if len(unevaluatedAllowConditions) != 0 {
-			return ConditionsAwareDecision{
-				decisionType: conditionsAwareDecisionTypeConditionsMap,
-				conditionsMap: ConditionsMap{
-					denyConditions:      nil,
-					noOpinionConditions: nil,
-					allowConditions:     unevaluatedAllowConditions,
-				},
-			}
+			return ConditionsAwareDecisionConditionsMap(nil, nil, unevaluatedAllowConditions)
 		}
 	}
 
