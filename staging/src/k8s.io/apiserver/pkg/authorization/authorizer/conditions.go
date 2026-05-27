@@ -343,50 +343,70 @@ func (c ConditionsMap) FailClosedDecision() Decision {
 	return DecisionNoOpinion
 }
 
+// conditionEvaluationResultType is a small enum for the type of ConditionEvaluationResult
+type conditionEvaluationResultType int
+
+const (
+	conditionEvaluationResultTypeUnevaluatable conditionEvaluationResultType = iota
+	conditionEvaluationResultTypeTrue
+	conditionEvaluationResultTypeFalse
+	conditionEvaluationResultTypeError
+)
+
 // ConditionEvaluationResult is an enum type with four variants:
 // - true and false: Evaluation was successful, and evaluated to this value
 // - error: The condition could be evaluated, but errored during eval.
 // - unevaluatable: The condition cannot readily be evaluated. This is the struct zero value.
 type ConditionEvaluationResult struct {
-	// TODO: Use an enum instead.
-	isTrue  bool
-	isFalse bool
-	err     error
+	resultType conditionEvaluationResultType
+	err        error
 }
 
 // ConditionEvaluationResultBoolean constructs an evaluation result with a boolean value.
 func ConditionEvaluationResultBoolean(evalResult bool) ConditionEvaluationResult {
 	if evalResult {
-		return ConditionEvaluationResult{isTrue: true}
+		return ConditionEvaluationResult{resultType: conditionEvaluationResultTypeTrue}
 	}
-	return ConditionEvaluationResult{isFalse: true}
+	return ConditionEvaluationResult{resultType: conditionEvaluationResultTypeFalse}
 }
 
 // ConditionEvaluationResultError indicates that the condition could be evaluated, but failed.
+// TODO: What to do if err == nil
 func ConditionEvaluationResultError(err error) ConditionEvaluationResult {
-	return ConditionEvaluationResult{err: err}
+	return ConditionEvaluationResult{
+		resultType: conditionEvaluationResultTypeError,
+		err:        err,
+	}
 }
 
 // ConditionsEvaluationResultUnevaluatable indicates direct conditions evaluation is not possible.
 func ConditionsEvaluationResultUnevaluatable() ConditionEvaluationResult {
-	return ConditionEvaluationResult{}
+	return ConditionEvaluationResult{
+		resultType: conditionEvaluationResultTypeUnevaluatable, // == 0 (which matches the zero value of the struct)
+	}
 }
 
 // IsTrue indicates that the conditions evaluation was successful, and evaluated to true, which means it influences the ConditionsMap decision.
-func (r ConditionEvaluationResult) IsTrue() bool { return r.isTrue }
+func (r ConditionEvaluationResult) IsTrue() bool {
+	return r.resultType == conditionEvaluationResultTypeTrue
+}
 
 // IsFalse indicates that the conditions evaluation was successful, but evaluated to false, and it not thus taken into account.
-func (r ConditionEvaluationResult) IsFalse() bool { return r.isFalse }
+func (r ConditionEvaluationResult) IsFalse() bool {
+	return r.resultType == conditionEvaluationResultTypeFalse
+}
 
 // IsError indicates whether conditions evaluation failed.
-func (r ConditionEvaluationResult) IsError() bool { return r.err != nil }
+func (r ConditionEvaluationResult) IsError() bool {
+	return r.resultType == conditionEvaluationResultTypeError
+}
 
 // Error returns the evaluation error, if any.
 func (r ConditionEvaluationResult) Error() error { return r.err }
 
 // IsUnevaluatable is true whenever none of the other variants is, that is, the zero value.
 func (r ConditionEvaluationResult) IsUnevaluatable() bool {
-	return !r.IsTrue() && !r.IsFalse() && !r.IsError()
+	return r.resultType == conditionEvaluationResultTypeUnevaluatable
 }
 
 // Condition represents one authorization condition that is part of a ConditionsMap.
