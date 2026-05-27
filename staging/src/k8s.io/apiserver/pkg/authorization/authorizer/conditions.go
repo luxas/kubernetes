@@ -513,7 +513,7 @@ func ConditionsAwareDecisionConditionsMap(denyConditions []Condition, noOpinionC
 		return ConditionsAwareDecisionDeny("failed closed", fmt.Errorf("too many conditions: %d exceeds maximum of %d", conditionsAmount, MaxConditionsPerMap))
 	}
 	if conditionsAmount <= 0 {
-		return ConditionsAwareDecisionDeny("failed closed", fmt.Errorf("at least one condition must be passed to ConditionsAwareDecisionConditionsMap(), got none"))
+		return ConditionsAwareDecisionNoOpinion("no conditions", fmt.Errorf("at least one condition must be passed to ConditionsAwareDecisionConditionsMap(), got none"))
 	}
 	// short-circuit case: if only NoOpinion conditions exist, we can short-circuit to a NoOpinion directly, as no matter
 	// what the conditions evaluate to, the output will be NoOpinion

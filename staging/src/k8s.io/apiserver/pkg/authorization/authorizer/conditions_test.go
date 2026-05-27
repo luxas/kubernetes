@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/google/cel-go/cel"
@@ -45,21 +44,21 @@ func TestConditionsAwareDecision(t *testing.T) {
 
 	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ConditionalAuthorization, true)
 
-	okAmountOfConditions := make([]authorizer.Condition, authorizer.MaxConditionsPerMap)
-	for i := range authorizer.MaxConditionsPerMap {
-		okAmountOfConditions[i] = authorizer.GenericCondition{ID: fmt.Sprintf("cond-%d", i), Effect: authorizer.ConditionEffectAllow}
-	}
-
-	tooManyConditions := make([]authorizer.Condition, authorizer.MaxConditionsPerMap+1)
-	for i := range authorizer.MaxConditionsPerMap + 1 {
-		tooManyConditions[i] = authorizer.GenericCondition{ID: fmt.Sprintf("cond-%d", i), Effect: authorizer.ConditionEffectAllow}
+	makeAllowConditionsWithLength := func(conditionCount int) authorizer.ConditionsAwareDecision {
+		allowConditionList := make([]authorizer.Condition, conditionCount)
+		for i := range conditionCount {
+			allowConditionList[i] = authorizer.GenericCondition{ID: fmt.Sprintf("cond-%d", i)}
+		}
+		return authorizer.ConditionsAwareDecisionConditionsMap(nil, nil, allowConditionList)
 	}
 
 	condMapAllow := authorizer.ConditionsAwareDecisionConditionsMap(
-		authorizer.GenericCondition{ID: "allow-cond", Condition: "something", Effect: authorizer.ConditionEffectAllow, Type: "test-type"},
+		nil, nil,
+		[]authorizer.Condition{authorizer.GenericCondition{ID: "allow-cond", Condition: "something", Type: "test-type"}},
 	)
 	condMapDeny := authorizer.ConditionsAwareDecisionConditionsMap(
-		authorizer.GenericCondition{ID: "deny-cond", Condition: "something", Effect: authorizer.ConditionEffectDeny, Type: "test-type"},
+		[]authorizer.Condition{authorizer.GenericCondition{ID: "deny-cond", Condition: "something", Type: "test-type"}},
+		nil, nil,
 	)
 
 	tests := []struct {
@@ -178,7 +177,7 @@ func TestConditionsAwareDecision(t *testing.T) {
 		{
 			name: "construct valid conditionsmap",
 			testDecisions: []authorizer.ConditionsAwareDecision{
-				authorizer.ConditionsAwareDecisionConditionsMap(okAmountOfConditions...),
+				makeAllowConditionsWithLength(authorizer.MaxConditionsPerMap),
 			},
 			wantIsConditionsMap: true,
 			wantIsUnconditional: false,
@@ -187,7 +186,7 @@ func TestConditionsAwareDecision(t *testing.T) {
 		{
 			name: "too many conditions",
 			testDecisions: []authorizer.ConditionsAwareDecision{
-				authorizer.ConditionsAwareDecisionConditionsMap(tooManyConditions...),
+				makeAllowConditionsWithLength(authorizer.MaxConditionsPerMap + 1),
 			},
 			wantIsDeny:              true,
 			wantIsUnconditional:     true,
@@ -198,25 +197,36 @@ func TestConditionsAwareDecision(t *testing.T) {
 			wantString:              `Deny(reason="failed closed", err="too many conditions: 129 exceeds maximum of 128")`,
 		},
 		{
-			name: "construct valid conditionsmap",
+			name: "nil condition is a validation error",
 			testDecisions: []authorizer.ConditionsAwareDecision{
 				authorizer.ConditionsAwareDecisionConditionsMap(
-					authorizer.GenericCondition{ID: "foo", Effect: authorizer.ConditionEffectAllow},
-					nil,
-					typedNil(), // nil, but has the type word set so the normal nil check fails
-					authorizer.GenericCondition{ID: "baz", Effect: authorizer.ConditionEffectAllow},
+					nil, nil,
+					[]authorizer.Condition{
+						authorizer.GenericCondition{ID: "foo"},
+						nil,
+					},
+				),
+				authorizer.ConditionsAwareDecisionConditionsMap(
+					nil, nil,
+					[]authorizer.Condition{
+						authorizer.GenericCondition{ID: "foo"},
+						typedNil(),
+					},
 				),
 			},
-			wantIsConditionsMap: true,
-			wantIsUnconditional: false,
-			wantString:          `ConditionsMap(len=2)`,
+			wantIsNoOpinion:     true,
+			wantIsUnconditional: true,
+			wantReason:          "failed closed",
+			wantAnyError:        true,
+			wantString:          `NoOpinion(reason="failed closed", err="encountered nil condition")`,
 		},
 		{
-			name: "duplicate IDs, ignores nil",
+			name: "duplicate IDs",
 			testDecisions: []authorizer.ConditionsAwareDecision{
 				authorizer.ConditionsAwareDecisionConditionsMap(
-					authorizer.GenericCondition{ID: "foo", Effect: authorizer.ConditionEffectAllow},
-					authorizer.GenericCondition{ID: "foo", Effect: authorizer.ConditionEffectDeny},
+					[]authorizer.Condition{authorizer.GenericCondition{ID: "foo"}},
+					nil,
+					[]authorizer.Condition{authorizer.GenericCondition{ID: "foo"}},
 				),
 			},
 			wantIsDeny:              true,
@@ -228,26 +238,12 @@ func TestConditionsAwareDecision(t *testing.T) {
 			wantString:              `Deny(reason="failed closed", err="duplicate condition ID \"foo\"")`,
 		},
 		{
-			name: "invalid effect",
-			testDecisions: []authorizer.ConditionsAwareDecision{
-				authorizer.ConditionsAwareDecisionConditionsMap(
-					authorizer.GenericCondition{ID: "foo", Effect: authorizer.ConditionEffect("nonexistent")},
-				),
-			},
-			wantIsDeny:              true,
-			wantIsUnconditional:     true,
-			wantContainsAllowOrDeny: true,
-			wantFailClosedIsDeny:    true,
-			wantReason:              "failed closed",
-			wantAnyError:            true,
-			wantString:              `Deny(reason="failed closed", err="condition effect \"nonexistent\" not supported. Supported effects are: [Deny, NoOpinion, Allow]")`,
-		},
-		{
 			name: "condition ID must be a Kubernetes label, one condition error enough to fail closed",
 			testDecisions: []authorizer.ConditionsAwareDecision{
 				authorizer.ConditionsAwareDecisionConditionsMap(
-					authorizer.GenericCondition{ID: "foo", Effect: authorizer.ConditionEffectAllow},
-					authorizer.GenericCondition{ID: "not a kubernetes label", Effect: authorizer.ConditionEffectDeny},
+					[]authorizer.Condition{authorizer.GenericCondition{ID: "not a kubernetes label"}},
+					nil,
+					[]authorizer.Condition{authorizer.GenericCondition{ID: "foo"}},
 				),
 			},
 			wantIsDeny:              true,
@@ -262,8 +258,9 @@ func TestConditionsAwareDecision(t *testing.T) {
 			name: "condition type must be a Kubernetes label",
 			testDecisions: []authorizer.ConditionsAwareDecision{
 				authorizer.ConditionsAwareDecisionConditionsMap(
-					authorizer.GenericCondition{ID: "foo", Effect: authorizer.ConditionEffectAllow},
-					authorizer.GenericCondition{ID: "bar", Effect: authorizer.ConditionEffectNoOpinion, Type: "not a kubernetes label"},
+					nil,
+					[]authorizer.Condition{authorizer.GenericCondition{ID: "bar", Type: "not a kubernetes label"}},
+					[]authorizer.Condition{authorizer.GenericCondition{ID: "foo"}},
 				),
 			},
 			wantIsNoOpinion:     true,
@@ -273,14 +270,31 @@ func TestConditionsAwareDecision(t *testing.T) {
 			wantString:          `NoOpinion(reason="failed closed", err="invalid condition type \"not a kubernetes label\": name part must consist of alphanumeric characters, '-', '_' or '.', and must start and end with an alphanumeric character (e.g. 'MyName',  or 'my.name',  or '123-abc', regex used for validation is '([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9]')")`,
 		},
 		{
-			name: "empty ConditionsMap is NoOpinion",
+			name: "empty ConditionsMap",
 			testDecisions: []authorizer.ConditionsAwareDecision{
-				authorizer.ConditionsAwareDecisionConditionsMap(),
+				authorizer.ConditionsAwareDecisionConditionsMap(nil, nil, nil),
 			},
 			wantIsNoOpinion:     true,
 			wantIsUnconditional: true,
-			wantReason:          "empty ConditionsMap",
-			wantString:          `NoOpinion(reason="empty ConditionsMap")`,
+			wantReason:          "no conditions",
+			wantAnyError:        true,
+			wantString:          `NoOpinion(reason="no conditions", err="at least one condition must be passed to ConditionsAwareDecisionConditionsMap(), got none")`,
+		},
+		{
+			// Short-circuit: only NoOpinion conditions => the constructor folds the result to NoOpinion
+			// directly, without ever returning a ConditionsMap (which would then evaluate to NoOpinion anyway).
+			name: "noopinion-only conditions short-circuit to NoOpinion",
+			testDecisions: []authorizer.ConditionsAwareDecision{
+				authorizer.ConditionsAwareDecisionConditionsMap(
+					nil,
+					[]authorizer.Condition{authorizer.GenericCondition{ID: "nop-1"}},
+					nil,
+				),
+			},
+			wantIsNoOpinion:     true,
+			wantIsUnconditional: true,
+			wantReason:          "",
+			wantString:          `NoOpinion`,
 		},
 		// Union constructor simplification cases
 		{
@@ -581,30 +595,6 @@ func typedNil() authorizer.Condition {
 	return c
 }
 
-func TestCreateConditionsMapFeatureDisabled(t *testing.T) {
-	// Feature gate is disabled (which is the default) in this test
-	// Fail closed to NoOpinion, as there are no denies
-	d := authorizer.ConditionsAwareDecisionConditionsMap(
-		authorizer.GenericCondition{ID: "foo", Effect: authorizer.ConditionEffectAllow},
-	)
-	if !d.IsNoOpinion() {
-		t.Error("Expected creating a ConditionsMap decision to yield NoOpinion when the feature gate is disabled")
-	}
-	if !strings.Contains(d.Reason(), "ConditionalAuthorization feature gate is disabled") {
-		t.Errorf("Expected reason to tell about feature gate being disabled, got %q", d.Reason())
-	}
-	// Fail closed to Deny, as there is at least one Deny condition
-	d = authorizer.ConditionsAwareDecisionConditionsMap(
-		authorizer.GenericCondition{ID: "foo", Effect: authorizer.ConditionEffectDeny},
-	)
-	if !d.IsDeny() {
-		t.Error("Expected creating a ConditionsMap decision to yield Deny when the feature gate is disabled")
-	}
-	if !strings.Contains(d.Reason(), "ConditionalAuthorization feature gate is disabled") {
-		t.Errorf("Expected reason to tell about feature gate being disabled, got %q", d.Reason())
-	}
-}
-
 func TestConditionsMapEvaluate(t *testing.T) {
 	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ConditionalAuthorization, true)
 
@@ -614,28 +604,36 @@ func TestConditionsMapEvaluate(t *testing.T) {
 	falseResult := authorizer.ConditionEvaluationResultBoolean(false)
 	errResult := authorizer.ConditionEvaluationResultError(evalErr)
 
-	cond := func(id string, effect authorizer.ConditionEffect, result authorizer.ConditionEvaluationResult) authorizer.GenericCondition {
+	cond := func(id string, result authorizer.ConditionEvaluationResult) authorizer.GenericCondition {
 		return authorizer.GenericCondition{
-			ID:     id,
-			Effect: effect,
+			ID: id,
 			EvaluateFunc: func(context.Context, authorizer.ConditionsData) authorizer.ConditionEvaluationResult {
 				return result
 			},
 		}
 	}
-	condDesc := func(id string, effect authorizer.ConditionEffect, desc string, result authorizer.ConditionEvaluationResult) authorizer.GenericCondition {
-		c := cond(id, effect, result)
+	condDesc := func(id string, desc string, result authorizer.ConditionEvaluationResult) authorizer.GenericCondition {
+		c := cond(id, result)
 		c.Description = desc
 		return c
 	}
-	unevalCond := func(id string, effect authorizer.ConditionEffect) authorizer.GenericCondition {
-		return authorizer.GenericCondition{ID: id, Effect: effect} // nil EvaluateFunc → unevaluatable
+	unevalCond := func(id string) authorizer.GenericCondition {
+		return authorizer.GenericCondition{ID: id} // nil EvaluateFunc → unevaluatable
 	}
 
+	// fillerDenyFalse is a deny condition that always evaluates to false. It is used to bypass
+	// the constructor's short-circuit (which folds noOpinion-only ConditionsMaps to NoOpinion
+	// directly) for sub-cases that need to exercise Evaluate() on otherwise-noOpinion-only input.
+	// Since the filler is a deny condition evaluating to false, it does not change the outcome
+	// of any of the sub-cases below.
+	fillerDenyFalse := []authorizer.Condition{cond("filler-deny-false", falseResult)}
+
 	type subCase struct {
-		name         string
-		conditions   []authorizer.Condition
-		evaluateFunc func(context.Context, authorizer.ConditionsData, authorizer.Condition) authorizer.ConditionEvaluationResult
+		name                string
+		denyConditions      []authorizer.Condition
+		noOpinionConditions []authorizer.Condition
+		allowConditions     []authorizer.Condition
+		evaluateFunc        func(context.Context, authorizer.ConditionsData, authorizer.Condition) authorizer.ConditionEvaluationResult
 	}
 
 	tests := []struct {
@@ -657,89 +655,83 @@ func TestConditionsMapEvaluate(t *testing.T) {
 			wantString: `Deny(reason="condition \"deny-1\" denied the request")`,
 			subCases: []subCase{
 				{
-					name:       "minimal",
-					conditions: []authorizer.Condition{cond("deny-1", authorizer.ConditionEffectDeny, trueResult)},
+					name:           "minimal",
+					denyConditions: []authorizer.Condition{cond("deny-1", trueResult)},
 				},
 				{
 					name: "matching deny trumps any other case",
-					conditions: []authorizer.Condition{
-						cond("nop-yes", authorizer.ConditionEffectNoOpinion, trueResult),
-						cond("nop-err", authorizer.ConditionEffectNoOpinion, errResult),
-						cond("nop-no", authorizer.ConditionEffectNoOpinion, falseResult),
-						unevalCond("nop-uneval", authorizer.ConditionEffectNoOpinion),
-						cond("allow-yes", authorizer.ConditionEffectAllow, trueResult),
-						cond("allow-no", authorizer.ConditionEffectAllow, falseResult),
-						cond("allow-err", authorizer.ConditionEffectAllow, errResult),
-						unevalCond("allow-uneval", authorizer.ConditionEffectAllow),
-						cond("deny-no", authorizer.ConditionEffectDeny, falseResult),
-						unevalCond("deny-uneval", authorizer.ConditionEffectDeny),
-						cond("deny-err", authorizer.ConditionEffectDeny, errResult),
-						cond("deny-1", authorizer.ConditionEffectDeny, trueResult),
+					denyConditions: []authorizer.Condition{
+						cond("deny-no", falseResult),
+						unevalCond("deny-uneval"),
+						cond("deny-err", errResult),
+						cond("deny-1", trueResult),
+					},
+					noOpinionConditions: []authorizer.Condition{
+						cond("nop-yes", trueResult),
+						cond("nop-err", errResult),
+						cond("nop-no", falseResult),
+						unevalCond("nop-uneval"),
+					},
+					allowConditions: []authorizer.Condition{
+						cond("allow-yes", trueResult),
+						cond("allow-no", falseResult),
+						cond("allow-err", errResult),
+						unevalCond("allow-uneval"),
 					},
 				},
 				{
 					name: "with erroring deny (error ignored due to match)",
-					conditions: []authorizer.Condition{
-						cond("deny-1", authorizer.ConditionEffectDeny, trueResult),
-						cond("deny-err", authorizer.ConditionEffectDeny, errResult),
+					denyConditions: []authorizer.Condition{
+						cond("deny-1", trueResult),
+						cond("deny-err", errResult),
 					},
 				},
 				{
 					name: "with unevaluatable deny (ignored due to match)",
-					conditions: []authorizer.Condition{
-						cond("deny-1", authorizer.ConditionEffectDeny, trueResult),
-						unevalCond("deny-uneval", authorizer.ConditionEffectDeny),
+					denyConditions: []authorizer.Condition{
+						cond("deny-1", trueResult),
+						unevalCond("deny-uneval"),
 					},
 				},
 				{
 					name: "with false+error+unevaluatable deny (all ignored due to match)",
-					conditions: []authorizer.Condition{
-						cond("deny-1", authorizer.ConditionEffectDeny, trueResult),
-						cond("deny-2", authorizer.ConditionEffectDeny, falseResult),
-						cond("deny-err", authorizer.ConditionEffectDeny, errResult),
-						unevalCond("deny-uneval", authorizer.ConditionEffectDeny),
+					denyConditions: []authorizer.Condition{
+						cond("deny-1", trueResult),
+						cond("deny-2", falseResult),
+						cond("deny-err", errResult),
+						unevalCond("deny-uneval"),
 					},
 				},
 				{
-					name: "deny match takes precedence over matching nop and allow; only fast conditions-evaluation",
-					conditions: []authorizer.Condition{
-						cond("deny-1", authorizer.ConditionEffectDeny, trueResult),
-						cond("nop-1", authorizer.ConditionEffectNoOpinion, trueResult),
-						cond("allow-1", authorizer.ConditionEffectAllow, trueResult),
-					},
+					name:                "deny match takes precedence over matching nop and allow; only fast conditions-evaluation",
+					denyConditions:      []authorizer.Condition{cond("deny-1", trueResult)},
+					noOpinionConditions: []authorizer.Condition{cond("nop-1", trueResult)},
+					allowConditions:     []authorizer.Condition{cond("allow-1", trueResult)},
 					evaluateFunc: func(ctx context.Context, cd authorizer.ConditionsData, c authorizer.Condition) authorizer.ConditionEvaluationResult {
 						panic("should never be called, as all conditions could readily be evaluated")
 					},
 				},
 				{
-					name: "deny match with false nop and allow",
-					conditions: []authorizer.Condition{
-						cond("deny-1", authorizer.ConditionEffectDeny, trueResult),
-						cond("nop-1", authorizer.ConditionEffectNoOpinion, falseResult),
-						cond("allow-1", authorizer.ConditionEffectAllow, falseResult),
-					},
+					name:                "deny match with false nop and allow",
+					denyConditions:      []authorizer.Condition{cond("deny-1", trueResult)},
+					noOpinionConditions: []authorizer.Condition{cond("nop-1", falseResult)},
+					allowConditions:     []authorizer.Condition{cond("allow-1", falseResult)},
 				},
 				{
-					name: "deny match with unevaluatable nop and allow",
-					conditions: []authorizer.Condition{
-						cond("deny-1", authorizer.ConditionEffectDeny, trueResult),
-						unevalCond("nop-1", authorizer.ConditionEffectNoOpinion),
-						unevalCond("allow-1", authorizer.ConditionEffectAllow),
-					},
+					name:                "deny match with unevaluatable nop and allow",
+					denyConditions:      []authorizer.Condition{cond("deny-1", trueResult)},
+					noOpinionConditions: []authorizer.Condition{unevalCond("nop-1")},
+					allowConditions:     []authorizer.Condition{unevalCond("allow-1")},
 				},
 				{
-					name: "deny match with erroring nop and allow",
-					conditions: []authorizer.Condition{
-						cond("deny-1", authorizer.ConditionEffectDeny, trueResult),
-						cond("nop-1", authorizer.ConditionEffectNoOpinion, errResult),
-						cond("allow-1", authorizer.ConditionEffectAllow, errResult),
-					},
+					name:                "deny match with erroring nop and allow",
+					denyConditions:      []authorizer.Condition{cond("deny-1", trueResult)},
+					noOpinionConditions: []authorizer.Condition{cond("nop-1", errResult)},
+					allowConditions:     []authorizer.Condition{cond("allow-1", errResult)},
 				},
 				{
-					name: "via evaluateFunc fallback (condition unevaluatable, evaluateFunc returns true)",
-					conditions: []authorizer.Condition{
-						unevalCond("deny-1", authorizer.ConditionEffectDeny),
-					},
+					name:           "via evaluateFunc fallback (condition unevaluatable, evaluateFunc returns true)",
+					denyConditions: []authorizer.Condition{unevalCond("deny-1")},
 					evaluateFunc: func(context.Context, authorizer.ConditionsData, authorizer.Condition) authorizer.ConditionEvaluationResult {
 						return authorizer.ConditionEvaluationResultBoolean(true)
 					},
@@ -751,16 +743,14 @@ func TestConditionsMapEvaluate(t *testing.T) {
 			wantString: `Deny(reason="condition \"deny-1\" denied the request with description \"access denied\"")`,
 			subCases: []subCase{
 				{
-					name:       "minimal",
-					conditions: []authorizer.Condition{condDesc("deny-1", authorizer.ConditionEffectDeny, "access denied", trueResult)},
+					name:           "minimal",
+					denyConditions: []authorizer.Condition{condDesc("deny-1", "access denied", trueResult)},
 				},
 				{
-					name: "with false nop and allow",
-					conditions: []authorizer.Condition{
-						condDesc("deny-1", authorizer.ConditionEffectDeny, "access denied", trueResult),
-						cond("nop-1", authorizer.ConditionEffectNoOpinion, falseResult),
-						cond("allow-1", authorizer.ConditionEffectAllow, falseResult),
-					},
+					name:                "with false nop and allow",
+					denyConditions:      []authorizer.Condition{condDesc("deny-1", "access denied", trueResult)},
+					noOpinionConditions: []authorizer.Condition{cond("nop-1", falseResult)},
+					allowConditions:     []authorizer.Condition{cond("allow-1", falseResult)},
 				},
 			},
 		},
@@ -773,37 +763,41 @@ func TestConditionsMapEvaluate(t *testing.T) {
 			wantString: `Deny(reason="one or more conditional evaluation errors occurred", err="condition \"deny-1\" with effect=Deny produced error: eval error")`,
 			subCases: []subCase{
 				{
-					name:       "minimal",
-					conditions: []authorizer.Condition{cond("deny-1", authorizer.ConditionEffectDeny, errResult)},
+					name:           "minimal",
+					denyConditions: []authorizer.Condition{cond("deny-1", errResult)},
 				},
 				{
 					name: "with false deny",
-					conditions: []authorizer.Condition{
-						cond("deny-1", authorizer.ConditionEffectDeny, errResult),
-						cond("deny-2", authorizer.ConditionEffectDeny, falseResult),
+					denyConditions: []authorizer.Condition{
+						cond("deny-1", errResult),
+						cond("deny-2", falseResult),
 					},
 				},
 				{
 					name: "error takes precedence over unevaluatable deny",
-					conditions: []authorizer.Condition{
-						cond("deny-1", authorizer.ConditionEffectDeny, errResult),
-						unevalCond("deny-uneval", authorizer.ConditionEffectDeny),
+					denyConditions: []authorizer.Condition{
+						cond("deny-1", errResult),
+						unevalCond("deny-uneval"),
 					},
 				},
 				{
 					name: "deny error trumps noopinion and allow of any form",
-					conditions: []authorizer.Condition{
-						cond("nop-yes", authorizer.ConditionEffectNoOpinion, trueResult),
-						cond("nop-err", authorizer.ConditionEffectNoOpinion, errResult),
-						cond("nop-no", authorizer.ConditionEffectNoOpinion, falseResult),
-						unevalCond("nop-uneval", authorizer.ConditionEffectNoOpinion),
-						cond("allow-yes", authorizer.ConditionEffectAllow, trueResult),
-						cond("allow-no", authorizer.ConditionEffectAllow, falseResult),
-						cond("allow-err", authorizer.ConditionEffectAllow, errResult),
-						unevalCond("allow-uneval", authorizer.ConditionEffectAllow),
-						cond("deny-no", authorizer.ConditionEffectDeny, falseResult),
-						unevalCond("deny-uneval", authorizer.ConditionEffectDeny),
-						cond("deny-1", authorizer.ConditionEffectDeny, errResult),
+					denyConditions: []authorizer.Condition{
+						cond("deny-no", falseResult),
+						unevalCond("deny-uneval"),
+						cond("deny-1", errResult),
+					},
+					noOpinionConditions: []authorizer.Condition{
+						cond("nop-yes", trueResult),
+						cond("nop-err", errResult),
+						cond("nop-no", falseResult),
+						unevalCond("nop-uneval"),
+					},
+					allowConditions: []authorizer.Condition{
+						cond("allow-yes", trueResult),
+						cond("allow-no", falseResult),
+						cond("allow-err", errResult),
+						unevalCond("allow-uneval"),
 					},
 				},
 			},
@@ -818,75 +812,74 @@ func TestConditionsMapEvaluate(t *testing.T) {
 			wantString: `NoOpinion(reason="condition \"nop-1\" evaluated to NoOpinion")`,
 			subCases: []subCase{
 				{
-					name:       "minimal",
-					conditions: []authorizer.Condition{cond("nop-1", authorizer.ConditionEffectNoOpinion, trueResult)},
+					name:                "with filler-deny-false",
+					denyConditions:      fillerDenyFalse,
+					noOpinionConditions: []authorizer.Condition{cond("nop-1", trueResult)},
 				},
 				{
 					name: "noopinion match trumps any noopinion or allow form",
-					conditions: []authorizer.Condition{
-						cond("nop-err", authorizer.ConditionEffectNoOpinion, errResult),
-						cond("nop-no", authorizer.ConditionEffectNoOpinion, falseResult),
-						unevalCond("nop-uneval", authorizer.ConditionEffectNoOpinion),
-						cond("allow-yes", authorizer.ConditionEffectAllow, trueResult),
-						cond("allow-no", authorizer.ConditionEffectAllow, falseResult),
-						cond("allow-err", authorizer.ConditionEffectAllow, errResult),
-						unevalCond("allow-uneval", authorizer.ConditionEffectAllow),
-						cond("deny-no", authorizer.ConditionEffectDeny, falseResult),
-
-						cond("nop-1", authorizer.ConditionEffectNoOpinion, trueResult),
+					denyConditions: []authorizer.Condition{
+						cond("deny-no", falseResult),
+					},
+					noOpinionConditions: []authorizer.Condition{
+						cond("nop-err", errResult),
+						cond("nop-no", falseResult),
+						unevalCond("nop-uneval"),
+						cond("nop-1", trueResult),
+					},
+					allowConditions: []authorizer.Condition{
+						cond("allow-yes", trueResult),
+						cond("allow-no", falseResult),
+						cond("allow-err", errResult),
+						unevalCond("allow-uneval"),
 					},
 				},
 				{
-					name: "with erroring nop (error ignored due to match)",
-					conditions: []authorizer.Condition{
-						cond("nop-1", authorizer.ConditionEffectNoOpinion, trueResult),
-						cond("nop-err", authorizer.ConditionEffectNoOpinion, errResult),
+					name:           "with filler-deny-false and erroring nop (error ignored due to match)",
+					denyConditions: fillerDenyFalse,
+					noOpinionConditions: []authorizer.Condition{
+						cond("nop-1", trueResult),
+						cond("nop-err", errResult),
 					},
 				},
 				{
-					name: "with unevaluatable nop (ignored due to match)",
-					conditions: []authorizer.Condition{
-						cond("nop-1", authorizer.ConditionEffectNoOpinion, trueResult),
-						unevalCond("nop-uneval", authorizer.ConditionEffectNoOpinion),
+					name:           "with filler-deny-false and unevaluatable nop (ignored due to match)",
+					denyConditions: fillerDenyFalse,
+					noOpinionConditions: []authorizer.Condition{
+						cond("nop-1", trueResult),
+						unevalCond("nop-uneval"),
 					},
 				},
 				{
-					name: "with false+error+unevaluatable nop (all ignored due to match)",
-					conditions: []authorizer.Condition{
-						cond("nop-1", authorizer.ConditionEffectNoOpinion, trueResult),
-						cond("nop-2", authorizer.ConditionEffectNoOpinion, falseResult),
-						cond("nop-err", authorizer.ConditionEffectNoOpinion, errResult),
-						unevalCond("nop-uneval", authorizer.ConditionEffectNoOpinion),
+					name:           "with filler-deny-false and false+error+unevaluatable nop (all ignored due to match)",
+					denyConditions: fillerDenyFalse,
+					noOpinionConditions: []authorizer.Condition{
+						cond("nop-1", trueResult),
+						cond("nop-2", falseResult),
+						cond("nop-err", errResult),
+						unevalCond("nop-uneval"),
 					},
 				},
 				{
-					name: "nop match takes precedence over matching allow",
-					conditions: []authorizer.Condition{
-						cond("nop-1", authorizer.ConditionEffectNoOpinion, trueResult),
-						cond("allow-1", authorizer.ConditionEffectAllow, trueResult),
-					},
+					name:                "nop match takes precedence over matching allow",
+					noOpinionConditions: []authorizer.Condition{cond("nop-1", trueResult)},
+					allowConditions:     []authorizer.Condition{cond("allow-1", trueResult)},
 				},
 				{
-					name: "with false deny, nop matches",
-					conditions: []authorizer.Condition{
-						cond("deny-1", authorizer.ConditionEffectDeny, falseResult),
-						cond("nop-1", authorizer.ConditionEffectNoOpinion, trueResult),
-						cond("allow-1", authorizer.ConditionEffectAllow, trueResult),
-					},
+					name:                "with false deny, nop matches",
+					denyConditions:      []authorizer.Condition{cond("deny-1", falseResult)},
+					noOpinionConditions: []authorizer.Condition{cond("nop-1", trueResult)},
+					allowConditions:     []authorizer.Condition{cond("allow-1", trueResult)},
 				},
 				{
-					name: "nop match with unevaluatable allow",
-					conditions: []authorizer.Condition{
-						cond("nop-1", authorizer.ConditionEffectNoOpinion, trueResult),
-						unevalCond("allow-1", authorizer.ConditionEffectAllow),
-					},
+					name:                "nop match with unevaluatable allow",
+					noOpinionConditions: []authorizer.Condition{cond("nop-1", trueResult)},
+					allowConditions:     []authorizer.Condition{unevalCond("allow-1")},
 				},
 				{
-					name: "nop match with erroring allow",
-					conditions: []authorizer.Condition{
-						cond("nop-1", authorizer.ConditionEffectNoOpinion, trueResult),
-						cond("allow-1", authorizer.ConditionEffectAllow, errResult),
-					},
+					name:                "nop match with erroring allow",
+					noOpinionConditions: []authorizer.Condition{cond("nop-1", trueResult)},
+					allowConditions:     []authorizer.Condition{cond("allow-1", errResult)},
 				},
 			},
 		},
@@ -895,16 +888,15 @@ func TestConditionsMapEvaluate(t *testing.T) {
 			wantString: `NoOpinion(reason="condition \"nop-1\" evaluated to NoOpinion with description \"not relevant\"")`,
 			subCases: []subCase{
 				{
-					name:       "minimal",
-					conditions: []authorizer.Condition{condDesc("nop-1", authorizer.ConditionEffectNoOpinion, "not relevant", trueResult)},
+					name:                "with filler-deny-false",
+					denyConditions:      fillerDenyFalse,
+					noOpinionConditions: []authorizer.Condition{condDesc("nop-1", "not relevant", trueResult)},
 				},
 				{
-					name: "with false deny and allow",
-					conditions: []authorizer.Condition{
-						cond("deny-1", authorizer.ConditionEffectDeny, falseResult),
-						condDesc("nop-1", authorizer.ConditionEffectNoOpinion, "not relevant", trueResult),
-						cond("allow-1", authorizer.ConditionEffectAllow, falseResult),
-					},
+					name:                "with false deny and allow",
+					denyConditions:      []authorizer.Condition{cond("deny-1", falseResult)},
+					noOpinionConditions: []authorizer.Condition{condDesc("nop-1", "not relevant", trueResult)},
+					allowConditions:     []authorizer.Condition{cond("allow-1", falseResult)},
 				},
 			},
 		},
@@ -917,37 +909,35 @@ func TestConditionsMapEvaluate(t *testing.T) {
 			wantString: `NoOpinion(reason="one or more conditional evaluation errors occurred", err="condition \"nop-1\" with effect=NoOpinion produced error: eval error")`,
 			subCases: []subCase{
 				{
-					name:       "minimal",
-					conditions: []authorizer.Condition{cond("nop-1", authorizer.ConditionEffectNoOpinion, errResult)},
+					name:                "with filler-deny-false",
+					denyConditions:      fillerDenyFalse,
+					noOpinionConditions: []authorizer.Condition{cond("nop-1", errResult)},
 				},
 				{
 					name: "noopinion error trumps noopinion unevaluated and any other allow",
-					conditions: []authorizer.Condition{
-						cond("nop-no", authorizer.ConditionEffectNoOpinion, falseResult),
-						unevalCond("nop-uneval", authorizer.ConditionEffectNoOpinion),
-						cond("allow-yes", authorizer.ConditionEffectAllow, trueResult),
-						cond("allow-no", authorizer.ConditionEffectAllow, falseResult),
-						cond("allow-err", authorizer.ConditionEffectAllow, errResult),
-						unevalCond("allow-uneval", authorizer.ConditionEffectAllow),
-						cond("deny-no", authorizer.ConditionEffectDeny, falseResult),
-
-						cond("nop-1", authorizer.ConditionEffectNoOpinion, errResult),
+					noOpinionConditions: []authorizer.Condition{
+						cond("nop-no", falseResult),
+						unevalCond("nop-uneval"),
+						cond("nop-1", errResult),
 					},
+					allowConditions: []authorizer.Condition{
+						cond("allow-yes", trueResult),
+						cond("allow-no", falseResult),
+						cond("allow-err", errResult),
+						unevalCond("allow-uneval"),
+					},
+					denyConditions: []authorizer.Condition{cond("deny-no", falseResult)},
 				},
 				{
-					name: "nop error trumps matching allow",
-					conditions: []authorizer.Condition{
-						cond("nop-1", authorizer.ConditionEffectNoOpinion, errResult),
-						cond("allow-1", authorizer.ConditionEffectAllow, trueResult),
-					},
+					name:                "nop error trumps matching allow",
+					noOpinionConditions: []authorizer.Condition{cond("nop-1", errResult)},
+					allowConditions:     []authorizer.Condition{cond("allow-1", trueResult)},
 				},
 				{
-					name: "with false deny, nop error, matching allow",
-					conditions: []authorizer.Condition{
-						cond("deny-1", authorizer.ConditionEffectDeny, falseResult),
-						cond("nop-1", authorizer.ConditionEffectNoOpinion, errResult),
-						cond("allow-1", authorizer.ConditionEffectAllow, trueResult),
-					},
+					name:                "with false deny, nop error, matching allow",
+					denyConditions:      []authorizer.Condition{cond("deny-1", falseResult)},
+					noOpinionConditions: []authorizer.Condition{cond("nop-1", errResult)},
+					allowConditions:     []authorizer.Condition{cond("allow-1", trueResult)},
 				},
 			},
 		},
@@ -960,30 +950,29 @@ func TestConditionsMapEvaluate(t *testing.T) {
 			wantString: `NoOpinion(reason="one or more conditional evaluation errors occurred", err="condition \"allow-1\" with effect=Allow produced error: eval error")`,
 			subCases: []subCase{
 				{
-					name:       "minimal",
-					conditions: []authorizer.Condition{cond("allow-1", authorizer.ConditionEffectAllow, errResult)},
+					name:            "minimal",
+					allowConditions: []authorizer.Condition{cond("allow-1", errResult)},
 				},
 				{
-					name: "with false deny and nop",
-					conditions: []authorizer.Condition{
-						cond("deny-no", authorizer.ConditionEffectDeny, falseResult),
-						cond("nop-no", authorizer.ConditionEffectNoOpinion, falseResult),
-						cond("allow-no", authorizer.ConditionEffectAllow, falseResult),
-						unevalCond("allow-uneval", authorizer.ConditionEffectAllow),
-
-						cond("allow-1", authorizer.ConditionEffectAllow, errResult),
+					name:                "with false deny and nop",
+					denyConditions:      []authorizer.Condition{cond("deny-no", falseResult)},
+					noOpinionConditions: []authorizer.Condition{cond("nop-no", falseResult)},
+					allowConditions: []authorizer.Condition{
+						cond("allow-no", falseResult),
+						unevalCond("allow-uneval"),
+						cond("allow-1", errResult),
 					},
 				},
 				{
-					name:       "via evaluateFunc fallback (condition unevaluatable, evaluateFunc errors)",
-					conditions: []authorizer.Condition{unevalCond("allow-1", authorizer.ConditionEffectAllow)},
+					name:            "via evaluateFunc fallback (condition unevaluatable, evaluateFunc errors)",
+					allowConditions: []authorizer.Condition{unevalCond("allow-1")},
 					evaluateFunc: func(context.Context, authorizer.ConditionsData, authorizer.Condition) authorizer.ConditionEvaluationResult {
 						return authorizer.ConditionEvaluationResultError(evalErr)
 					},
 				},
 				{
-					name:       "condition errors, evaluateFunc panics (not called)",
-					conditions: []authorizer.Condition{cond("allow-1", authorizer.ConditionEffectAllow, errResult)},
+					name:            "condition errors, evaluateFunc panics (not called)",
+					allowConditions: []authorizer.Condition{cond("allow-1", errResult)},
 					evaluateFunc: func(context.Context, authorizer.ConditionsData, authorizer.Condition) authorizer.ConditionEvaluationResult {
 						panic("should not be called")
 					},
@@ -996,9 +985,9 @@ func TestConditionsMapEvaluate(t *testing.T) {
 			subCases: []subCase{
 				{
 					name: "minimal",
-					conditions: []authorizer.Condition{
-						cond("allow-1", authorizer.ConditionEffectAllow, errResult),
-						cond("allow-2", authorizer.ConditionEffectAllow, errResult),
+					allowConditions: []authorizer.Condition{
+						cond("allow-1", errResult),
+						cond("allow-2", errResult),
 					},
 				},
 			},
@@ -1012,28 +1001,27 @@ func TestConditionsMapEvaluate(t *testing.T) {
 			wantString: `NoOpinion(reason="no conditions matched")`,
 			subCases: []subCase{
 				{
-					name:       "single deny false",
-					conditions: []authorizer.Condition{cond("deny-1", authorizer.ConditionEffectDeny, falseResult)},
+					name:           "single deny false",
+					denyConditions: []authorizer.Condition{cond("deny-1", falseResult)},
 				},
 				{
-					name:       "single nop false",
-					conditions: []authorizer.Condition{cond("nop-1", authorizer.ConditionEffectNoOpinion, falseResult)},
+					name:                "single nop false with filler-deny-false",
+					denyConditions:      fillerDenyFalse,
+					noOpinionConditions: []authorizer.Condition{cond("nop-1", falseResult)},
 				},
 				{
-					name:       "single allow false",
-					conditions: []authorizer.Condition{cond("allow-1", authorizer.ConditionEffectAllow, falseResult)},
+					name:            "single allow false",
+					allowConditions: []authorizer.Condition{cond("allow-1", falseResult)},
 				},
 				{
-					name: "all effects false",
-					conditions: []authorizer.Condition{
-						cond("deny-1", authorizer.ConditionEffectDeny, falseResult),
-						cond("nop-1", authorizer.ConditionEffectNoOpinion, falseResult),
-						cond("allow-1", authorizer.ConditionEffectAllow, falseResult),
-					},
+					name:                "all effects false",
+					denyConditions:      []authorizer.Condition{cond("deny-1", falseResult)},
+					noOpinionConditions: []authorizer.Condition{cond("nop-1", falseResult)},
+					allowConditions:     []authorizer.Condition{cond("allow-1", falseResult)},
 				},
 				{
-					name:       "via evaluateFunc fallback (condition unevaluatable, evaluateFunc returns false)",
-					conditions: []authorizer.Condition{unevalCond("allow-1", authorizer.ConditionEffectAllow)},
+					name:            "via evaluateFunc fallback (condition unevaluatable, evaluateFunc returns false)",
+					allowConditions: []authorizer.Condition{unevalCond("allow-1")},
 					evaluateFunc: func(context.Context, authorizer.ConditionsData, authorizer.Condition) authorizer.ConditionEvaluationResult {
 						return authorizer.ConditionEvaluationResultBoolean(false)
 					},
@@ -1049,15 +1037,14 @@ func TestConditionsMapEvaluate(t *testing.T) {
 			wantString: `NoOpinion(reason="at least one NoOpinion condition matched, or no conditions matched")`,
 			subCases: []subCase{
 				{
-					name:       "minimal",
-					conditions: []authorizer.Condition{unevalCond("nop-1", authorizer.ConditionEffectNoOpinion)},
+					name:                "with filler-deny-false",
+					denyConditions:      fillerDenyFalse,
+					noOpinionConditions: []authorizer.Condition{unevalCond("nop-1")},
 				},
 				{
-					name: "with false deny",
-					conditions: []authorizer.Condition{
-						cond("deny-1", authorizer.ConditionEffectDeny, falseResult),
-						unevalCond("nop-1", authorizer.ConditionEffectNoOpinion),
-					},
+					name:                "with false deny",
+					denyConditions:      []authorizer.Condition{cond("deny-1", falseResult)},
+					noOpinionConditions: []authorizer.Condition{unevalCond("nop-1")},
 				},
 			},
 		},
@@ -1070,34 +1057,32 @@ func TestConditionsMapEvaluate(t *testing.T) {
 			wantString: `Allow(reason="condition \"allow-1\" allowed the request")`,
 			subCases: []subCase{
 				{
-					name:       "minimal",
-					conditions: []authorizer.Condition{cond("allow-1", authorizer.ConditionEffectAllow, trueResult)},
+					name:            "minimal",
+					allowConditions: []authorizer.Condition{cond("allow-1", trueResult)},
 				},
 				{
 					name: "with false allow",
-					conditions: []authorizer.Condition{
-						cond("allow-no", authorizer.ConditionEffectAllow, falseResult),
-						cond("allow-1", authorizer.ConditionEffectAllow, trueResult),
+					allowConditions: []authorizer.Condition{
+						cond("allow-no", falseResult),
+						cond("allow-1", trueResult),
 					},
 				},
 				{
-					name: "with false deny and nop",
-					conditions: []authorizer.Condition{
-						cond("deny-1", authorizer.ConditionEffectDeny, falseResult),
-						cond("nop-1", authorizer.ConditionEffectNoOpinion, falseResult),
-						cond("allow-1", authorizer.ConditionEffectAllow, trueResult),
-					},
+					name:                "with false deny and nop",
+					denyConditions:      []authorizer.Condition{cond("deny-1", falseResult)},
+					noOpinionConditions: []authorizer.Condition{cond("nop-1", falseResult)},
+					allowConditions:     []authorizer.Condition{cond("allow-1", trueResult)},
 				},
 				{
-					name:       "evaluateFunc panics (not called, condition self-evaluates)",
-					conditions: []authorizer.Condition{cond("allow-1", authorizer.ConditionEffectAllow, trueResult)},
+					name:            "evaluateFunc panics (not called, condition self-evaluates)",
+					allowConditions: []authorizer.Condition{cond("allow-1", trueResult)},
 					evaluateFunc: func(context.Context, authorizer.ConditionsData, authorizer.Condition) authorizer.ConditionEvaluationResult {
 						panic("should not be called")
 					},
 				},
 				{
-					name:       "via evaluateFunc fallback (condition unevaluatable, evaluateFunc returns true)",
-					conditions: []authorizer.Condition{unevalCond("allow-1", authorizer.ConditionEffectAllow)},
+					name:            "via evaluateFunc fallback (condition unevaluatable, evaluateFunc returns true)",
+					allowConditions: []authorizer.Condition{unevalCond("allow-1")},
 					evaluateFunc: func(context.Context, authorizer.ConditionsData, authorizer.Condition) authorizer.ConditionEvaluationResult {
 						return authorizer.ConditionEvaluationResultBoolean(true)
 					},
@@ -1109,16 +1094,14 @@ func TestConditionsMapEvaluate(t *testing.T) {
 			wantString: `Allow(reason="condition \"allow-1\" allowed the request with description \"access granted\"")`,
 			subCases: []subCase{
 				{
-					name:       "minimal",
-					conditions: []authorizer.Condition{condDesc("allow-1", authorizer.ConditionEffectAllow, "access granted", trueResult)},
+					name:            "minimal",
+					allowConditions: []authorizer.Condition{condDesc("allow-1", "access granted", trueResult)},
 				},
 				{
-					name: "with false deny and nop",
-					conditions: []authorizer.Condition{
-						cond("deny-1", authorizer.ConditionEffectDeny, falseResult),
-						cond("nop-1", authorizer.ConditionEffectNoOpinion, falseResult),
-						condDesc("allow-1", authorizer.ConditionEffectAllow, "access granted", trueResult),
-					},
+					name:                "with false deny and nop",
+					denyConditions:      []authorizer.Condition{cond("deny-1", falseResult)},
+					noOpinionConditions: []authorizer.Condition{cond("nop-1", falseResult)},
+					allowConditions:     []authorizer.Condition{condDesc("allow-1", "access granted", trueResult)},
 				},
 			},
 		},
@@ -1132,18 +1115,18 @@ func TestConditionsMapEvaluate(t *testing.T) {
 			subCases: []subCase{
 				{
 					name: "minimal",
-					conditions: []authorizer.Condition{
-						cond("allow-err", authorizer.ConditionEffectAllow, errResult),
-						cond("allow-1", authorizer.ConditionEffectAllow, trueResult),
+					allowConditions: []authorizer.Condition{
+						cond("allow-err", errResult),
+						cond("allow-1", trueResult),
 					},
 				},
 				{
-					name: "with false deny and nop",
-					conditions: []authorizer.Condition{
-						cond("deny-1", authorizer.ConditionEffectDeny, falseResult),
-						cond("nop-1", authorizer.ConditionEffectNoOpinion, falseResult),
-						cond("allow-err", authorizer.ConditionEffectAllow, errResult),
-						cond("allow-1", authorizer.ConditionEffectAllow, trueResult),
+					name:                "with false deny and nop",
+					denyConditions:      []authorizer.Condition{cond("deny-1", falseResult)},
+					noOpinionConditions: []authorizer.Condition{cond("nop-1", falseResult)},
+					allowConditions: []authorizer.Condition{
+						cond("allow-err", errResult),
+						cond("allow-1", trueResult),
 					},
 				},
 			},
@@ -1161,21 +1144,19 @@ func TestConditionsMapEvaluate(t *testing.T) {
 			wantAllowCount:      1,
 			subCases: []subCase{
 				{
-					name: "minimal",
-					conditions: []authorizer.Condition{
-						unevalCond("deny-1", authorizer.ConditionEffectDeny),
-						cond("nop-1", authorizer.ConditionEffectNoOpinion, trueResult),
-						cond("allow-1", authorizer.ConditionEffectAllow, trueResult),
-					},
+					name:                "minimal",
+					denyConditions:      []authorizer.Condition{unevalCond("deny-1")},
+					noOpinionConditions: []authorizer.Condition{cond("nop-1", trueResult)},
+					allowConditions:     []authorizer.Condition{cond("allow-1", trueResult)},
 				},
 				{
 					name: "one deny false, one deny unevaluatable",
-					conditions: []authorizer.Condition{
-						cond("deny-false", authorizer.ConditionEffectDeny, falseResult),
-						unevalCond("deny-1", authorizer.ConditionEffectDeny),
-						cond("nop-1", authorizer.ConditionEffectNoOpinion, trueResult),
-						cond("allow-1", authorizer.ConditionEffectAllow, trueResult),
+					denyConditions: []authorizer.Condition{
+						cond("deny-false", falseResult),
+						unevalCond("deny-1"),
 					},
+					noOpinionConditions: []authorizer.Condition{cond("nop-1", trueResult)},
+					allowConditions:     []authorizer.Condition{cond("allow-1", trueResult)},
 				},
 			},
 		},
@@ -1187,19 +1168,15 @@ func TestConditionsMapEvaluate(t *testing.T) {
 			wantAllowCount:      1,
 			subCases: []subCase{
 				{
-					name: "minimal",
-					conditions: []authorizer.Condition{
-						unevalCond("nop-1", authorizer.ConditionEffectNoOpinion),
-						cond("allow-1", authorizer.ConditionEffectAllow, trueResult),
-					},
+					name:                "minimal",
+					noOpinionConditions: []authorizer.Condition{unevalCond("nop-1")},
+					allowConditions:     []authorizer.Condition{cond("allow-1", trueResult)},
 				},
 				{
-					name: "with false deny",
-					conditions: []authorizer.Condition{
-						cond("deny-1", authorizer.ConditionEffectDeny, falseResult),
-						unevalCond("nop-1", authorizer.ConditionEffectNoOpinion),
-						cond("allow-1", authorizer.ConditionEffectAllow, trueResult),
-					},
+					name:                "with false deny",
+					denyConditions:      []authorizer.Condition{cond("deny-1", falseResult)},
+					noOpinionConditions: []authorizer.Condition{unevalCond("nop-1")},
+					allowConditions:     []authorizer.Condition{cond("allow-1", trueResult)},
 				},
 			},
 		},
@@ -1210,23 +1187,21 @@ func TestConditionsMapEvaluate(t *testing.T) {
 			wantAllowCount:      1,
 			subCases: []subCase{
 				{
-					name:       "minimal (nil evaluateFunc)",
-					conditions: []authorizer.Condition{unevalCond("allow-1", authorizer.ConditionEffectAllow)},
+					name:            "minimal (nil evaluateFunc)",
+					allowConditions: []authorizer.Condition{unevalCond("allow-1")},
 				},
 				{
-					name:       "evaluateFunc also returns unevaluatable",
-					conditions: []authorizer.Condition{unevalCond("allow-1", authorizer.ConditionEffectAllow)},
+					name:            "evaluateFunc also returns unevaluatable",
+					allowConditions: []authorizer.Condition{unevalCond("allow-1")},
 					evaluateFunc: func(context.Context, authorizer.ConditionsData, authorizer.Condition) authorizer.ConditionEvaluationResult {
 						return authorizer.ConditionsEvaluationResultUnevaluatable()
 					},
 				},
 				{
-					name: "with false deny and nop",
-					conditions: []authorizer.Condition{
-						cond("deny-1", authorizer.ConditionEffectDeny, falseResult),
-						cond("nop-1", authorizer.ConditionEffectNoOpinion, falseResult),
-						unevalCond("allow-1", authorizer.ConditionEffectAllow),
-					},
+					name:                "with false deny and nop",
+					denyConditions:      []authorizer.Condition{cond("deny-1", falseResult)},
+					noOpinionConditions: []authorizer.Condition{cond("nop-1", falseResult)},
+					allowConditions:     []authorizer.Condition{unevalCond("allow-1")},
 				},
 			},
 		},
@@ -1237,7 +1212,7 @@ func TestConditionsMapEvaluate(t *testing.T) {
 			for _, sc := range tt.subCases {
 				t.Run(sc.name, func(t *testing.T) {
 					// Construct the ConditionsMap via the constructor to exercise validation.
-					decision := authorizer.ConditionsAwareDecisionConditionsMap(sc.conditions...)
+					decision := authorizer.ConditionsAwareDecisionConditionsMap(sc.denyConditions, sc.noOpinionConditions, sc.allowConditions)
 					if !decision.IsConditionsMap() {
 						t.Fatalf("expected ConditionsMap from constructor, got %s", decision.String())
 					}
@@ -1292,9 +1267,9 @@ func TestConditionsMapEvaluateDeepCopy(t *testing.T) {
 
 	// Unevaluatable deny → triggers refined ConditionsMap with deep-copied nop and allow.
 	decision := authorizer.ConditionsAwareDecisionConditionsMap(
-		authorizer.GenericCondition{ID: "deny-uneval", Effect: authorizer.ConditionEffectDeny},
-		&deepCopyTracker{id: "nop-1", effect: authorizer.ConditionEffectNoOpinion, marker: &marker},
-		&deepCopyTracker{id: "allow-1", effect: authorizer.ConditionEffectAllow, marker: &marker},
+		[]authorizer.Condition{authorizer.GenericCondition{ID: "deny-uneval"}},
+		[]authorizer.Condition{&deepCopyTracker{id: "nop-1", marker: &marker}},
+		[]authorizer.Condition{&deepCopyTracker{id: "allow-1", marker: &marker}},
 	)
 	if !decision.IsConditionsMap() {
 		t.Fatalf("expected ConditionsMap from constructor, got %s", decision.String())
@@ -1332,15 +1307,13 @@ func TestConditionsMapEvaluateDeepCopy(t *testing.T) {
 // deepCopyTracker is a Condition implementation with a pointer field to verify deep copy behavior.
 type deepCopyTracker struct {
 	id     string
-	effect authorizer.ConditionEffect
 	marker *string
 }
 
-func (c *deepCopyTracker) GetID() string                         { return c.id }
-func (c *deepCopyTracker) GetEffect() authorizer.ConditionEffect { return c.effect }
-func (c *deepCopyTracker) GetType() string                       { return "" }
-func (c *deepCopyTracker) GetCondition() string                  { return "" }
-func (c *deepCopyTracker) GetDescription() string                { return "" }
+func (c *deepCopyTracker) GetID() string          { return c.id }
+func (c *deepCopyTracker) GetType() string        { return "" }
+func (c *deepCopyTracker) GetCondition() string   { return "" }
+func (c *deepCopyTracker) GetDescription() string { return "" }
 func (c *deepCopyTracker) Evaluate(context.Context, authorizer.ConditionsData) authorizer.ConditionEvaluationResult {
 	return authorizer.ConditionsEvaluationResultUnevaluatable()
 }
@@ -1374,15 +1347,15 @@ func (a sampleAuthorizer) ConditionsAwareAuthorize(ctx context.Context, attrs au
 			return authorizer.ConditionsAwareDecisionAllow("", nil)
 		case "update":
 			return authorizer.ConditionsAwareDecisionConditionsMap(
-				authorizer.GenericCondition{
+				nil, nil,
+				[]authorizer.Condition{authorizer.GenericCondition{
 					ID: "owner-label-is-set",
 					Condition: `
 						(oldObject != null ? (has(oldObject.metadata) && has(oldObject.metadata.labels) && has(oldObject.metadata.labels.owner) && oldObject.metadata.labels.owner == "carol") : true) &&
 						(object != null ? (has(object.metadata) && has(object.metadata.labels) && has(object.metadata.labels.owner) && object.metadata.labels.owner == "carol") : true)
 					`,
-					Effect: authorizer.ConditionEffectAllow,
-					Type:   "test-cel-conditions-type",
-				},
+					Type: "test-cel-conditions-type",
+				}},
 			)
 		default:
 			return authorizer.ConditionsAwareDecisionNoOpinion("", nil)
@@ -1394,18 +1367,20 @@ func (a sampleAuthorizer) ConditionsAwareAuthorize(ctx context.Context, attrs au
 			return authorizer.ConditionsAwareDecisionAllow("", nil)
 		case "create", "update", "delete":
 			return authorizer.ConditionsAwareDecisionConditionsMap(
-				authorizer.GenericCondition{
-					ID:        "deny-supersecret-label-on-oldObject",
-					Condition: "oldObject != null && has(oldObject.metadata) && has(oldObject.metadata.labels) && has(oldObject.metadata.labels.supersecret)",
-					Effect:    authorizer.ConditionEffectDeny,
-					Type:      "test-cel-conditions-type",
+				[]authorizer.Condition{
+					authorizer.GenericCondition{
+						ID:        "deny-supersecret-label-on-oldObject",
+						Condition: "oldObject != null && has(oldObject.metadata) && has(oldObject.metadata.labels) && has(oldObject.metadata.labels.supersecret)",
+						Type:      "test-cel-conditions-type",
+					},
+					authorizer.GenericCondition{
+						ID:        "deny-supersecret-label-on-object",
+						Condition: "object != null && has(object.metadata) && has(object.metadata.labels) && has(object.metadata.labels.supersecret)",
+						Type:      "test-cel-conditions-type",
+					},
 				},
-				authorizer.GenericCondition{
-					ID:        "deny-supersecret-label-on-object",
-					Condition: "object != null && has(object.metadata) && has(object.metadata.labels) && has(object.metadata.labels.supersecret)",
-					Effect:    authorizer.ConditionEffectDeny,
-					Type:      "test-cel-conditions-type",
-				})
+				nil, nil,
+			)
 		default:
 			return authorizer.ConditionsAwareDecisionNoOpinion("", nil)
 		}
@@ -1493,7 +1468,7 @@ func TestSampleAuthorizer(t *testing.T) {
 				{name: "deny", authorizeDecision: [2]string{`Deny`, `Deny`}},
 			},
 		},
-		// carol: allow reads, conditional writes (EffectAllow on owner=carol)
+		// carol: allow reads, conditional writes (allow on owner=carol)
 		{
 			name: "carol list",
 			attrs: authorizer.AttributesRecord{
@@ -1562,7 +1537,7 @@ func TestSampleAuthorizer(t *testing.T) {
 				{name: "no opinion", authorizeDecision: [2]string{`NoOpinion`, `NoOpinion`}},
 			},
 		},
-		// dave: allow reads, conditional writes (EffectDeny on supersecret label)
+		// dave: allow reads, conditional writes (deny on supersecret label)
 		{
 			name: "dave list",
 			attrs: authorizer.AttributesRecord{
@@ -1802,7 +1777,8 @@ func TestConditionsAwareDecisionUnionedDecisions(t *testing.T) {
 	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ConditionalAuthorization, true)
 
 	condMap := authorizer.ConditionsAwareDecisionConditionsMap(
-		authorizer.GenericCondition{ID: "test", Condition: "true", Effect: authorizer.ConditionEffectAllow, Type: "test-type"},
+		nil, nil,
+		[]authorizer.Condition{authorizer.GenericCondition{ID: "test", Condition: "true", Type: "test-type"}},
 	)
 	noOp := authorizer.ConditionsAwareDecisionNoOpinion("noop", nil)
 
