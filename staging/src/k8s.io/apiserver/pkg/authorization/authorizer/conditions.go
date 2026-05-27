@@ -517,7 +517,6 @@ func ConditionsAwareDecisionConditionsMap(denyConditions []Condition, noOpinionC
 	}
 	// short-circuit case: if only NoOpinion conditions exist, we can short-circuit to a NoOpinion directly, as no matter
 	// what the conditions evaluate to, the output will be NoOpinion
-	// TODO: Add a test for this
 	if len(denyConditions) == 0 && len(noOpinionConditions) != 0 && len(allowConditions) == 0 {
 		return ConditionsAwareDecisionNoOpinion("", nil)
 	}
@@ -637,7 +636,7 @@ func (c GenericCondition) DeepCopy() Condition {
 // conditions evaluators that support a certain conditions type), returning ConditionsEvaluationResultUnevaluatable
 // for conditions that the evaluator does not recognize. In the latter case, a partially evaluated, deep copied
 // ConditionsMap might be returned.
-func (c *ConditionsMap) Evaluate(ctx context.Context, data ConditionsData, evaluateFunc func(context.Context, ConditionsData, Condition) ConditionEvaluationResult) ConditionsAwareDecision {
+func (c ConditionsMap) Evaluate(ctx context.Context, data ConditionsData, evaluateFunc func(context.Context, ConditionsData, Condition) ConditionEvaluationResult) ConditionsAwareDecision {
 	evalCond := func(cond Condition) ConditionEvaluationResult {
 		return cond.Evaluate(ctx, data)
 	}
