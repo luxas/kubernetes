@@ -97,8 +97,16 @@ def unionIdealAuthorize(decisions : List ConditionsAwareDecision) : Decision :=
     | .Allow     => .Allow
     | .Deny      => .Deny
     | .NoOpinion => unionIdealAuthorize rest
-    | .ConditionsMap cm => cm.Ideal
-    | .Union subDecisions => unionIdealAuthorize subDecisions -- TODO: Continue with rest
+    | .ConditionsMap cm =>
+      match cm.Ideal with
+      | .Allow => .Allow
+      | .Deny => .Deny
+      | .NoOpinion => unionIdealAuthorize rest
+    | .Union subDecisions =>
+      match unionIdealAuthorize subDecisions with
+      | .Allow => .Allow
+      | .Deny => .Deny
+      | .NoOpinion => unionIdealAuthorize rest
 
 /-- Returns the idealized unconditional decision from a Decision tree.
   Ideal:
@@ -344,28 +352,39 @@ theorem foldFailClosed_not_deny_implies_ideal_not_deny
   match ds with
   | [] => simp [unionIdealAuthorize]
   | d :: rest =>
-    unfold unionIdealAuthorize
-    unfold ConditionsAwareDecision.FailClosedDecision.foldFailClosed at h
-    match hd : d with
-    | .Allow => simp
-    | .Deny => simp [ConditionsAwareDecision.FailClosedDecision] at h
+    have h_d : d.FailClosedDecision ≠ .Deny := by
+      intro hd; apply h; simp [ConditionsAwareDecision.FailClosedDecision.foldFailClosed, hd]
+    have h_rest : ConditionsAwareDecision.FailClosedDecision.foldFailClosed rest ≠ .Deny := by
+      intro hr; apply h
+      unfold ConditionsAwareDecision.FailClosedDecision.foldFailClosed
+      split
+      · rfl
+      · exact hr
+    match d with
+    | .Allow => simp [unionIdealAuthorize]
+    | .Deny =>
+      exfalso; exact h_d (by simp [ConditionsAwareDecision.FailClosedDecision])
     | .NoOpinion =>
-      simp [ConditionsAwareDecision.FailClosedDecision] at h
-      exact foldFailClosed_not_deny_implies_ideal_not_deny rest h
+      simp only [unionIdealAuthorize]
+      exact foldFailClosed_not_deny_implies_ideal_not_deny rest h_rest
     | .ConditionsMap cm =>
-      simp only [ConditionsMap.Ideal]
-      cases hdeny : cm.hasDenyCondition with
-      | true =>
-        simp [ConditionsAwareDecision.FailClosedDecision, ConditionsMap.FailClosedDecision, hdeny] at h
-      | false =>
-        exact cm.ax_no_deny_cond_implies_never_deny (by simp [hdeny])
+      simp only [unionIdealAuthorize, ConditionsMap.Ideal]
+      have h_not_deny : cm.evaluate ≠ .Deny := by
+        apply cm.ax_no_deny_cond_implies_never_deny
+        intro h_deny
+        exact h_d (by simp [ConditionsAwareDecision.FailClosedDecision, ConditionsMap.FailClosedDecision, h_deny])
+      split
+      next => simp
+      next h_eq => exact absurd h_eq h_not_deny
+      next => exact foldFailClosed_not_deny_implies_ideal_not_deny rest h_rest
     | .Union subDs =>
-      have h_fc : (ConditionsAwareDecision.Union subDs).FailClosedDecision ≠ .Deny := by
-        simp [ConditionsAwareDecision.FailClosedDecision] at h ⊢
-        intro hfold; simp [hfold] at h
-      have := failClosed_not_deny_implies_ideal_not_deny (.Union subDs) h_fc
-      simp [ConditionsAwareDecision.Ideal] at this
-      exact this
+      simp only [unionIdealAuthorize]
+      have h_ideal := failClosed_not_deny_implies_ideal_not_deny (.Union subDs) h_d
+      simp [ConditionsAwareDecision.Ideal] at h_ideal
+      split
+      next => simp
+      next h_eq => exact absurd h_eq h_ideal
+      next => exact foldFailClosed_not_deny_implies_ideal_not_deny rest h_rest
 end
 
 /-- **Invariant**: `ConditionsMap.FailClosedDecision` is always `Deny` or `NoOpinion`. -/
