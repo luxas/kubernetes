@@ -10,7 +10,8 @@ inductive Decision where
   deriving Repr, DecidableEq, BEq
 
 structure ConditionsData where
-  foo: Bool -- TODO
+  object: String
+  oldObject: String
 
 structure ConditionsMap where
   hasDenyCondition : Bool
@@ -154,8 +155,8 @@ def Authorizer.idealAuthorize (a : Authorizer) : Decision :=
 -- allows ignoring local errors when properties are not needed
 -- e.g. ignore well-formed set behaviors
 
-def mkUnionAuthorizer (authorizers: List Authorizer): Authorizer :=
-  TODO
+-- def mkUnionAuthorizer (authorizers: List Authorizer): Authorizer :=
+--   TODO
 
 -- ============================================================================
 -- Transpiled: union.Authorize — metadata-only (union.go:46-70)
@@ -365,6 +366,40 @@ theorem foldFailClosed_not_deny_implies_ideal_not_deny
       have := failClosed_not_deny_implies_ideal_not_deny (.Union subDs) h_fc
       simp [ConditionsAwareDecision.Ideal] at this
       exact this
+end
+
+/-- **Invariant**: `ConditionsMap.FailClosedDecision` is always `Deny` or `NoOpinion`. -/
+theorem conditionsMap_failClosed_deny_or_noOpinion (c : ConditionsMap)
+    : c.FailClosedDecision = .Deny ∨ c.FailClosedDecision = .NoOpinion := by
+  unfold ConditionsMap.FailClosedDecision
+  cases c.hasDenyCondition <;> simp
+
+mutual
+/-- **Invariant**: `ConditionsAwareDecision.FailClosedDecision` is always `Deny` or `NoOpinion`,
+    never `Allow`. The metadata-only / fail-closed path can deny or abstain but never grants access. -/
+theorem failClosed_deny_or_noOpinion (d : ConditionsAwareDecision)
+    : d.FailClosedDecision = .Deny ∨ d.FailClosedDecision = .NoOpinion := by
+  cases d with
+  | Allow => right; rfl
+  | Deny => left; rfl
+  | NoOpinion => right; rfl
+  | ConditionsMap c =>
+    simp only [ConditionsAwareDecision.FailClosedDecision]
+    exact conditionsMap_failClosed_deny_or_noOpinion c
+  | Union ds =>
+    simp only [ConditionsAwareDecision.FailClosedDecision]
+    exact foldFailClosed_deny_or_noOpinion ds
+
+theorem foldFailClosed_deny_or_noOpinion (ds : List ConditionsAwareDecision)
+    : ConditionsAwareDecision.FailClosedDecision.foldFailClosed ds = .Deny
+    ∨ ConditionsAwareDecision.FailClosedDecision.foldFailClosed ds = .NoOpinion := by
+  match ds with
+  | [] => right; rfl
+  | d :: rest =>
+    unfold ConditionsAwareDecision.FailClosedDecision.foldFailClosed
+    split
+    · left; rfl
+    · exact foldFailClosed_deny_or_noOpinion rest
 end
 
 /-- **Safety**: if metadata-only Authorize allows, ideal also allows.
