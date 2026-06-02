@@ -15,3 +15,12 @@
 
 
 -- TODO: This should use the ContainsAllowOrDeny, and also use the DecisionUnion constructor
+
+-- add theorems for the intermediate result as well
+-- make sure that can become allowed stuff is sound
+
+TODO: maybe move to externalized theorems, not internal axioms
+(-- allows ignoring local errors when properties are not needed
+-- e.g. ignore well-formed set behaviors)
+TODO: move to use name-based matching in union EvaluateConditions
+TODO: use CanBecomeAllowed in the union conditionsawareauthorize
