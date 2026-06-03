@@ -308,6 +308,17 @@ func (d ConditionsAwareDecision) String() string {
 	}
 	if d.IsConditionsMap() {
 		params = append(params, fmt.Sprintf("len=%d", d.conditionsMap.Length()))
+		/*
+			if len(d.conditionsMap.denyConditions) != 0 {
+				params = append(params, fmt.Sprintf("denies=%d", len(d.conditionsMap.denyConditions)))
+			}
+			if len(d.conditionsMap.noOpinionConditions) != 0 {
+				params = append(params, fmt.Sprintf("noopinions=%d", len(d.conditionsMap.noOpinionConditions)))
+			}
+			if len(d.conditionsMap.allowConditions) != 0 {
+				params = append(params, fmt.Sprintf("allows=%d", len(d.conditionsMap.allowConditions)))
+			}
+		*/
 		return fmt.Sprintf("ConditionsMap%s", paramsStr())
 	}
 	// Deny is written such that if none of the other modes apply,
@@ -926,7 +937,7 @@ func (unionMap ConditionsAwareDecisionUnion) PossibleDecisions() sets.Set[Decisi
 	for _, subDecision := range unionMap.inner {
 		union.Insert(subDecision.d.PossibleDecisions().UnsortedList()...)
 		// Short-circuit on the first Allow or Deny, after that, decisions don't matter.
-		if unionMap.ContainsAllowOrDeny() {
+		if subDecision.d.ContainsAllowOrDeny() {
 			// When there is an Allow or Deny leaf somewhere, the default response NoOpinion won't ever be returned
 			union.Delete(DecisionNoOpinion)
 			return union

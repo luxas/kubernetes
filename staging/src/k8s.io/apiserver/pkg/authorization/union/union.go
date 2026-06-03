@@ -133,9 +133,9 @@ func (authzHandler unionAuthzHandler) EvaluateConditions(ctx context.Context, un
 			decision, reason, err = authorizer.DecisionNoOpinion, unevaluatedSubDecision.Reason(), unevaluatedSubDecision.Error()
 		} else {
 			// ConditionsMap or Union types are evaluated by their authorizer
-			i, err := strconv.Atoi(istr)
-			if err != nil {
-				panic(err) // TODO: make better
+			i, tmpatoierr := strconv.Atoi(istr)
+			if tmpatoierr != nil {
+				panic(tmpatoierr) // TODO: make better
 			}
 			decision, reason, err = authzHandler[i].EvaluateConditions(ctx, unevaluatedSubDecision, data)
 		}
