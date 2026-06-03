@@ -19,7 +19,6 @@ package authorizer_test
 import (
 	"errors"
 	"fmt"
-	"strconv"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -39,11 +38,26 @@ func possibleDecisionsTestSetup(t *testing.T) {
 	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ConditionalAuthorization, true)
 }
 
-// TestConditionsAwareDecisionPossibleDecisions exercises ConditionsAwareDecision.PossibleDecisions
-// for every variant of the decision enum.
-func TestConditionsAwareDecisionPossibleDecisions(t *testing.T) {
+// TestPossibleDecisions is the unified table-driven test for
+// ConditionsAwareDecision.PossibleDecisions, ConditionsMap.PossibleDecisions, and
+// ConditionsAwareDecisionUnion.PossibleDecisions. Every input is constructed as a
+// ConditionsAwareDecision (the public entry point through which both ConditionsMap and
+// ConditionsAwareDecisionUnion are exercised), and every row asserts both the
+// PossibleDecisions output and the decision's String() representation.
+//
+// Semantics covered by the rows:
+//   - All five ConditionsAwareDecision variants (Allow/Deny/NoOpinion/ConditionsMap/Union).
+//   - Every non-empty combination of ConditionsMap effect groups (deny / noOpinion / allow).
+//   - Union sub-decision sequences:
+//   - The default outcome of a union is NoOpinion (when every sub-decision evaluates to NoOpinion).
+//   - A union short-circuits at the first sub-decision that yields a concrete Allow or Deny.
+//   - A ConditionsMap sub-decision can yield NoOpinion at runtime, in which case evaluation
+//     continues to the next sub-decision; therefore later concrete Allow/Deny outcomes remain reachable.
+//   - Add drops elements appended after the first concrete Allow/Deny leaf.
+func TestPossibleDecisions(t *testing.T) {
 	possibleDecisionsTestSetup(t)
 
+	// ConditionsMap leaves used as building blocks below.
 	condMapAllow := authorizer.ConditionsAwareDecisionConditionsMap(nil, nil, []authorizer.Condition{genericCond("allow-1")})
 	condMapDeny := authorizer.ConditionsAwareDecisionConditionsMap([]authorizer.Condition{genericCond("deny-1")}, nil, nil)
 	condMapDenyAndAllow := authorizer.ConditionsAwareDecisionConditionsMap(
@@ -52,288 +66,237 @@ func TestConditionsAwareDecisionPossibleDecisions(t *testing.T) {
 		[]authorizer.Condition{genericCond("allow-1")},
 	)
 
-	tests := []struct {
-		name string
-		d    authorizer.ConditionsAwareDecision
-		want sets.Set[authorizer.Decision]
-	}{
-		{
-			name: "Allow",
-			d:    authorizer.ConditionsAwareDecisionAllow("ok", nil),
-			want: sets.New(authorizer.DecisionAllow),
-		},
-		{
-			name: "Allow with error still yields only Allow",
-			d:    authorizer.ConditionsAwareDecisionAllow("ok", errors.New("warning")),
-			want: sets.New(authorizer.DecisionAllow),
-		},
-		{
-			name: "Deny",
-			d:    authorizer.ConditionsAwareDecisionDeny("no", nil),
-			want: sets.New(authorizer.DecisionDeny),
-		},
-		{
-			name: "NoOpinion",
-			d:    authorizer.ConditionsAwareDecisionNoOpinion("meh", nil),
-			want: sets.New(authorizer.DecisionNoOpinion),
-		},
-		{
-			name: "zero value is Deny",
-			d:    authorizer.ConditionsAwareDecision{},
-			want: sets.New(authorizer.DecisionDeny),
-		},
-		{
-			name: "ConditionsMap delegates: allow-only",
-			d:    condMapAllow,
-			want: sets.New(authorizer.DecisionNoOpinion, authorizer.DecisionAllow),
-		},
-		{
-			name: "ConditionsMap delegates: deny-only",
-			d:    condMapDeny,
-			want: sets.New(authorizer.DecisionNoOpinion, authorizer.DecisionDeny),
-		},
-		{
-			name: "ConditionsMap delegates: deny + allow",
-			d:    condMapDenyAndAllow,
-			want: sets.New(authorizer.DecisionNoOpinion, authorizer.DecisionAllow, authorizer.DecisionDeny),
-		},
-		{
-			name: "Union delegates: single ConditionsMap(allow)",
-			d:    unionDecision(condMapAllow),
-			want: sets.New(authorizer.DecisionNoOpinion, authorizer.DecisionAllow),
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := tt.d.PossibleDecisions()
-			if !got.Equal(tt.want) {
-				t.Errorf("PossibleDecisions() = %v, want %v", sortedDecisions(got), sortedDecisions(tt.want))
-			}
-		})
-	}
-}
-
-// TestConditionsMapPossibleDecisions exercises ConditionsMap.PossibleDecisions for every
-// non-empty combination of effect groups (deny/noOpinion/allow) the constructor accepts.
-func TestConditionsMapPossibleDecisions(t *testing.T) {
-	possibleDecisionsTestSetup(t)
-
-	// extractConditionsMap returns the ConditionsMap inside a ConditionsAwareDecision.
-	// For decisions that are not of ConditionsMap type (e.g. the empty-input constructor
-	// short-circuits to NoOpinion), the embedded zero-value ConditionsMap is returned —
-	// which itself has well-defined PossibleDecisions = {NoOpinion}.
-	extractConditionsMap := func(_ *testing.T, d authorizer.ConditionsAwareDecision) authorizer.ConditionsMap {
-		return d.ConditionsMap()
-	}
-
-	allow := []authorizer.Condition{genericCond("allow-1")}
-	nop := []authorizer.Condition{genericCond("nop-1")}
-	deny := []authorizer.Condition{genericCond("deny-1")}
-
-	tests := []struct {
-		name            string
-		d               authorizer.ConditionsAwareDecision
-		want            sets.Set[authorizer.Decision]
-		wantDecisionStr string
-	}{
-		{
-			name: "empty -> static NoOpinion", // in fact folded to a NoOpinion with an error
-			d:    authorizer.ConditionsAwareDecisionConditionsMap(nil, nil, nil),
-			want: sets.New(authorizer.DecisionNoOpinion),
-		},
-		{
-			name: "allow-only -> {NoOpinion, Allow}",
-			d:    authorizer.ConditionsAwareDecisionConditionsMap(nil, nil, allow),
-			want: sets.New(authorizer.DecisionNoOpinion, authorizer.DecisionAllow),
-		},
-		{
-			name: "noopinion-only -> static NoOpinion",
-			d:    authorizer.ConditionsAwareDecisionConditionsMap(nil, nop, nil),
-			want: sets.New(authorizer.DecisionNoOpinion),
-		},
-		{
-			name: "deny-only -> {NoOpinion, Deny}",
-			d:    authorizer.ConditionsAwareDecisionConditionsMap(deny, nil, nil),
-			want: sets.New(authorizer.DecisionNoOpinion, authorizer.DecisionDeny),
-		},
-		{
-			name: "noOpinion + allow -> {NoOpinion, Allow}",
-			d:    authorizer.ConditionsAwareDecisionConditionsMap(nil, nop, allow),
-			want: sets.New(authorizer.DecisionNoOpinion, authorizer.DecisionAllow),
-		},
-		{
-			name: "deny + noOpinion -> {NoOpinion, Deny}",
-			d:    authorizer.ConditionsAwareDecisionConditionsMap(deny, nop, nil),
-			want: sets.New(authorizer.DecisionNoOpinion, authorizer.DecisionDeny),
-		},
-		{
-			name: "deny + allow -> {NoOpinion, Allow, Deny}",
-			d:    authorizer.ConditionsAwareDecisionConditionsMap(deny, nil, allow),
-			want: sets.New(authorizer.DecisionNoOpinion, authorizer.DecisionAllow, authorizer.DecisionDeny),
-		},
-		{
-			name: "deny + noOpinion + allow -> {NoOpinion, Allow, Deny}",
-			d:    authorizer.ConditionsAwareDecisionConditionsMap(deny, nop, allow),
-			want: sets.New(authorizer.DecisionNoOpinion, authorizer.DecisionAllow, authorizer.DecisionDeny),
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cm := extractConditionsMap(t, tt.d)
-			got := cm.PossibleDecisions()
-			if !got.Equal(tt.want) {
-				t.Errorf("PossibleDecisions() = %v, want %v", sortedDecisions(got), sortedDecisions(tt.want))
-			}
-		})
-	}
-}
-
-// TestConditionsAwareDecisionUnionPossibleDecisions exercises the PossibleDecisions method
-// on ConditionsAwareDecisionUnion via the public Add/ToDecision API.
-//
-// Semantics:
-//   - The default outcome of a union is NoOpinion (when every sub-decision evaluates to NoOpinion).
-//   - A union short-circuits at the first sub-decision that yields a concrete Allow or Deny.
-//   - A ConditionsMap sub-decision can yield NoOpinion at runtime, in which case evaluation
-//     continues to the next sub-decision; therefore later concrete Allow/Deny outcomes remain reachable.
-func TestConditionsAwareDecisionUnionPossibleDecisions(t *testing.T) {
-	possibleDecisionsTestSetup(t)
-
-	condMapAllow := authorizer.ConditionsAwareDecisionConditionsMap(nil, nil, []authorizer.Condition{genericCond("allow-1")})
-	condMapDeny := authorizer.ConditionsAwareDecisionConditionsMap([]authorizer.Condition{genericCond("deny-1")}, nil, nil)
-	condMapAllowDeny := authorizer.ConditionsAwareDecisionConditionsMap(
-		[]authorizer.Condition{genericCond("deny-1")}, nil,
-		[]authorizer.Condition{genericCond("allow-1")},
-	)
+	// Empty-reason leaves used for union sub-decisions (avoids spurious "0: " index prefixes
+	// in the simplified ToDecision output that would clutter wantString comparisons).
 	allow := authorizer.ConditionsAwareDecisionAllow("", nil)
 	deny := authorizer.ConditionsAwareDecisionDeny("", nil)
 	noOp := authorizer.ConditionsAwareDecisionNoOpinion("", nil)
 
 	tests := []struct {
-		name      string
-		decisions []authorizer.ConditionsAwareDecision
-		want      sets.Set[authorizer.Decision]
+		name          string
+		d             authorizer.ConditionsAwareDecision
+		wantString    string
+		wantDecisions sets.Set[authorizer.Decision]
 	}{
+		// ===== Unconditional leaves =====
 		{
-			name:      "empty union -> {NoOpinion}",
-			decisions: nil,
-			want:      sets.New(authorizer.DecisionNoOpinion),
+			name:          "Allow (error ignored)",
+			d:             authorizer.ConditionsAwareDecisionAllow("ok", errors.New("warning")),
+			wantString:    `Allow(reason="ok", err="warning")`,
+			wantDecisions: sets.New(authorizer.DecisionAllow),
 		},
 		{
-			name:      "single NoOpinion -> {NoOpinion}",
-			decisions: []authorizer.ConditionsAwareDecision{noOp},
-			want:      sets.New(authorizer.DecisionNoOpinion),
+			name:          "Deny (error ignored)",
+			d:             authorizer.ConditionsAwareDecisionDeny("no", errors.New("warning")),
+			wantString:    `Deny(reason="no", err="warning")`,
+			wantDecisions: sets.New(authorizer.DecisionDeny),
 		},
 		{
-			name:      "single Allow -> {Allow}",
-			decisions: []authorizer.ConditionsAwareDecision{allow},
-			want:      sets.New(authorizer.DecisionAllow),
+			name:          "NoOpinion (error ignored)",
+			d:             authorizer.ConditionsAwareDecisionNoOpinion("meh", errors.New("warning")),
+			wantString:    `NoOpinion(reason="meh", err="warning")`,
+			wantDecisions: sets.New(authorizer.DecisionNoOpinion),
 		},
 		{
-			name:      "single Deny -> {Deny}",
-			decisions: []authorizer.ConditionsAwareDecision{deny},
-			want:      sets.New(authorizer.DecisionDeny),
+			name:          "zero value is Deny",
+			d:             authorizer.ConditionsAwareDecision{},
+			wantString:    `Deny`,
+			wantDecisions: sets.New(authorizer.DecisionDeny),
+		},
+
+		// ===== ConditionsMap effect-group combinations =====
+		{
+			// The constructor short-circuits an all-empty input to NoOpinion-with-error,
+			// so the resulting decision is NoOpinion (not a ConditionsMap).
+			name:          "ConditionsMap: empty input folds to NoOpinion",
+			d:             authorizer.ConditionsAwareDecisionConditionsMap(nil, nil, nil),
+			wantString:    `NoOpinion(reason="no conditions", err="at least one condition must be passed to ConditionsAwareDecisionConditionsMap(), got none")`,
+			wantDecisions: sets.New(authorizer.DecisionNoOpinion),
 		},
 		{
-			name:      "single ConditionsMap(allow) -> {NoOpinion, Allow}",
-			decisions: []authorizer.ConditionsAwareDecision{condMapAllow},
-			want:      sets.New(authorizer.DecisionNoOpinion, authorizer.DecisionAllow),
+			name:          "ConditionsMap: allow-only -> {NoOpinion, Allow}",
+			d:             condMapAllow,
+			wantString:    `ConditionsMap(allows=1)`,
+			wantDecisions: sets.New(authorizer.DecisionNoOpinion, authorizer.DecisionAllow),
 		},
 		{
-			name:      "single ConditionsMap(deny) -> {NoOpinion, Deny}",
-			decisions: []authorizer.ConditionsAwareDecision{condMapDeny},
-			want:      sets.New(authorizer.DecisionNoOpinion, authorizer.DecisionDeny),
+			name:          "ConditionsMap: noOpinion-only -> folds to NoOpinion",
+			d:             authorizer.ConditionsAwareDecisionConditionsMap(nil, []authorizer.Condition{genericCond("nop-1")}, nil),
+			wantString:    `NoOpinion`,
+			wantDecisions: sets.New(authorizer.DecisionNoOpinion),
 		},
 		{
-			name:      "all NoOpinions -> {NoOpinion}",
-			decisions: []authorizer.ConditionsAwareDecision{noOp, noOp, noOp},
-			want:      sets.New(authorizer.DecisionNoOpinion),
+			name:          "ConditionsMap: deny-only -> {NoOpinion, Deny}",
+			d:             condMapDeny,
+			wantString:    `ConditionsMap(denies=1)`,
+			wantDecisions: sets.New(authorizer.DecisionNoOpinion, authorizer.DecisionDeny),
 		},
 		{
-			name:      "[NoOpinion, Allow] -> {Allow} (Allow short-circuits past upstream NoOpinions)",
-			decisions: []authorizer.ConditionsAwareDecision{noOp, allow},
-			want:      sets.New(authorizer.DecisionAllow),
+			name:          "ConditionsMap: noOpinion + allow -> {NoOpinion, Allow}",
+			d:             authorizer.ConditionsAwareDecisionConditionsMap(nil, []authorizer.Condition{genericCond("nop-1")}, []authorizer.Condition{genericCond("allow-1")}),
+			wantString:    `ConditionsMap(noopinions=1, allows=1)`,
+			wantDecisions: sets.New(authorizer.DecisionNoOpinion, authorizer.DecisionAllow),
 		},
 		{
-			name:      "[NoOpinion, Deny] -> {Deny}",
-			decisions: []authorizer.ConditionsAwareDecision{noOp, deny},
-			want:      sets.New(authorizer.DecisionDeny),
+			name:          "ConditionsMap: deny + noOpinion -> {NoOpinion, Deny}",
+			d:             authorizer.ConditionsAwareDecisionConditionsMap([]authorizer.Condition{genericCond("deny-1")}, []authorizer.Condition{genericCond("nop-1")}, nil),
+			wantString:    `ConditionsMap(denies=1, noopinions=1)`,
+			wantDecisions: sets.New(authorizer.DecisionNoOpinion, authorizer.DecisionDeny),
 		},
 		{
-			name:      "[ConditionsMap(allow), Allow] -> {Allow} (CM allow or NoOpinion-then-Allow both yield Allow)",
-			decisions: []authorizer.ConditionsAwareDecision{condMapAllow, allow},
-			want:      sets.New(authorizer.DecisionAllow),
+			name:          "ConditionsMap: deny + allow -> {NoOpinion, Allow, Deny}",
+			d:             condMapDenyAndAllow,
+			wantString:    `ConditionsMap(denies=1, allows=1)`,
+			wantDecisions: sets.New(authorizer.DecisionNoOpinion, authorizer.DecisionAllow, authorizer.DecisionDeny),
 		},
 		{
-			name:      "[ConditionsMap(allow), Deny] -> {Allow, Deny} (CM allow -> Allow; CM NoOpinion -> Deny)",
-			decisions: []authorizer.ConditionsAwareDecision{condMapAllow, deny},
-			want:      sets.New(authorizer.DecisionAllow, authorizer.DecisionDeny),
+			name:          "ConditionsMap: deny + noOpinion + allow -> {NoOpinion, Allow, Deny}",
+			d:             authorizer.ConditionsAwareDecisionConditionsMap([]authorizer.Condition{genericCond("deny-1")}, []authorizer.Condition{genericCond("nop-1")}, []authorizer.Condition{genericCond("allow-1")}),
+			wantString:    `ConditionsMap(denies=1, noopinions=1, allows=1)`,
+			wantDecisions: sets.New(authorizer.DecisionNoOpinion, authorizer.DecisionAllow, authorizer.DecisionDeny),
+		},
+
+		// ===== Union sequences (built via Add+ToDecision through unionDecision) =====
+		{
+			// Empty union -> default NoOpinion.
+			name:          "Union: empty -> NoOpinion",
+			d:             unionDecision(),
+			wantString:    `NoOpinion`,
+			wantDecisions: sets.New(authorizer.DecisionNoOpinion),
 		},
 		{
-			name:      "[ConditionsMap(deny), Allow] -> {Allow, Deny} (CM deny -> Deny; CM NoOpinion -> Allow)",
-			decisions: []authorizer.ConditionsAwareDecision{condMapDeny, allow},
-			want:      sets.New(authorizer.DecisionAllow, authorizer.DecisionDeny),
+			// Single Allow/Deny/NoOpinion leaves simplify back to the same unconditional decision.
+			name:          "Union: single NoOpinion simplifies to NoOpinion",
+			d:             unionDecision(noOp),
+			wantString:    `NoOpinion`,
+			wantDecisions: sets.New(authorizer.DecisionNoOpinion),
 		},
 		{
-			name:      "[ConditionsMap(deny), Deny] -> {Deny}",
-			decisions: []authorizer.ConditionsAwareDecision{condMapDeny, deny},
-			want:      sets.New(authorizer.DecisionDeny),
+			name:          "Union: single Allow simplifies to Allow",
+			d:             unionDecision(allow),
+			wantString:    `Allow`,
+			wantDecisions: sets.New(authorizer.DecisionAllow),
 		},
 		{
-			name:      "[ConditionsMap(allow), NoOpinion] -> {NoOpinion, Allow} (no downstream short-circuit)",
-			decisions: []authorizer.ConditionsAwareDecision{condMapAllow, noOp},
-			want:      sets.New(authorizer.DecisionNoOpinion, authorizer.DecisionAllow),
+			name:          "Union: single Deny simplifies to Deny",
+			d:             unionDecision(deny),
+			wantString:    `Deny`,
+			wantDecisions: sets.New(authorizer.DecisionDeny),
 		},
 		{
-			name:      "[ConditionsMap(allow), ConditionsMap(deny)] -> {NoOpinion, Allow, Deny}",
-			decisions: []authorizer.ConditionsAwareDecision{condMapAllow, condMapDeny},
-			want:      sets.New(authorizer.DecisionNoOpinion, authorizer.DecisionAllow, authorizer.DecisionDeny),
+			// ConditionsMap sub-decisions are conditional, so the union stays a Union.
+			name:          "Union: single ConditionsMap(allow) -> {NoOpinion, Allow}",
+			d:             unionDecision(condMapAllow),
+			wantString:    `Union[ConditionsMap(allows=1)]`,
+			wantDecisions: sets.New(authorizer.DecisionNoOpinion, authorizer.DecisionAllow),
 		},
 		{
-			name:      "[ConditionsMap(deny+allow)] -> {NoOpinion, Allow, Deny}",
-			decisions: []authorizer.ConditionsAwareDecision{condMapAllowDeny},
-			want:      sets.New(authorizer.DecisionNoOpinion, authorizer.DecisionAllow, authorizer.DecisionDeny),
+			name:          "Union: single ConditionsMap(deny) -> {NoOpinion, Deny}",
+			d:             unionDecision(condMapDeny),
+			wantString:    `Union[ConditionsMap(denies=1)]`,
+			wantDecisions: sets.New(authorizer.DecisionNoOpinion, authorizer.DecisionDeny),
 		},
 		{
-			name:      "[NoOpinion, ConditionsMap(allow), Deny] -> {Allow, Deny}",
-			decisions: []authorizer.ConditionsAwareDecision{noOp, condMapAllow, deny},
-			want:      sets.New(authorizer.DecisionAllow, authorizer.DecisionDeny),
+			name:          "Union: all NoOpinions -> NoOpinion",
+			d:             unionDecision(noOp, noOp, noOp),
+			wantString:    `NoOpinion`,
+			wantDecisions: sets.New(authorizer.DecisionNoOpinion),
 		},
 		{
-			name:      "[ConditionsMap(allow), ConditionsMap(deny), Allow] -> {Allow, Deny}",
-			decisions: []authorizer.ConditionsAwareDecision{condMapAllow, condMapDeny, allow},
-			want:      sets.New(authorizer.DecisionAllow, authorizer.DecisionDeny),
+			// A trailing concrete Allow/Deny after NoOpinions short-circuits, so the union
+			// eagerly folds to that Allow/Deny.
+			name:          "Union: [NoOpinion, NoOpinion, Allow] simplifies to Allow",
+			d:             unionDecision(noOp, noOp, allow),
+			wantString:    `Allow`,
+			wantDecisions: sets.New(authorizer.DecisionAllow),
 		},
 		{
-			name:      "after first Allow, later elements are dropped by Add and have no effect",
-			decisions: []authorizer.ConditionsAwareDecision{allow, deny, condMapAllow},
-			want:      sets.New(authorizer.DecisionAllow),
+			name:          "Union: [NoOpinion, NoOpinion, Deny] simplifies to Deny",
+			d:             unionDecision(noOp, noOp, deny),
+			wantString:    `Deny`,
+			wantDecisions: sets.New(authorizer.DecisionDeny),
 		},
 		{
-			name:      "after first Deny, later elements are dropped by Add and have no effect",
-			decisions: []authorizer.ConditionsAwareDecision{deny, allow, condMapAllow},
-			want:      sets.New(authorizer.DecisionDeny),
+			// CM(allow) is {NoOpinion, Allow}; with a trailing Allow, both branches yield
+			// Allow, so the union folds to Allow.
+			name:          "Union: [CM(allow), Allow] simplifies to Allow",
+			d:             unionDecision(condMapAllow, allow),
+			wantString:    `Allow`,
+			wantDecisions: sets.New(authorizer.DecisionAllow),
+		},
+		{
+			// CM(allow) -> Allow yields Allow; CM(allow) -> NoOpinion falls through to Deny.
+			// Both outcomes are reachable, so the union stays a Union.
+			name:          "Union: [CM(allow), Deny] stays Union",
+			d:             unionDecision(condMapAllow, deny),
+			wantString:    `Union[ConditionsMap(allows=1), Deny]`,
+			wantDecisions: sets.New(authorizer.DecisionAllow, authorizer.DecisionDeny),
+		},
+		{
+			name:          "Union: [CM(deny), Allow] stays Union",
+			d:             unionDecision(condMapDeny, allow),
+			wantString:    `Union[ConditionsMap(denies=1), Allow]`,
+			wantDecisions: sets.New(authorizer.DecisionAllow, authorizer.DecisionDeny),
+		},
+		{
+			name:          "Union: [CM(deny), Deny] simplifies to Deny",
+			d:             unionDecision(condMapDeny, deny),
+			wantString:    `Deny`,
+			wantDecisions: sets.New(authorizer.DecisionDeny),
+		},
+		{
+			// No downstream Allow/Deny to short-circuit, so NoOpinion remains possible.
+			name:          "Union: [CM(allow), NoOpinion] -> {NoOpinion, Allow}",
+			d:             unionDecision(condMapAllow, noOp),
+			wantString:    `Union[ConditionsMap(allows=1), NoOpinion]`,
+			wantDecisions: sets.New(authorizer.DecisionNoOpinion, authorizer.DecisionAllow),
+		},
+		{
+			name:          "Union: [CM(allow), CM(deny)] -> {NoOpinion, Allow, Deny}",
+			d:             unionDecision(condMapAllow, condMapDeny),
+			wantString:    `Union[ConditionsMap(allows=1), ConditionsMap(denies=1)]`,
+			wantDecisions: sets.New(authorizer.DecisionNoOpinion, authorizer.DecisionAllow, authorizer.DecisionDeny),
+		},
+		{
+			name:          "Union: [CM(deny+allow)] -> {NoOpinion, Allow, Deny}",
+			d:             unionDecision(condMapDenyAndAllow),
+			wantString:    `Union[ConditionsMap(denies=1, allows=1)]`,
+			wantDecisions: sets.New(authorizer.DecisionNoOpinion, authorizer.DecisionAllow, authorizer.DecisionDeny),
+		},
+		{
+			name:          "Union: [NoOpinion, CM(allow), Deny] -> {Allow, Deny}",
+			d:             unionDecision(noOp, condMapAllow, deny),
+			wantString:    `Union[NoOpinion, ConditionsMap(allows=1), Deny]`,
+			wantDecisions: sets.New(authorizer.DecisionAllow, authorizer.DecisionDeny),
+		},
+		{
+			name:          "Union: [CM(allow), CM(deny), Allow] -> {Allow, Deny}",
+			d:             unionDecision(condMapAllow, condMapDeny, allow),
+			wantString:    `Union[ConditionsMap(allows=1), ConditionsMap(denies=1), Allow]`,
+			wantDecisions: sets.New(authorizer.DecisionAllow, authorizer.DecisionDeny),
+		},
+		{
+			// After the first Allow is added, Add silently drops all subsequent entries.
+			name:          "Union: after first Allow, later elements are dropped by Add",
+			d:             unionDecision(noOp, allow, deny, condMapAllow),
+			wantString:    `Allow`,
+			wantDecisions: sets.New(authorizer.DecisionAllow),
+		},
+		{
+			name:          "Union: after first Deny, later elements are dropped by Add",
+			d:             unionDecision(noOp, deny, allow, condMapAllow),
+			wantString:    `Deny`,
+			wantDecisions: sets.New(authorizer.DecisionDeny),
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var u authorizer.ConditionsAwareDecisionUnion
-			for i, d := range tt.decisions {
-				u.Add(strconv.Itoa(i), d)
+			if got := tt.d.String(); got != tt.wantString {
+				t.Errorf("String() = %q, want %q", got, tt.wantString)
 			}
-			got := u.PossibleDecisions()
-			if !got.Equal(tt.want) {
-				t.Errorf("PossibleDecisions() = %v, want %v", sortedDecisions(got), sortedDecisions(tt.want))
-			}
-
-			// Also verify that the equivalent ConditionsAwareDecision (via ToDecision) delegates
-			// to the same set, so the two PossibleDecisions methods stay consistent.
-			wrapped := u.ToDecision()
-			if got := wrapped.PossibleDecisions(); !got.Equal(tt.want) {
-				t.Errorf("wrapped.PossibleDecisions() = %v, want %v", sortedDecisions(got), sortedDecisions(tt.want))
+			if got := tt.d.PossibleDecisions(); !got.Equal(tt.wantDecisions) {
+				t.Errorf("PossibleDecisions() = %v, want %v", sortedDecisions(got), sortedDecisions(tt.wantDecisions))
 			}
 		})
 	}
@@ -438,139 +401,6 @@ func TestConditionsAwareDecisionUnionAdd(t *testing.T) {
 			t.Errorf("UnionedDecisions names = %v, want %v", names, want)
 		}
 	})
-}
-
-// TestConditionsAwareDecisionUnionToDecision exercises the simplification behavior
-// of ToDecision when the set of PossibleDecisions has cardinality 1.
-func TestConditionsAwareDecisionUnionToDecision(t *testing.T) {
-	possibleDecisionsTestSetup(t)
-
-	condMapAllow := authorizer.ConditionsAwareDecisionConditionsMap(nil, nil, []authorizer.Condition{genericCond("allow-1")})
-	condMapDeny := authorizer.ConditionsAwareDecisionConditionsMap([]authorizer.Condition{genericCond("deny-1")}, nil, nil)
-	allow := authorizer.ConditionsAwareDecisionAllow("a", nil)
-	deny := authorizer.ConditionsAwareDecisionDeny("d", nil)
-	noOp := authorizer.ConditionsAwareDecisionNoOpinion("n", nil)
-
-	tests := []struct {
-		name          string
-		decisions     []authorizer.ConditionsAwareDecision
-		wantDecision  authorizer.Decision // the unconditional decision type, or -1 if expecting Union
-		wantIsUnion   bool
-		wantInnerLen  int      // when wantIsUnion, expected number of wrapped sub-decisions
-		wantInnerStrs []string // when wantIsUnion, expected String() values of the wrapped sub-decisions
-	}{
-		{
-			name:         "empty -> NoOpinion (default)",
-			decisions:    nil,
-			wantDecision: authorizer.DecisionNoOpinion,
-		},
-		{
-			name:         "single Allow -> Allow",
-			decisions:    []authorizer.ConditionsAwareDecision{allow},
-			wantDecision: authorizer.DecisionAllow,
-		},
-		{
-			name:         "single Deny -> Deny",
-			decisions:    []authorizer.ConditionsAwareDecision{deny},
-			wantDecision: authorizer.DecisionDeny,
-		},
-		{
-			name:         "single NoOpinion -> NoOpinion",
-			decisions:    []authorizer.ConditionsAwareDecision{noOp},
-			wantDecision: authorizer.DecisionNoOpinion,
-		},
-		{
-			name:         "all NoOpinions -> NoOpinion",
-			decisions:    []authorizer.ConditionsAwareDecision{noOp, noOp, noOp},
-			wantDecision: authorizer.DecisionNoOpinion,
-		},
-		{
-			name:         "[NoOpinion, Allow] simplifies to Allow",
-			decisions:    []authorizer.ConditionsAwareDecision{noOp, allow},
-			wantDecision: authorizer.DecisionAllow,
-		},
-		{
-			name:         "[NoOpinion, Deny] simplifies to Deny",
-			decisions:    []authorizer.ConditionsAwareDecision{noOp, deny},
-			wantDecision: authorizer.DecisionDeny,
-		},
-		{
-			name:         "[ConditionsMap(allow), Allow] simplifies to Allow",
-			decisions:    []authorizer.ConditionsAwareDecision{condMapAllow, allow},
-			wantDecision: authorizer.DecisionAllow,
-		},
-		{
-			name:         "[ConditionsMap(deny), Deny] simplifies to Deny",
-			decisions:    []authorizer.ConditionsAwareDecision{condMapDeny, deny},
-			wantDecision: authorizer.DecisionDeny,
-		},
-		{
-			// ConditionsMap may evaluate to NoOpinion or Allow; with a downstream Deny, both Allow and Deny remain reachable.
-			name:          "[ConditionsMap(allow), Deny] stays Union",
-			decisions:     []authorizer.ConditionsAwareDecision{condMapAllow, deny},
-			wantIsUnion:   true,
-			wantInnerLen:  2,
-			wantInnerStrs: []string{`ConditionsMap(allows=1)`, `Deny(reason="d")`},
-		},
-		{
-			name:          "[ConditionsMap(deny), Allow] stays Union",
-			decisions:     []authorizer.ConditionsAwareDecision{condMapDeny, allow},
-			wantIsUnion:   true,
-			wantInnerLen:  2,
-			wantInnerStrs: []string{`ConditionsMap(denies=1)`, `Allow(reason="a")`},
-		},
-		{
-			name:          "[ConditionsMap(allow), NoOpinion] stays Union",
-			decisions:     []authorizer.ConditionsAwareDecision{condMapAllow, noOp},
-			wantIsUnion:   true,
-			wantInnerLen:  2,
-			wantInnerStrs: []string{`ConditionsMap(allows=1)`, `NoOpinion(reason="n")`},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var u authorizer.ConditionsAwareDecisionUnion
-			for i, d := range tt.decisions {
-				u.Add(strconv.Itoa(i), d)
-			}
-			got := u.ToDecision()
-
-			if tt.wantIsUnion {
-				if !got.IsUnion() {
-					t.Fatalf("expected Union, got %s", got.String())
-				}
-				var innerStrs []string
-				for _, sub := range got.UnionedDecisions() {
-					innerStrs = append(innerStrs, sub.String())
-				}
-				if len(innerStrs) != tt.wantInnerLen {
-					t.Errorf("expected %d inner decisions, got %d (%v)", tt.wantInnerLen, len(innerStrs), innerStrs)
-				}
-				if !stringSlicesEqual(innerStrs, tt.wantInnerStrs) {
-					t.Errorf("inner decisions = %v, want %v", innerStrs, tt.wantInnerStrs)
-				}
-				return
-			}
-
-			switch tt.wantDecision {
-			case authorizer.DecisionAllow:
-				if !got.IsAllow() {
-					t.Errorf("expected Allow, got %s", got.String())
-				}
-			case authorizer.DecisionDeny:
-				if !got.IsDeny() {
-					t.Errorf("expected Deny, got %s", got.String())
-				}
-			case authorizer.DecisionNoOpinion:
-				if !got.IsNoOpinion() {
-					t.Errorf("expected NoOpinion, got %s", got.String())
-				}
-			default:
-				t.Fatalf("test setup error: wantDecision=%v", tt.wantDecision)
-			}
-		})
-	}
 }
 
 // TestConditionsAwareDecisionUnionToDecisionPostMutation verifies that mutating the source
