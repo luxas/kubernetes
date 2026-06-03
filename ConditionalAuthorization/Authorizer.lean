@@ -105,7 +105,11 @@ where
     | []      => false
     | d :: ds => d.ContainsAllowOrDeny || anyContainsAllowOrDeny ds
 
-/-- Returns true if there exists some ConditionsData for which the decision could evaluate to Allow. -/
+/-- Returns true if there exists some ConditionsData for which the decision could evaluate to Allow.
+
+    NOTE: For Union, we short-circuit to `false` on the *first* Deny — matching Go's
+    `unionSlice.CanBecomeAllowed` semantics (conditions.go:910-926). A simpler `||`-fold
+    would over-approximate (`[.Deny, .Allow]` would return `true` instead of `false`). -/
 def ConditionsAwareDecision.CanBecomeAllowed : ConditionsAwareDecision → Bool
   | .Allow     => true
   | .Deny      => false
@@ -115,7 +119,10 @@ def ConditionsAwareDecision.CanBecomeAllowed : ConditionsAwareDecision → Bool
 where
   anyCanBecomeAllowed : List ConditionsAwareDecision → Bool
     | []      => false
-    | d :: ds => d.CanBecomeAllowed || anyCanBecomeAllowed ds
+    | d :: ds =>
+      match d with
+      | .Deny => false  -- Go short-circuit: union with any Deny cannot become Allow
+      | _     => d.CanBecomeAllowed || anyCanBecomeAllowed ds
 
 def unionIdealAuthorize (decisions : List ConditionsAwareDecision) (data : ConditionsData) : Decision :=
   match decisions with

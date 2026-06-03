@@ -76,7 +76,7 @@ def UnionAuthorizer.evaluateConditions (u : UnionAuthorizer) :
     | .Allow => .Allow
     | .Deny => .Deny
     | .NoOpinion => .NoOpinion
-    | .ConditionsMap _ => .Deny
+    | .ConditionsMap _ => decision.FailClosedDecision  -- matches Go: fail-closed via union.EvaluateConditions
     | .Union ds => unionEvaluateConditions (List.zip u.handlers ds) data
 
 -- ============================================================================
