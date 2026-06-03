@@ -595,17 +595,21 @@ theorem UnionAuthorizer.authorizeDo_eq (u : UnionAuthorizer) (attrs : Attributes
 --  remaining to prove: they involve `let mut decisions := []; …` and `ds.zip u.handlers`
 --  loops, which need additional accumulator-style bridge lemmas.
 --
---  Post-refactor: `UnionAuthorizer.entries` has been removed in favour of a `where`-scoped
---  helper `UnionAuthorizer.conditionsAwareAuthorize.subDecisions` returning a plain
---  `List ConditionsAwareDecision`. The Do-version of conditionsAwareAuthorize also builds
---  a `List ConditionsAwareDecision` via its mutable accumulator, so the equivalence aligns
---  cleanly with the proof-friendly form once the accumulator bridge lemma is in place.
+--  After two `where`-clause refactors, the public surface of `UnionAuthorizer` no longer
+--  exposes any pair-list helpers:
+--    * `UnionAuthorizer.conditionsAwareAuthorize.subDecisions` returns a plain
+--      `List ConditionsAwareDecision` (was `entries` producing pairs).
+--    * `UnionAuthorizer.evaluateConditions.walk` walks two parallel lists (handlers and
+--      decisions) — no zip (was `unionEvaluateConditions` consuming a pre-zipped pair list).
 --
---  The remaining discrepancy: Do-version short-circuits on `ContainsAllowOrDenyDo`, while
---  `subDecisions` short-circuits on top-level `.Allow | .Deny`. Equal in practice when
---  no individual authorizer returns a nested `.Union`, but not pointwise.
+--  conditionsAwareAuthorizeDo (Do-version) builds a `List ConditionsAwareDecision`
+--  via mutable accumulator: aligns structurally with `subDecisions`. The residual
+--  discrepancy is the short-circuit predicate — Do-version uses `ContainsAllowOrDenyDo`,
+--  proof-friendly uses top-level `.Allow | .Deny` only.
 --
---  Similarly, evaluateConditionsDo_eq depends on the same shape via `ds.zip u.handlers`.)
+--  evaluateConditionsDo (Do-version) uses `for (sub, handler) in ds.zip u.handlers do …`.
+--  The equivalence target is now `walk u.handlers ds data` (parallel walk). Same
+--  semantics; the Do-version retains the zip purely to mirror Go's positional indexing.)
 
 end ConditionalAuthorization.Union
 
