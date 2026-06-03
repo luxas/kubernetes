@@ -354,6 +354,40 @@ lemma forIn_id_findSome_eq_getD
       simp only [hf, List.findSome?_cons, List.forIn_cons, pure_bind, bind_pure_comp]
       convert ih using 2
 
+/-- **Bridge 3.** A `for`-loop in `Id` with a `let mut` accumulator that grows by
+    appending and short-circuits via early-return of the current accumulator equals a
+    structural recursion that threads the same accumulator.
+
+    The recursive form `collectAux` returns the *tail* (added elements only); the equality
+    is `Do = init ++ collectAux`. This makes the bridge useful for any starting `init`. -/
+def collectAux {α β : Type} (xs : List α) (compute : α → β) (cond : β → Bool) : List β :=
+  match xs with
+  | [] => []
+  | x :: rest =>
+    let v := compute x
+    if cond v then [v]
+    else v :: collectAux rest compute cond
+
+lemma forIn_id_growing_acc_eq
+    {α β : Type} (xs : List α) (compute : α → β) (cond : β → Bool) (init : List β) :
+    (Id.run do
+       let mut acc : List β := init
+       for x in xs do
+         let v := compute x
+         acc := acc ++ [v]
+         if cond v then return acc
+       return acc)
+    = init ++ collectAux xs compute cond := by
+  induction xs generalizing init with
+  | nil => simp [collectAux]
+  | cons hd tl ih =>
+    by_cases hc : cond (compute hd)
+    · simp [collectAux, hc, List.forIn_cons]
+    · simp only [collectAux, hc, List.forIn_cons, if_false, bind_pure_comp]
+      have := ih (init ++ [compute hd])
+      simp only [List.append_assoc, List.singleton_append] at this
+      convert this using 2
+
 end ConditionalAuthorization.Go
 
 -- ============================================================================
@@ -567,6 +601,79 @@ theorem unionSliceCanBecomeAllowedDo_eq (xs : List ConditionsAwareDecision) :
 
 end
 
+-- ── Helper: ContainsAllowOrDeny forces Ideal to be Allow or Deny ──────────────
+--
+-- If a `ConditionsAwareDecision` has any `.Allow` or `.Deny` leaf in its tree, its
+-- `Ideal` at any `data` is forced to one of `.Allow` / `.Deny` (never `.NoOpinion`).
+-- This is the load-bearing fact for the Go-Do composition theorem: when the Do version
+-- short-circuits early on `ContainsAllowOrDeny`, the corresponding `walk` step
+-- produces a definitive Allow/Deny — earlier truncation doesn't change the result.
+
+mutual
+
+theorem containsAllowOrDeny_implies_ideal_AllowOrDeny
+    (d : ConditionsAwareDecision) (data : ConditionsData)
+    (h : d.ContainsAllowOrDeny = true)
+    : d.Ideal data = .Allow ∨ d.Ideal data = .Deny := by
+  cases d with
+  | Allow => left; rfl
+  | Deny => right; rfl
+  | NoOpinion =>
+    simp [ConditionsAwareDecision.ContainsAllowOrDeny] at h
+  | ConditionsMap _ =>
+    simp [ConditionsAwareDecision.ContainsAllowOrDeny] at h
+  | Union ds =>
+    simp only [ConditionsAwareDecision.ContainsAllowOrDeny] at h
+    simp only [ConditionsAwareDecision.Ideal]
+    exact anyContainsAllowOrDeny_implies_unionIdealAuthorize_AllowOrDeny ds data h
+
+theorem anyContainsAllowOrDeny_implies_unionIdealAuthorize_AllowOrDeny
+    (ds : List ConditionsAwareDecision) (data : ConditionsData)
+    (h : ConditionsAwareDecision.ContainsAllowOrDeny.anyContainsAllowOrDeny ds = true)
+    : unionIdealAuthorize ds data = .Allow ∨ unionIdealAuthorize ds data = .Deny := by
+  match ds with
+  | [] =>
+    simp [ConditionsAwareDecision.ContainsAllowOrDeny.anyContainsAllowOrDeny] at h
+  | sub :: rest =>
+    simp only [ConditionsAwareDecision.ContainsAllowOrDeny.anyContainsAllowOrDeny,
+               Bool.or_eq_true] at h
+    unfold unionIdealAuthorize
+    cases sub with
+    | Allow => left; rfl
+    | Deny => right; rfl
+    | NoOpinion =>
+      simp only [ConditionsAwareDecision.ContainsAllowOrDeny, Bool.false_or,
+                 Bool.false_eq_true, false_or] at h
+      exact anyContainsAllowOrDeny_implies_unionIdealAuthorize_AllowOrDeny rest data h
+    | ConditionsMap c =>
+      simp only [ConditionsAwareDecision.ContainsAllowOrDeny, Bool.false_or,
+                 Bool.false_eq_true, false_or] at h
+      simp only [ConditionsMap.Ideal]
+      cases hcm : c.evaluate data with
+      | Allow => left; rfl
+      | Deny => right; rfl
+      | NoOpinion =>
+        exact anyContainsAllowOrDeny_implies_unionIdealAuthorize_AllowOrDeny rest data h
+    | Union ds' =>
+      dsimp only []
+      cases hds : unionIdealAuthorize ds' data with
+      | Allow => left; rfl
+      | Deny => right; rfl
+      | NoOpinion =>
+        -- ds'.Ideal = NoOpinion. From h, either Union ds' contains Allow/Deny (→ Ideal ≠ NoOpinion
+        -- by IH, contradiction with hds), or rest contains Allow/Deny — use IH on rest.
+        have h_rest : ConditionsAwareDecision.ContainsAllowOrDeny.anyContainsAllowOrDeny rest = true := by
+          rcases h with hd' | hr
+          · simp only [ConditionsAwareDecision.ContainsAllowOrDeny] at hd'
+            have := anyContainsAllowOrDeny_implies_unionIdealAuthorize_AllowOrDeny ds' data hd'
+            cases this with
+            | inl hl => rw [hl] at hds; exact absurd hds (by decide)
+            | inr hr' => rw [hr'] at hds; exact absurd hds (by decide)
+          · exact hr
+        exact anyContainsAllowOrDeny_implies_unionIdealAuthorize_AllowOrDeny rest data h_rest
+
+end
+
 end ConditionalAuthorization.Authorizer
 
 -- ── UnionAuthorizer.* equivalences ────────────────────────────────────────────
@@ -591,25 +698,229 @@ theorem UnionAuthorizer.authorizeDo_eq (u : UnionAuthorizer) (attrs : Attributes
       simp only [ha, UnionAuthorizer.authorize]
       simpa [UnionAuthorizer.authorizeDo] using ih
 
--- (UnionAuthorizer.conditionsAwareAuthorizeDo_eq and evaluateConditionsDo_eq are
---  remaining to prove: they involve `let mut decisions := []; …` and `ds.zip u.handlers`
---  loops, which need additional accumulator-style bridge lemmas.
---
---  After two `where`-clause refactors, the public surface of `UnionAuthorizer` no longer
---  exposes any pair-list helpers:
---    * `UnionAuthorizer.conditionsAwareAuthorize.subDecisions` returns a plain
---      `List ConditionsAwareDecision` (was `entries` producing pairs).
---    * `UnionAuthorizer.evaluateConditions.walk` walks two parallel lists (handlers and
---      decisions) — no zip (was `unionEvaluateConditions` consuming a pre-zipped pair list).
---
---  conditionsAwareAuthorizeDo (Do-version) builds a `List ConditionsAwareDecision`
---  via mutable accumulator: aligns structurally with `subDecisions`. The residual
---  discrepancy is the short-circuit predicate — Do-version uses `ContainsAllowOrDenyDo`,
---  proof-friendly uses top-level `.Allow | .Deny` only.
---
---  evaluateConditionsDo (Do-version) uses `for (sub, handler) in ds.zip u.handlers do …`.
---  The equivalence target is now `walk u.handlers ds data` (parallel walk). Same
---  semantics; the Do-version retains the zip purely to mirror Go's positional indexing.)
+-- ── Recursive equivalent of `conditionsAwareAuthorizeDo`'s `let mut` accumulator ──
+
+/-- Recursive helper matching the Do version's accumulator semantics: walks handlers,
+    short-circuits on `ContainsAllowOrDenyDo`, builds the resulting list of decisions
+    from the front. -/
+def subDecisionsDo : List Authorizer → Attributes → List ConditionsAwareDecision
+  | [], _ => []
+  | h :: rest, attrs =>
+    let d := h.conditionsAwareAuthorize attrs
+    if d.ContainsAllowOrDenyDo then [d]
+    else d :: subDecisionsDo rest attrs
+
+/-- The Do version `conditionsAwareAuthorizeDo` builds exactly `Union (subDecisionsDo …)`.
+    Proved by induction on `u.handlers`, generalized over the starting accumulator so
+    the cons step can chain the IH. -/
+theorem UnionAuthorizer.conditionsAwareAuthorizeDo_eq_union_subDecisionsDo
+    (u : UnionAuthorizer) (attrs : Attributes) :
+    u.conditionsAwareAuthorizeDo attrs = .Union (subDecisionsDo u.handlers attrs) := by
+  obtain ⟨handlers⟩ := u
+  suffices h : ∀ (acc : List ConditionsAwareDecision),
+      (Id.run do
+        let mut decisions : List ConditionsAwareDecision := acc
+        for currAuthzHandler in handlers do
+          let decision := currAuthzHandler.conditionsAwareAuthorize attrs
+          decisions := decisions ++ [decision]
+          if decision.ContainsAllowOrDenyDo then
+            return (ConditionsAwareDecision.Union decisions)
+        return (ConditionsAwareDecision.Union decisions))
+      = ConditionsAwareDecision.Union (acc ++ subDecisionsDo handlers attrs) by
+    have := h []
+    simpa [UnionAuthorizer.conditionsAwareAuthorizeDo] using this
+  intro acc
+  induction handlers generalizing acc with
+  | nil => simp [subDecisionsDo]
+  | cons hd rest ih =>
+    by_cases hc : (hd.conditionsAwareAuthorize attrs).ContainsAllowOrDenyDo
+    · simp [hc, subDecisionsDo, List.forIn_cons]
+    · simp only [subDecisionsDo, hc, if_false, List.forIn_cons, bind_pure_comp]
+      have ih' := ih (acc ++ [hd.conditionsAwareAuthorize attrs])
+      simp only [List.append_assoc, List.singleton_append, List.cons_append, hc, if_false] at ih' ⊢
+      convert ih' using 2
+
+-- ── evaluateConditionsDo: Union case unfolds to `walk` ────────────────────────
+
+/-- The Go-Do `evaluateConditionsDo` for the `.Union ds` case unfolds to the same
+    parallel walk that the proof-friendly `evaluateConditions.walk` uses. The Do
+    version drives the iteration via `ds.zip u.handlers` + `for-in`; the parallel
+    walk is the natural Lean recursion. They agree pointwise. -/
+theorem UnionAuthorizer.evaluateConditionsDo_union_eq_walk
+    (u : UnionAuthorizer) (ds : List ConditionsAwareDecision) (data : ConditionsData) :
+    u.evaluateConditionsDo (.Union ds) data
+    = UnionAuthorizer.evaluateConditions.walk data u.handlers ds := by
+  obtain ⟨handlers⟩ := u
+  induction ds generalizing handlers with
+  | nil =>
+    cases handlers <;>
+      simp [UnionAuthorizer.evaluateConditionsDo, UnionAuthorizer.evaluateConditions.walk,
+            List.zip, List.zipWith]
+  | cons sub rest ih =>
+    cases handlers with
+    | nil =>
+      simp [UnionAuthorizer.evaluateConditionsDo, UnionAuthorizer.evaluateConditions.walk,
+            List.zip, List.zipWith]
+    | cons h hRest =>
+      simp only [UnionAuthorizer.evaluateConditionsDo, List.zip, List.zipWith,
+                 List.forIn_cons, bind_pure_comp]
+      simp only [UnionAuthorizer.evaluateConditions.walk]
+      cases sub with
+      | Allow => simp
+      | Deny => simp
+      | NoOpinion =>
+        simp only [pure_bind]
+        simpa [UnionAuthorizer.evaluateConditionsDo] using ih hRest
+      | ConditionsMap _ =>
+        cases hec : h.evaluateConditions (.ConditionsMap _) data with
+        | Allow => simp [hec]
+        | Deny => simp [hec]
+        | NoOpinion =>
+          simp only [hec, pure_bind]
+          simpa [UnionAuthorizer.evaluateConditionsDo] using ih hRest
+      | Union _ =>
+        cases hec : h.evaluateConditions (.Union _) data with
+        | Allow => simp [hec]
+        | Deny => simp [hec]
+        | NoOpinion =>
+          simp only [hec, pure_bind]
+          simpa [UnionAuthorizer.evaluateConditionsDo] using ih hRest
+
+/-- Full pointwise equivalence `evaluateConditionsDo = evaluateConditions`. Falls out
+    of the union bridge plus the leaf-case agreement (matching `FailClosedDecisionDo_eq`
+    for the ConditionsMap arm). -/
+theorem UnionAuthorizer.evaluateConditionsDo_eq (u : UnionAuthorizer)
+    (decision : ConditionsAwareDecision) (data : ConditionsData) :
+    u.evaluateConditionsDo decision data = u.evaluateConditions decision data := by
+  cases decision with
+  | Allow | Deny | NoOpinion =>
+    simp [UnionAuthorizer.evaluateConditionsDo, UnionAuthorizer.evaluateConditions]
+  | ConditionsMap _ =>
+    simp [UnionAuthorizer.evaluateConditionsDo, UnionAuthorizer.evaluateConditions,
+          ConditionsAwareDecision.FailClosedDecisionDo_eq]
+  | Union ds =>
+    rw [u.evaluateConditionsDo_union_eq_walk ds data]
+    rfl
+
+-- ── Core induction: walk on subDecisionsDo equals idealAuthorize ──────────────
+
+/-- The composition glue. Walking `handlers` paired with `subDecisionsDo handlers attrs`
+    yields the same result as `idealAuthorize`. This is true even though `subDecisionsDo`
+    truncates earlier than the proof-friendly `subDecisions` — the extra short-circuit
+    points correspond to sub-decisions whose `Ideal` is already `.Allow` or `.Deny`
+    (by `containsAllowOrDeny_implies_ideal_AllowOrDeny`), so `walk` returns the same
+    value at those points. -/
+theorem walk_subDecisionsDo_eq_idealAuthorize
+    (handlers : List Authorizer) (attrs : Attributes) (data : ConditionsData) :
+    UnionAuthorizer.evaluateConditions.walk data handlers (subDecisionsDo handlers attrs)
+    = UnionAuthorizer.idealAuthorize ⟨handlers⟩ attrs data := by
+  induction handlers with
+  | nil =>
+    simp [subDecisionsDo, UnionAuthorizer.evaluateConditions.walk,
+          UnionAuthorizer.idealAuthorize]
+  | cons h rest ih =>
+    have hidealH : h.idealAuthorize attrs data
+                 = (h.conditionsAwareAuthorize attrs).Ideal data := rfl
+    -- Case-split on whether the head's decision contains an Allow/Deny leaf.
+    by_cases hcd : (h.conditionsAwareAuthorize attrs).ContainsAllowOrDenyDo
+    · -- Case 1: Do short-circuits at h. subDecisionsDo = [d].
+      simp only [subDecisionsDo, hcd, if_true]
+      simp only [UnionAuthorizer.evaluateConditions.walk, UnionAuthorizer.idealAuthorize,
+                 Authorizer.idealAuthorize]
+      -- ContainsAllowOrDeny on d is true ⇒ d.Ideal data ∈ {Allow, Deny} (helper lemma).
+      have hcd_pf : (h.conditionsAwareAuthorize attrs).ContainsAllowOrDeny = true := by
+        rw [← ConditionsAwareDecision.ContainsAllowOrDenyDo_eq]; exact hcd
+      have hAD : (h.conditionsAwareAuthorize attrs).Ideal data = .Allow
+               ∨ (h.conditionsAwareAuthorize attrs).Ideal data = .Deny :=
+        containsAllowOrDeny_implies_ideal_AllowOrDeny _ data hcd_pf
+      -- Case-split on the head decision d.
+      cases hca : h.conditionsAwareAuthorize attrs with
+      | Allow =>
+        simp [ConditionsAwareDecision.Ideal]
+      | Deny =>
+        simp [ConditionsAwareDecision.Ideal]
+      | NoOpinion =>
+        -- ContainsAllowOrDeny(NoOpinion) = false → contradicts hcd
+        rw [hca] at hcd
+        simp [ConditionsAwareDecision.ContainsAllowOrDenyDo,
+              ConditionsAwareDecision.ContainsAllowOrDeny] at hcd
+      | ConditionsMap c =>
+        -- ContainsAllowOrDeny(ConditionsMap _) = false → contradicts hcd
+        rw [hca] at hcd
+        simp [ConditionsAwareDecision.ContainsAllowOrDenyDo,
+              ConditionsAwareDecision.ContainsAllowOrDeny] at hcd
+      | Union ds =>
+        rw [hca] at hAD
+        have heval := h.contract_eval_eq_ideal attrs (Or.inr ⟨ds, hca⟩) data
+        rw [hca] at heval
+        rw [heval]
+        cases hAD with
+        | inl hl => rw [hl]
+        | inr hr => rw [hr]
+    · -- Case 2: Do does NOT short-circuit at h. subDecisionsDo = d :: subDecisionsDo rest.
+      have hcd_f : (h.conditionsAwareAuthorize attrs).ContainsAllowOrDenyDo = false := by
+        cases hb : (h.conditionsAwareAuthorize attrs).ContainsAllowOrDenyDo
+        · rfl
+        · exact absurd hb hcd
+      simp only [subDecisionsDo, hcd_f, if_false, Bool.false_eq_true]
+      simp only [UnionAuthorizer.evaluateConditions.walk, UnionAuthorizer.idealAuthorize,
+                 Authorizer.idealAuthorize]
+      cases hca : h.conditionsAwareAuthorize attrs with
+      | Allow =>
+        -- ContainsAllowOrDeny(Allow) = true → contradicts ¬hcd
+        rw [hca] at hcd
+        simp [ConditionsAwareDecision.ContainsAllowOrDenyDo,
+              ConditionsAwareDecision.ContainsAllowOrDeny] at hcd
+      | Deny =>
+        rw [hca] at hcd
+        simp [ConditionsAwareDecision.ContainsAllowOrDenyDo,
+              ConditionsAwareDecision.ContainsAllowOrDeny] at hcd
+      | NoOpinion =>
+        -- d = NoOpinion: walk recurses, idealAuthorize sees d.Ideal = NoOpinion → recurse
+        simp only [ConditionsAwareDecision.Ideal]
+        exact ih
+      | ConditionsMap c =>
+        have heval := h.contract_eval_eq_ideal attrs (Or.inl ⟨c, hca⟩) data
+        rw [hca] at heval
+        simp only [ConditionsAwareDecision.Ideal, ConditionsMap.Ideal] at heval ⊢
+        rw [heval]
+        cases hcm : c.evaluate data with
+        | Allow => rfl
+        | Deny => rfl
+        | NoOpinion => exact ih
+      | Union ds =>
+        have heval := h.contract_eval_eq_ideal attrs (Or.inr ⟨ds, hca⟩) data
+        rw [hca] at heval
+        simp only [ConditionsAwareDecision.Ideal] at heval ⊢
+        rw [heval]
+        cases hui : unionIdealAuthorize ds data with
+        | Allow => rfl
+        | Deny => rfl
+        | NoOpinion => exact ih
+
+-- ── Headline: Go-Do composition equals idealAuthorize ─────────────────────────
+
+/-- **Composition theorem**: the Go-faithful composition
+    `evaluateConditionsDo ∘ conditionsAwareAuthorizeDo` is *observationally equivalent*
+    to the spec function `idealAuthorize` for the union authorizer.
+
+    Chains three pieces:
+    1. `conditionsAwareAuthorizeDo` builds `.Union (subDecisionsDo u.handlers attrs)`.
+    2. `evaluateConditionsDo (.Union ds) data` unfolds to `walk data u.handlers ds`.
+    3. `walk data u.handlers (subDecisionsDo u.handlers attrs) = idealAuthorize ⟨u.handlers⟩ attrs data`.
+
+    This holds *despite* `conditionsAwareAuthorizeDo` short-circuiting on
+    `ContainsAllowOrDeny` (broader) and the proof-friendly `subDecisions` short-circuiting
+    only on top-level `.Allow | .Deny` — see the helper `containsAllowOrDeny_implies_ideal_AllowOrDeny`
+    for why the earlier truncation doesn't change the final result. -/
+theorem UnionAuthorizer.composition_do_eq_ideal (u : UnionAuthorizer)
+    (attrs : Attributes) (data : ConditionsData) :
+    u.evaluateConditionsDo (u.conditionsAwareAuthorizeDo attrs) data
+    = u.idealAuthorize attrs data := by
+  rw [u.conditionsAwareAuthorizeDo_eq_union_subDecisionsDo attrs]
+  rw [u.evaluateConditionsDo_union_eq_walk (subDecisionsDo u.handlers attrs) data]
+  obtain ⟨handlers⟩ := u
+  exact walk_subDecisionsDo_eq_idealAuthorize handlers attrs data
 
 end ConditionalAuthorization.Union
 
@@ -695,5 +1006,12 @@ open ConditionalAuthorization.Union
           UnionAuthorizer → Attributes → ConditionsAwareDecision)
 #check (UnionAuthorizer.evaluateConditionsDo :
           UnionAuthorizer → ConditionsAwareDecision → ConditionsData → Decision)
+#check (UnionAuthorizer.evaluateConditionsDo_eq :
+          ∀ (u : UnionAuthorizer) (d : ConditionsAwareDecision) (data : ConditionsData),
+            u.evaluateConditionsDo d data = u.evaluateConditions d data)
+#check (UnionAuthorizer.composition_do_eq_ideal :
+          ∀ (u : UnionAuthorizer) (attrs : Attributes) (data : ConditionsData),
+            u.evaluateConditionsDo (u.conditionsAwareAuthorizeDo attrs) data
+            = u.idealAuthorize attrs data)
 
 end ConditionalAuthorization.Go
