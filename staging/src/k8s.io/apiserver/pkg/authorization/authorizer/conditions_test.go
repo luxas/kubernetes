@@ -44,12 +44,12 @@ func TestConditionsAwareDecision(t *testing.T) {
 
 	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ConditionalAuthorization, true)
 
-	makeAllowConditionsWithLength := func(conditionCount int) authorizer.ConditionsAwareDecision {
+	makeConditionsSlice := func(conditionCount int) []authorizer.Condition {
 		allowConditionList := make([]authorizer.Condition, conditionCount)
 		for i := range conditionCount {
 			allowConditionList[i] = authorizer.GenericCondition{ID: fmt.Sprintf("cond-%d", i)}
 		}
-		return authorizer.ConditionsAwareDecisionConditionsMap(nil, nil, allowConditionList)
+		return allowConditionList
 	}
 
 	condMapAllow := authorizer.ConditionsAwareDecisionConditionsMap(
@@ -177,21 +177,32 @@ func TestConditionsAwareDecision(t *testing.T) {
 		{
 			name: "construct valid conditionsmap",
 			testDecisions: []authorizer.ConditionsAwareDecision{
-				makeAllowConditionsWithLength(authorizer.MaxConditionsPerMap),
+				authorizer.ConditionsAwareDecisionConditionsMap(nil, nil, makeConditionsSlice(authorizer.MaxConditionsPerMap)),
 			},
 			wantIsConditionsMap: true,
 			wantIsUnconditional: false,
 			wantString:          `ConditionsMap(len=128)`,
 		},
 		{
-			name: "too many conditions",
+			name: "too many Allow conditions",
 			testDecisions: []authorizer.ConditionsAwareDecision{
-				makeAllowConditionsWithLength(authorizer.MaxConditionsPerMap + 1),
+				authorizer.ConditionsAwareDecisionConditionsMap(nil, nil, makeConditionsSlice(authorizer.MaxConditionsPerMap+1)),
+			},
+			wantIsNoOpinion:     true,
+			wantIsUnconditional: true,
+			wantReason:          "failed closed",
+			wantAnyError:        true,
+			wantString:          `NoOpinion(reason="failed closed", err="too many conditions: 129 exceeds maximum of 128")`,
+		},
+		{
+			name: "too many conditions, with one Deny",
+			testDecisions: []authorizer.ConditionsAwareDecision{
+				authorizer.ConditionsAwareDecisionConditionsMap([]authorizer.Condition{authorizer.GenericCondition{ID: "deny-cond"}}, nil, makeConditionsSlice(authorizer.MaxConditionsPerMap)),
 			},
 			wantIsDeny:              true,
 			wantIsUnconditional:     true,
-			wantContainsAllowOrDeny: true,
 			wantFailClosedIsDeny:    true,
+			wantContainsAllowOrDeny: true,
 			wantReason:              "failed closed",
 			wantAnyError:            true,
 			wantString:              `Deny(reason="failed closed", err="too many conditions: 129 exceeds maximum of 128")`,

@@ -505,12 +505,21 @@ const MaxConditionsPerMap = 128
 //     have precedence).
 func ConditionsAwareDecisionConditionsMap(denyConditions []Condition, noOpinionConditions []Condition, allowConditions []Condition) ConditionsAwareDecision {
 
+	hasDenyEffect := len(denyConditions) > 0
+	makeFailClosedError := func(err error) ConditionsAwareDecision {
+		if hasDenyEffect {
+			return ConditionsAwareDecisionDeny("failed closed", err)
+		}
+		return ConditionsAwareDecisionNoOpinion("failed closed", err)
+	}
+
 	// enforce minimum 1 and maximum amount of conditions per map
 	conditionsAmount := len(denyConditions) + len(noOpinionConditions) + len(allowConditions)
 	if conditionsAmount > MaxConditionsPerMap {
-		return ConditionsAwareDecisionDeny("failed closed", fmt.Errorf("too many conditions: %d exceeds maximum of %d", conditionsAmount, MaxConditionsPerMap))
+		return makeFailClosedError(fmt.Errorf("too many conditions: %d exceeds maximum of %d", conditionsAmount, MaxConditionsPerMap))
 	}
 	if conditionsAmount <= 0 {
+		// Does not use makeFailClosedError, but NoOpinion directly, as in this branch there are no deny conditions, so NoOpinion is safe
 		return ConditionsAwareDecisionNoOpinion("no conditions", fmt.Errorf("at least one condition must be passed to ConditionsAwareDecisionConditionsMap(), got none"))
 	}
 	// short-circuit case: if only NoOpinion conditions exist, we can short-circuit to a NoOpinion directly, as no matter
@@ -520,13 +529,6 @@ func ConditionsAwareDecisionConditionsMap(denyConditions []Condition, noOpinionC
 	}
 
 	seenIDs := sets.New[string]()
-	hasDenyEffect := len(denyConditions) > 0
-	makeFailClosedError := func(err error) ConditionsAwareDecision {
-		if hasDenyEffect {
-			return ConditionsAwareDecisionDeny("failed closed", err)
-		}
-		return ConditionsAwareDecisionNoOpinion("failed closed", err)
-	}
 
 	if err := validateConditions(seenIDs, denyConditions); err != nil {
 		return makeFailClosedError(err)
@@ -575,7 +577,7 @@ func validateConditions(seenIDs sets.Set[string], conditions []Condition) error 
 	return nil
 }
 
-func isNilValue(i interface{}) bool {
+func isNilValue(i any) bool {
 	if i == nil {
 		return true // both type and data nil
 	}
