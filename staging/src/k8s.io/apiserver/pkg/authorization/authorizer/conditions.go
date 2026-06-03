@@ -631,8 +631,18 @@ func (c GenericCondition) DeepCopy() Condition {
 	return c // no values passed by reference
 }
 
-func (c ConditionsMap) Evaluate(ctx context.Context, data ConditionsData, evaluateFunc func(context.Context, ConditionsData, Condition) ConditionEvaluationResult) ConditionsAwareDecision {
-	return evaluateConditionsMapInternal(ctx, c, data, evaluateFunc)
+// Evaluate evaluates the ConditionsMap primarily using the Conditions' own Evaluate() function,
+// and secondarily using evaluateFunc, if set.
+func (c ConditionsMap) Evaluate(ctx context.Context, data ConditionsData, evaluateFunc func(context.Context, ConditionsData, Condition) (bool, error)) (Decision, string, error) {
+	// This is a translation between the generic, private function, and the interface we want to expose to callers. Because we never return "unevaluatable", the returned ConditionsAwareDecision
+	// is always one of Allow/Deny/NoOpinion, and thus can we split it into UnconditionalParts
+	return evaluateConditionsMapInternal(ctx, c, data, func(ctx context.Context, condData ConditionsData, cond Condition) ConditionEvaluationResult {
+		applied, err := evaluateFunc(ctx, condData, cond)
+		if err != nil {
+			return ConditionEvaluationResultError(err)
+		}
+		return ConditionEvaluationResultBoolean(applied)
+	}).UnconditionalParts()
 }
 
 // evaluateConditionsMapInternal evaluates the ConditionsMap primarily using the Conditions' own Evaluate() function,

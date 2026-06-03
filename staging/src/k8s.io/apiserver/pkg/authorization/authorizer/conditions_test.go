@@ -998,30 +998,30 @@ func celEvaluateConditions(ctx context.Context, conditionsMap authorizer.Conditi
 		"oldObject": oldObj,
 	}
 
-	return unconditionalParts(conditionsMap.Evaluate(ctx, data, func(ctx context.Context, _ authorizer.ConditionsData, c authorizer.Condition) authorizer.ConditionEvaluationResult {
+	return conditionsMap.Evaluate(ctx, data, func(ctx context.Context, _ authorizer.ConditionsData, c authorizer.Condition) (bool, error) {
 		return evalCEL(env, c.GetCondition(), vars)
-	}))
+	})
 }
 
 // evalCEL compiles and evaluates a single CEL expression, returning true/false.
-func evalCEL(env *cel.Env, expr string, vars map[string]any) authorizer.ConditionEvaluationResult {
+func evalCEL(env *cel.Env, expr string, vars map[string]any) (bool, error) {
 	ast, issues := env.Compile(expr)
 	if issues != nil && issues.Err() != nil {
-		return authorizer.ConditionEvaluationResultError(fmt.Errorf("CEL compile error for %q: %w", expr, issues.Err()))
+		return false, fmt.Errorf("CEL compile error for %q: %w", expr, issues.Err())
 	}
 	prg, err := env.Program(ast)
 	if err != nil {
-		return authorizer.ConditionEvaluationResultError(fmt.Errorf("CEL program error for %q: %w", expr, err))
+		return false, fmt.Errorf("CEL program error for %q: %w", expr, err)
 	}
 	out, _, err := prg.Eval(vars)
 	if err != nil {
-		return authorizer.ConditionEvaluationResultError(fmt.Errorf("CEL eval error for %q: %w", expr, err))
+		return false, fmt.Errorf("CEL eval error for %q: %w", expr, err)
 	}
 	result, ok := out.Value().(bool)
 	if !ok {
-		return authorizer.ConditionEvaluationResultError(fmt.Errorf("CEL expression %q did not return bool, got %T", expr, out.Value()))
+		return false, fmt.Errorf("CEL expression %q did not return bool, got %T", expr, out.Value())
 	}
-	return authorizer.ConditionEvaluationResultBoolean(result)
+	return result, nil
 }
 
 func objectToResolveVal(r runtime.Object) (interface{}, error) {
