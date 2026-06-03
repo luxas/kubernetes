@@ -42,14 +42,23 @@ def UnionAuthorizer.authorize : UnionAuthorizer → Attributes → Decision
     | .NoOpinion => UnionAuthorizer.authorize ⟨rest⟩ attrs
 
 /-- Mirrors Go's `ConditionsAwareAuthorize` loop body (union.go:73-96): collects
-    (authorizer, decision) pairs, short-circuiting on the first unconditional Allow/Deny. -/
+    (authorizer, decision) pairs, short-circuiting on the first unconditional Allow/Deny.
+
+    **Surfaced discrepancy** (not fixed here, to keep all spec theorems green): Go
+    short-circuits on any decision where `ContainsAllowOrDeny()` is true, which
+    additionally covers nested Union sub-decisions containing Allow/Deny leaves. The
+    Lean version below only short-circuits on top-level Allow/Deny leaves. Since
+    individual authorizers in this Lean model typically don't return nested `.Union`
+    decisions, the two semantics coincide in practice — but the `Do` equivalence for
+    `conditionsAwareAuthorizeDo` cannot be proven pointwise without first aligning
+    these. See the note at the bottom of `Go.lean`. -/
 def UnionAuthorizer.entries :
     UnionAuthorizer → Attributes → List (Authorizer × ConditionsAwareDecision)
   | ⟨[]⟩, _ => []
   | ⟨h :: rest⟩, attrs =>
     let d := h.conditionsAwareAuthorize attrs
     match d with
-    | .Allow | .Deny => [(h, d)] -- TODO: Use ContainsAllowOrDeny
+    | .Allow | .Deny => [(h, d)]
     | _ => (h, d) :: UnionAuthorizer.entries ⟨rest⟩ attrs
 
 /-- The ideal (specification) chain: what each authorizer would return with full information.

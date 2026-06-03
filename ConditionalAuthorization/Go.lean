@@ -600,3 +600,88 @@ theorem UnionAuthorizer.authorizeDo_eq (u : UnionAuthorizer) (attrs : Attributes
 --  these two functions is more involved than the bridges already in this file cover.)
 
 end ConditionalAuthorization.Union
+
+-- TODO: Should/could this be moved to Spec.lean?
+-- ============================================================================
+-- Main spec theorems restated about Go-transliterated functions
+--
+-- Each "Do" theorem is the corresponding spec from `Spec.lean` / `Union.lean` but
+-- phrased about the `Do`-suffixed (Go-faithful) version. The proof rewrites via the
+-- corresponding `XxxDo_eq` lemma and discharges to the existing proof on the
+-- proof-friendly counterpart.
+-- ============================================================================
+
+namespace ConditionalAuthorization.Authorizer
+
+open ConditionalAuthorization.Spec
+
+/-- **Go-Do spec**: if `FailClosedDecisionDo d ≠ .Deny`, then `d.Ideal data ≠ .Deny`. -/
+theorem failClosed_not_deny_implies_ideal_not_deny_Do
+    (d : ConditionsAwareDecision) (data : ConditionsData)
+    (h : d.FailClosedDecisionDo ≠ .Deny)
+    : d.Ideal data ≠ .Deny := by
+  rw [d.FailClosedDecisionDo_eq] at h
+  exact ConditionalAuthorization.Spec.failClosed_not_deny_implies_ideal_not_deny d data h
+
+/-- **Go-Do spec**: `ConditionsMap.FailClosedDecisionDo` is always `.Deny` or `.NoOpinion`. -/
+theorem conditionsMap_failClosed_deny_or_noOpinion_Do (c : ConditionsMap) :
+    c.FailClosedDecisionDo = .Deny ∨ c.FailClosedDecisionDo = .NoOpinion := by
+  rw [c.FailClosedDecisionDo_eq]
+  exact ConditionalAuthorization.Spec.conditionsMap_failClosed_deny_or_noOpinion c
+
+/-- **Go-Do spec**: `ConditionsAwareDecision.FailClosedDecisionDo` is always `.Deny` or `.NoOpinion`. -/
+theorem failClosed_deny_or_noOpinion_Do (d : ConditionsAwareDecision) :
+    d.FailClosedDecisionDo = .Deny ∨ d.FailClosedDecisionDo = .NoOpinion := by
+  rw [d.FailClosedDecisionDo_eq]
+  exact ConditionalAuthorization.Spec.failClosed_deny_or_noOpinion d
+
+end ConditionalAuthorization.Authorizer
+
+namespace ConditionalAuthorization.Union
+
+open ConditionalAuthorization.Authorizer
+open ConditionalAuthorization.Spec
+open ConditionalAuthorization.Go
+
+/-- **Go-Do spec**: if the Go-faithful `authorizeDo` returns Allow, then the union's
+    `idealAuthorize` also returns Allow at any data. -/
+theorem UnionAuthorizer.metadata_allow_implies_ideal_allow_Do (u : UnionAuthorizer)
+    (attrs : Attributes) (data : ConditionsData)
+    (h : u.authorizeDo attrs = .Allow)
+    : u.idealAuthorize attrs data = .Allow := by
+  rw [u.authorizeDo_eq] at h
+  exact u.metadata_allow_implies_ideal_allow attrs data h
+
+/-- **Go-Do spec**: if the union's `idealAuthorize` returns `.Deny` at some `data`,
+    then the Go-faithful `authorizeDo` returns Deny. -/
+theorem UnionAuthorizer.ideal_deny_implies_authorize_deny_Do (u : UnionAuthorizer)
+    (attrs : Attributes) (data : ConditionsData)
+    (h : u.idealAuthorize attrs data = .Deny)
+    : u.authorizeDo attrs = .Deny := by
+  rw [u.authorizeDo_eq]
+  exact u.ideal_deny_implies_authorize_deny attrs data h
+
+end ConditionalAuthorization.Union
+
+-- ============================================================================
+-- #check lines verifying Go-Do signatures
+-- ============================================================================
+
+namespace ConditionalAuthorization.Go
+
+open ConditionalAuthorization.Authorizer
+open ConditionalAuthorization.Union
+
+#check (Attributes.isReadOnlyDo : Attributes → Bool)
+#check (ConditionsMap.FailClosedDecisionDo : ConditionsMap → Decision)
+#check (ConditionsMap.CanBecomeAllowedDo : ConditionsMap → Bool)
+#check (ConditionsAwareDecision.FailClosedDecisionDo : ConditionsAwareDecision → Decision)
+#check (ConditionsAwareDecision.ContainsAllowOrDenyDo : ConditionsAwareDecision → Bool)
+#check (ConditionsAwareDecision.CanBecomeAllowedDo : ConditionsAwareDecision → Bool)
+#check (UnionAuthorizer.authorizeDo : UnionAuthorizer → Attributes → Decision)
+#check (UnionAuthorizer.conditionsAwareAuthorizeDo :
+          UnionAuthorizer → Attributes → ConditionsAwareDecision)
+#check (UnionAuthorizer.evaluateConditionsDo :
+          UnionAuthorizer → ConditionsAwareDecision → ConditionsData → Decision)
+
+end ConditionalAuthorization.Go
