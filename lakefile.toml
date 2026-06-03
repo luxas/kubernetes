@@ -1,0 +1,6 @@
+name = "ConditionalAuthorization"
+version = "0.1.0"
+defaultTargets = ["ConditionalAuthorization"]
+
+[[lean_lib]]
+name = "ConditionalAuthorization"
