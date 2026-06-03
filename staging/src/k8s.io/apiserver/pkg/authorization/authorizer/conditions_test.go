@@ -249,7 +249,7 @@ func TestConditionsAwareDecision(t *testing.T) {
 			wantString:              `Deny(reason="failed closed", err="duplicate condition ID \"foo\"")`,
 		},
 		{
-			name: "condition ID must be a Kubernetes label, one condition error enough to fail closed",
+			name: "condition ID must be a Kubernetes label, one condition error enough to fail closed (in Deny)",
 			testDecisions: []authorizer.ConditionsAwareDecision{
 				authorizer.ConditionsAwareDecisionConditionsMap(
 					[]authorizer.Condition{authorizer.GenericCondition{ID: "not a kubernetes label"}},
@@ -264,6 +264,36 @@ func TestConditionsAwareDecision(t *testing.T) {
 			wantReason:              "failed closed",
 			wantAnyError:            true,
 			wantString:              `Deny(reason="failed closed", err="invalid condition ID \"not a kubernetes label\": name part must consist of alphanumeric characters, '-', '_' or '.', and must start and end with an alphanumeric character (e.g. 'MyName',  or 'my.name',  or '123-abc', regex used for validation is '([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9]')")`,
+		},
+		{
+			name: "condition ID must be a Kubernetes label, one condition error enough to fail closed (in NoOpinion)",
+			testDecisions: []authorizer.ConditionsAwareDecision{
+				authorizer.ConditionsAwareDecisionConditionsMap(
+					nil,
+					[]authorizer.Condition{authorizer.GenericCondition{ID: "not a kubernetes label"}},
+					[]authorizer.Condition{authorizer.GenericCondition{ID: "foo"}},
+				),
+			},
+			wantIsNoOpinion:     true,
+			wantIsUnconditional: true,
+			wantReason:          "failed closed",
+			wantAnyError:        true,
+			wantString:          `NoOpinion(reason="failed closed", err="invalid condition ID \"not a kubernetes label\": name part must consist of alphanumeric characters, '-', '_' or '.', and must start and end with an alphanumeric character (e.g. 'MyName',  or 'my.name',  or '123-abc', regex used for validation is '([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9]')")`,
+		},
+		{
+			name: "condition ID must be a Kubernetes label, one condition error enough to fail closed (in NoOpinion)",
+			testDecisions: []authorizer.ConditionsAwareDecision{
+				authorizer.ConditionsAwareDecisionConditionsMap(
+					nil,
+					nil,
+					[]authorizer.Condition{authorizer.GenericCondition{ID: "not a kubernetes label"}, authorizer.GenericCondition{ID: "foo"}},
+				),
+			},
+			wantIsNoOpinion:     true,
+			wantIsUnconditional: true,
+			wantReason:          "failed closed",
+			wantAnyError:        true,
+			wantString:          `NoOpinion(reason="failed closed", err="invalid condition ID \"not a kubernetes label\": name part must consist of alphanumeric characters, '-', '_' or '.', and must start and end with an alphanumeric character (e.g. 'MyName',  or 'my.name',  or '123-abc', regex used for validation is '([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9]')")`,
 		},
 		{
 			name: "condition type must be a Kubernetes label",
