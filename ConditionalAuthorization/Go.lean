@@ -593,11 +593,19 @@ theorem UnionAuthorizer.authorizeDo_eq (u : UnionAuthorizer) (attrs : Attributes
 
 -- (UnionAuthorizer.conditionsAwareAuthorizeDo_eq and evaluateConditionsDo_eq are
 --  remaining to prove: they involve `let mut decisions := []; …` and `ds.zip u.handlers`
---  loops, which need additional accumulator-style bridge lemmas. The semantic equivalence
---  with their proof-friendly counterparts (UnionAuthorizer.conditionsAwareAuthorize and
---  evaluateConditions) holds after the ConditionsMap arm of evaluateConditions was
---  corrected to use `FailClosedDecision` (matching Go), but the for-loop unfolding for
---  these two functions is more involved than the bridges already in this file cover.)
+--  loops, which need additional accumulator-style bridge lemmas.
+--
+--  Post-refactor: `UnionAuthorizer.entries` has been removed in favour of a `where`-scoped
+--  helper `UnionAuthorizer.conditionsAwareAuthorize.subDecisions` returning a plain
+--  `List ConditionsAwareDecision`. The Do-version of conditionsAwareAuthorize also builds
+--  a `List ConditionsAwareDecision` via its mutable accumulator, so the equivalence aligns
+--  cleanly with the proof-friendly form once the accumulator bridge lemma is in place.
+--
+--  The remaining discrepancy: Do-version short-circuits on `ContainsAllowOrDenyDo`, while
+--  `subDecisions` short-circuits on top-level `.Allow | .Deny`. Equal in practice when
+--  no individual authorizer returns a nested `.Union`, but not pointwise.
+--
+--  Similarly, evaluateConditionsDo_eq depends on the same shape via `ds.zip u.handlers`.)
 
 end ConditionalAuthorization.Union
 

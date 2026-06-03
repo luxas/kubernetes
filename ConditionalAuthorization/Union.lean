@@ -41,26 +41,6 @@ def UnionAuthorizer.authorize : UnionAuthorizer → Attributes → Decision
     | .Deny => .Deny
     | .NoOpinion => UnionAuthorizer.authorize ⟨rest⟩ attrs
 
-/-- Mirrors Go's `ConditionsAwareAuthorize` loop body (union.go:73-96): collects
-    (authorizer, decision) pairs, short-circuiting on the first unconditional Allow/Deny.
-
-    **Surfaced discrepancy** (not fixed here, to keep all spec theorems green): Go
-    short-circuits on any decision where `ContainsAllowOrDeny()` is true, which
-    additionally covers nested Union sub-decisions containing Allow/Deny leaves. The
-    Lean version below only short-circuits on top-level Allow/Deny leaves. Since
-    individual authorizers in this Lean model typically don't return nested `.Union`
-    decisions, the two semantics coincide in practice — but the `Do` equivalence for
-    `conditionsAwareAuthorizeDo` cannot be proven pointwise without first aligning
-    these. See the note at the bottom of `Go.lean`. -/
-def UnionAuthorizer.entries :
-    UnionAuthorizer → Attributes → List (Authorizer × ConditionsAwareDecision)
-  | ⟨[]⟩, _ => []
-  | ⟨h :: rest⟩, attrs =>
-    let d := h.conditionsAwareAuthorize attrs
-    match d with
-    | .Allow | .Deny => [(h, d)]
-    | _ => (h, d) :: UnionAuthorizer.entries ⟨rest⟩ attrs
-
 /-- The ideal (specification) chain: what each authorizer would return with full information.
     Short-circuits on Allow/Deny, like `authorize`. This is the claim, not an implementation. -/
 def UnionAuthorizer.idealAuthorize : UnionAuthorizer → Attributes → ConditionsData → Decision
@@ -71,8 +51,26 @@ def UnionAuthorizer.idealAuthorize : UnionAuthorizer → Attributes → Conditio
     | .Deny => .Deny
     | .NoOpinion => UnionAuthorizer.idealAuthorize ⟨rest⟩ attrs data
 
-def UnionAuthorizer.conditionsAwareAuthorize (u : UnionAuthorizer) (attrs : Attributes) : ConditionsAwareDecision :=
-  .Union ((u.entries attrs).map Prod.snd)
+/-- Mirrors Go's `unionAuthzHandler.ConditionsAwareAuthorize` (union.go:73-96): produces a
+    `.Union` of each handler's `conditionsAwareAuthorize attrs` result, short-circuiting
+    on the first unconditional `.Allow | .Deny`. The helper `subDecisions` is `where`-scoped
+    so the public surface is just this method — no separate `entries` pair-list ever exposed.
+
+    **Surfaced discrepancy** (not fixed here): Go short-circuits on any decision with
+    `ContainsAllowOrDeny()` (including nested Union sub-decisions); the Lean helper below
+    only short-circuits on top-level `.Allow | .Deny` leaves. They coincide when individual
+    authorizers don't return nested `.Union` decisions. -/
+def UnionAuthorizer.conditionsAwareAuthorize (u : UnionAuthorizer) (attrs : Attributes)
+    : ConditionsAwareDecision :=
+  .Union (subDecisions u.handlers)
+where
+  subDecisions : List Authorizer → List ConditionsAwareDecision
+    | [] => []
+    | h :: rest =>
+      let d := h.conditionsAwareAuthorize attrs
+      match d with
+      | .Allow | .Deny => [d]
+      | _ => d :: subDecisions rest
 
 /-- Mirrors Go's `union.EvaluateConditions` (union.go:99-152). For the `.Union ds` case,
     walks the sub-decisions paired positionally with `u.handlers` — matching Go's
@@ -92,46 +90,53 @@ def UnionAuthorizer.evaluateConditions (u : UnionAuthorizer) :
 -- Key lemmas
 -- ============================================================================
 
-/-- The core equivalence: unionEvaluateConditions on the union's entries
-    equals the union's idealAuthorize, at any `data`. -/
+/-- The core equivalence: `unionEvaluateConditions` on the union's handlers zipped with
+    its sub-decisions equals the union's idealAuthorize, at any `data`. -/
 theorem UnionAuthorizer.evaluate_eq_ideal (u : UnionAuthorizer)
     (attrs : Attributes) (data : ConditionsData)
-    : unionEvaluateConditions (u.entries attrs) data
+    : unionEvaluateConditions
+        (List.zip u.handlers
+          (UnionAuthorizer.conditionsAwareAuthorize.subDecisions attrs u.handlers))
+        data
     = u.idealAuthorize attrs data := by
   obtain ⟨handlers⟩ := u
   induction handlers with
-  | nil => simp [UnionAuthorizer.entries, UnionAuthorizer.idealAuthorize, unionEvaluateConditions]
+  | nil =>
+    simp [UnionAuthorizer.conditionsAwareAuthorize.subDecisions,
+          UnionAuthorizer.idealAuthorize, unionEvaluateConditions, List.zip]
   | cons h rest ih =>
     cases hca : h.conditionsAwareAuthorize attrs with
     | Allow =>
-      simp [UnionAuthorizer.entries, hca, unionEvaluateConditions,
-            UnionAuthorizer.idealAuthorize,
-            Authorizer.idealAuthorize, ConditionsAwareDecision.Ideal]
+      simp [UnionAuthorizer.conditionsAwareAuthorize.subDecisions, hca,
+            unionEvaluateConditions, UnionAuthorizer.idealAuthorize,
+            Authorizer.idealAuthorize, ConditionsAwareDecision.Ideal, List.zip]
     | Deny =>
-      simp [UnionAuthorizer.entries, hca, unionEvaluateConditions,
-            UnionAuthorizer.idealAuthorize,
-            Authorizer.idealAuthorize, ConditionsAwareDecision.Ideal]
+      simp [UnionAuthorizer.conditionsAwareAuthorize.subDecisions, hca,
+            unionEvaluateConditions, UnionAuthorizer.idealAuthorize,
+            Authorizer.idealAuthorize, ConditionsAwareDecision.Ideal, List.zip]
     | NoOpinion =>
-      simp only [UnionAuthorizer.entries, hca, unionEvaluateConditions,
-                 UnionAuthorizer.idealAuthorize,
-                 Authorizer.idealAuthorize, ConditionsAwareDecision.Ideal]
+      simp only [UnionAuthorizer.conditionsAwareAuthorize.subDecisions, hca,
+                 unionEvaluateConditions, UnionAuthorizer.idealAuthorize,
+                 Authorizer.idealAuthorize, ConditionsAwareDecision.Ideal,
+                 List.zip, List.zipWith]
       exact ih
     | ConditionsMap cm =>
       have heval := h.contract_eval_eq_ideal attrs (Or.inl ⟨cm, hca⟩) data
       rw [hca] at heval
       simp only [ConditionsAwareDecision.Ideal, ConditionsMap.Ideal] at heval
-      simp only [UnionAuthorizer.entries, hca, unionEvaluateConditions,
-                 UnionAuthorizer.idealAuthorize,
+      simp only [UnionAuthorizer.conditionsAwareAuthorize.subDecisions, hca,
+                 unionEvaluateConditions, UnionAuthorizer.idealAuthorize,
                  Authorizer.idealAuthorize, ConditionsAwareDecision.Ideal,
-                 ConditionsMap.Ideal, heval]
+                 ConditionsMap.Ideal, heval, List.zip, List.zipWith]
       split <;> first | rfl | exact ih
     | Union ds =>
       have heval := h.contract_eval_eq_ideal attrs (Or.inr ⟨ds, hca⟩) data
       rw [hca] at heval
       simp only [ConditionsAwareDecision.Ideal] at heval
-      simp only [UnionAuthorizer.entries, hca, unionEvaluateConditions,
-                 UnionAuthorizer.idealAuthorize,
-                 Authorizer.idealAuthorize, ConditionsAwareDecision.Ideal, heval]
+      simp only [UnionAuthorizer.conditionsAwareAuthorize.subDecisions, hca,
+                 unionEvaluateConditions, UnionAuthorizer.idealAuthorize,
+                 Authorizer.idealAuthorize, ConditionsAwareDecision.Ideal, heval,
+                 List.zip, List.zipWith]
       split <;> first | rfl | exact ih
 
 /-- If `u.authorize attrs = .Allow`, then `u.idealAuthorize attrs data = .Allow` at any data. -/
@@ -181,72 +186,50 @@ theorem UnionAuthorizer.ideal_deny_implies_authorize_deny (u : UnionAuthorizer)
 
 
 -- ============================================================================
--- Union ideal relates to unionIdealAuthorize over the entries
+-- Union ideal relates to unionIdealAuthorize over the sub-decisions
 -- ============================================================================
 
-theorem UnionAuthorizer.idealAuthorize_eq_unionIdealAuthorize_entries (u : UnionAuthorizer)
-    (attrs : Attributes) (data : ConditionsData)
+theorem UnionAuthorizer.idealAuthorize_eq_unionIdealAuthorize_subDecisions
+    (u : UnionAuthorizer) (attrs : Attributes) (data : ConditionsData)
     : u.idealAuthorize attrs data =
-      unionIdealAuthorize ((u.entries attrs).map Prod.snd) data := by
+      unionIdealAuthorize
+        (UnionAuthorizer.conditionsAwareAuthorize.subDecisions attrs u.handlers) data := by
   obtain ⟨handlers⟩ := u
   induction handlers with
-  | nil => simp [UnionAuthorizer.idealAuthorize, UnionAuthorizer.entries, unionIdealAuthorize]
+  | nil =>
+    simp [UnionAuthorizer.idealAuthorize,
+          UnionAuthorizer.conditionsAwareAuthorize.subDecisions, unionIdealAuthorize]
   | cons h rest ih =>
     cases hca : h.conditionsAwareAuthorize attrs with
     | Allow =>
-      simp [UnionAuthorizer.entries, hca, UnionAuthorizer.idealAuthorize,
-            Authorizer.idealAuthorize,
-            ConditionsAwareDecision.Ideal, List.map, unionIdealAuthorize]
+      simp [UnionAuthorizer.conditionsAwareAuthorize.subDecisions, hca,
+            UnionAuthorizer.idealAuthorize, Authorizer.idealAuthorize,
+            ConditionsAwareDecision.Ideal, unionIdealAuthorize]
     | Deny =>
-      simp [UnionAuthorizer.entries, hca, UnionAuthorizer.idealAuthorize,
-            Authorizer.idealAuthorize,
-            ConditionsAwareDecision.Ideal, List.map, unionIdealAuthorize]
+      simp [UnionAuthorizer.conditionsAwareAuthorize.subDecisions, hca,
+            UnionAuthorizer.idealAuthorize, Authorizer.idealAuthorize,
+            ConditionsAwareDecision.Ideal, unionIdealAuthorize]
     | NoOpinion =>
-      simp only [UnionAuthorizer.entries, hca, UnionAuthorizer.idealAuthorize,
-                 Authorizer.idealAuthorize,
-                 ConditionsAwareDecision.Ideal, List.map, unionIdealAuthorize]
+      simp only [UnionAuthorizer.conditionsAwareAuthorize.subDecisions, hca,
+                 UnionAuthorizer.idealAuthorize, Authorizer.idealAuthorize,
+                 ConditionsAwareDecision.Ideal, unionIdealAuthorize]
       exact ih
     | ConditionsMap cm =>
-      simp only [UnionAuthorizer.entries, hca, UnionAuthorizer.idealAuthorize,
-                 Authorizer.idealAuthorize,
-                 ConditionsAwareDecision.Ideal, ConditionsMap.Ideal,
-                 List.map, unionIdealAuthorize]
+      simp only [UnionAuthorizer.conditionsAwareAuthorize.subDecisions, hca,
+                 UnionAuthorizer.idealAuthorize, Authorizer.idealAuthorize,
+                 ConditionsAwareDecision.Ideal, ConditionsMap.Ideal, unionIdealAuthorize]
       cases cm.evaluate data with
       | Allow => rfl
       | Deny => rfl
       | NoOpinion => exact ih
     | Union ds =>
-      simp only [UnionAuthorizer.entries, hca, UnionAuthorizer.idealAuthorize,
-                 Authorizer.idealAuthorize,
-                 ConditionsAwareDecision.Ideal, List.map, unionIdealAuthorize]
+      simp only [UnionAuthorizer.conditionsAwareAuthorize.subDecisions, hca,
+                 UnionAuthorizer.idealAuthorize, Authorizer.idealAuthorize,
+                 ConditionsAwareDecision.Ideal, unionIdealAuthorize]
       cases unionIdealAuthorize ds data with
       | Allow => rfl
       | Deny => rfl
       | NoOpinion => exact ih
-
-/-- Re-zipping `u.handlers` with the decisions extracted from `u.entries attrs`
-    recovers the entries — entries consumes handlers in order and at most truncates the tail. -/
-theorem UnionAuthorizer.zip_handlers_entries_snd (u : UnionAuthorizer) (attrs : Attributes)
-    : List.zip u.handlers ((u.entries attrs).map Prod.snd) = u.entries attrs := by
-  obtain ⟨handlers⟩ := u
-  induction handlers with
-  | nil => simp [UnionAuthorizer.entries, List.zip]
-  | cons h rest ih =>
-    cases hca : h.conditionsAwareAuthorize attrs with
-    | Allow => simp [UnionAuthorizer.entries, hca, List.map, List.zip]
-    | Deny => simp [UnionAuthorizer.entries, hca, List.map, List.zip]
-    | NoOpinion =>
-      simp only [UnionAuthorizer.entries, hca, List.map, List.zip, List.zipWith,
-                 List.cons.injEq, true_and]
-      exact ih
-    | ConditionsMap _ =>
-      simp only [UnionAuthorizer.entries, hca, List.map, List.zip, List.zipWith,
-                 List.cons.injEq, true_and]
-      exact ih
-    | Union _ =>
-      simp only [UnionAuthorizer.entries, hca, List.map, List.zip, List.zipWith,
-                 List.cons.injEq, true_and]
-      exact ih
 
 -- ============================================================================
 -- Main contract theorem
@@ -262,21 +245,20 @@ theorem UnionAuthorizer.satisfies_contract (u : UnionAuthorizer) : ∀ attrs,
              UnionAuthorizer.evaluateConditions,
              AuthorizerContract]
   refine ⟨?_, ?_, ?_⟩
-  · -- ∀ d, evaluateConditions (.Union entriesSnd) d = .Union entriesSnd .Ideal d
+  · -- ∀ d, evaluateConditions (.Union subDecisions) d = .Union subDecisions .Ideal d
     intro d
     simp only [ConditionsAwareDecision.Ideal]
-    rw [← u.idealAuthorize_eq_unionIdealAuthorize_entries (attrs := attrs)]
-    rw [u.zip_handlers_entries_snd]
+    rw [← u.idealAuthorize_eq_unionIdealAuthorize_subDecisions (attrs := attrs)]
     exact u.evaluate_eq_ideal attrs d
   · -- authorize = Allow → ∀ d, Ideal d = Allow
     intro h d
     simp only [ConditionsAwareDecision.Ideal]
-    rw [← u.idealAuthorize_eq_unionIdealAuthorize_entries]
+    rw [← u.idealAuthorize_eq_unionIdealAuthorize_subDecisions]
     exact u.metadata_allow_implies_ideal_allow attrs d h
   · -- ∀ d, Ideal d = Deny → authorize = Deny
     intro d h
     simp only [ConditionsAwareDecision.Ideal] at h
-    rw [← u.idealAuthorize_eq_unionIdealAuthorize_entries] at h
+    rw [← u.idealAuthorize_eq_unionIdealAuthorize_subDecisions] at h
     exact u.ideal_deny_implies_authorize_deny attrs d h
 
 def UnionAuthorizer.toAuthorizer (u : UnionAuthorizer) : Authorizer := {
