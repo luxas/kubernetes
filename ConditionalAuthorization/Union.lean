@@ -196,11 +196,17 @@ theorem unionIdeal_eq_unionIdealAuthorize_entries (handlers : List Authorizer)
       simp only [collectEntries, hca, unionIdeal, Authorizer.idealAuthorize,
                  ConditionsAwareDecision.Ideal, ConditionsMap.Ideal,
                  List.map, unionIdealAuthorize]
-      split <;> first | rfl | exact ih
+      cases cm.evaluate data with
+      | Allow => rfl
+      | Deny => rfl
+      | NoOpinion => exact ih
     | Union ds =>
       simp only [collectEntries, hca, unionIdeal, Authorizer.idealAuthorize,
                  ConditionsAwareDecision.Ideal, List.map, unionIdealAuthorize]
-      split <;> first | rfl | exact ih
+      cases unionIdealAuthorize ds data with
+      | Allow => rfl
+      | Deny => rfl
+      | NoOpinion => exact ih
 
 /-- Re-zipping the original handler list with the decisions extracted from
     `collectEntries` recovers the original `collectEntries` pairing — because
