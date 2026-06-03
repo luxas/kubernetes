@@ -319,8 +319,7 @@ func (d ConditionsAwareDecision) String() string {
 // It must be constructed through ConditionsAwareDecisionConditionsMap.
 // During construction, all Conditions are validated and ensured to be non-nil.
 type ConditionsMap struct {
-	// invariant: when the decision is of type ConditionsMap, Length() != 0,
-	// which means that at least one of these slices has an element in it.
+	// invariant: len(denyConditions) != 0 || len(allowConditions) != 0
 	//
 	// slices are used here instead of actual maps, as the ConditionsMap does
 	// not need to lookup single elements. It's called a "map" as uniqueness of
@@ -369,8 +368,13 @@ func ConditionEvaluationResultBoolean(evalResult bool) ConditionEvaluationResult
 }
 
 // ConditionEvaluationResultError indicates that the condition could be evaluated, but failed.
-// TODO: What to do if err == nil
 func ConditionEvaluationResultError(err error) ConditionEvaluationResult {
+	if err == nil {
+		return ConditionEvaluationResult{
+			resultType: conditionEvaluationResultTypeError,
+			err:        errors.New("unknown evaluation error: got err == nil in ConditionEvaluationResultError"),
+		}
+	}
 	return ConditionEvaluationResult{
 		resultType: conditionEvaluationResultTypeError,
 		err:        err,
@@ -428,12 +432,10 @@ type Condition interface {
 	// It is a pure, deterministic function from ConditionsData to a boolean (or error).
 	// Might or might not be human-readable.
 	// Optional, if the ID alone is enough for the authorizer to know how to evaluate the condition.
-	// TODO: If we go for a struct, this should be a lazy function
 	GetCondition() string
 
 	// GetDescription is an optional human-friendly description that can be shown
 	// as an error message or for debugging. Optional.
-	// TODO: If we go for a struct, this should be a lazy function
 	GetDescription() string
 
 	// DeepCopy returns a deep copy of the Condition.
@@ -651,30 +653,7 @@ func (c ConditionsMap) Evaluate(ctx context.Context, data ConditionsData, evalua
 	}
 
 	if len(c.denyConditions) != 0 {
-		denyErrors := []error{}
-		appliedDenyReasons := []string{}
-		unevaluatedDenyConditions := []Condition{}
-		for cond := range c.DenyConditions() {
-			id := cond.GetID()
-			evalResult := evalCond(cond)
-			switch {
-			case evalResult.IsUnevaluatable():
-				unevaluatedDenyConditions = append(unevaluatedDenyConditions, cond)
-				continue
-			case evalResult.IsError():
-				denyErrors = append(denyErrors, fmt.Errorf("condition %q with effect=Deny produced error: %w", id, evalResult.Error()))
-				continue
-			case evalResult.IsTrue():
-				reason := fmt.Sprintf("condition %q denied the request", id)
-				if desc := cond.GetDescription(); len(desc) != 0 {
-					reason += fmt.Sprintf(" with description %q", desc)
-				}
-				appliedDenyReasons = append(appliedDenyReasons, reason)
-				continue
-			default: // => evalResult.IsFalse() == true
-				continue
-			}
-		}
+		appliedDenyReasons, denyErrors, unevaluatedDenyConditions := evaluateConditions(c.DenyConditions(), evalCond, "Deny", "denied the request")
 		// If any deny conditions evaluated to true, return Deny
 		// Deny conditions that apply take precedence over deny conditions that error, as even if the erroring
 		// deny conditions wouldn't have errored, the applied deny conditions would have produced the same Deny decision.
@@ -689,7 +668,6 @@ func (c ConditionsMap) Evaluate(ctx context.Context, data ConditionsData, evalua
 
 		// When len(unevaluatedDenyConditions) != 0, the possible outcomes are [Deny, NoOpinion] or [Deny, Allow] (depending on whether)
 		// there is some matching NoOpinion/Allow condition or not. This means that we need to return another, possibly refined ConditionsMap
-		// TODO: Use the real constructor or replace altogether.
 		if len(unevaluatedDenyConditions) != 0 {
 			return ConditionsAwareDecisionConditionsMap(
 				unevaluatedDenyConditions,
@@ -699,30 +677,7 @@ func (c ConditionsMap) Evaluate(ctx context.Context, data ConditionsData, evalua
 	}
 	// If we got here, all Deny conditions could be evaluated, and evaluated to false, nil
 	if len(c.noOpinionConditions) != 0 {
-		noOpinionErrors := []error{}
-		appliedNoOpinionReasons := []string{}
-		unevaluatedNoOpinionConditions := []Condition{}
-		for cond := range c.NoOpinionConditions() {
-			id := cond.GetID()
-			evalResult := evalCond(cond)
-			switch {
-			case evalResult.IsUnevaluatable():
-				unevaluatedNoOpinionConditions = append(unevaluatedNoOpinionConditions, cond)
-				continue
-			case evalResult.IsError():
-				noOpinionErrors = append(noOpinionErrors, fmt.Errorf("condition %q with effect=NoOpinion produced error: %w", id, evalResult.Error()))
-				continue
-			case evalResult.IsTrue():
-				reason := fmt.Sprintf("condition %q evaluated to NoOpinion", id)
-				if desc := cond.GetDescription(); len(desc) != 0 {
-					reason += fmt.Sprintf(" with description %q", desc)
-				}
-				appliedNoOpinionReasons = append(appliedNoOpinionReasons, reason)
-				continue
-			default: // => evalResult.IsFalse() == true
-				continue
-			}
-		}
+		appliedNoOpinionReasons, noOpinionErrors, unevaluatedNoOpinionConditions := evaluateConditions(c.NoOpinionConditions(), evalCond, "NoOpinion", "evaluated to NoOpinion")
 		// If any NoOpinion conditions evaluated to true, return NoOpinion
 		if len(appliedNoOpinionReasons) != 0 {
 			return ConditionsAwareDecisionNoOpinion(strings.Join(appliedNoOpinionReasons, ", "), nil)
@@ -751,30 +706,7 @@ func (c ConditionsMap) Evaluate(ctx context.Context, data ConditionsData, evalua
 	}
 	// If we got here, all Deny and NoOpinion conditions could be evaluated, and evaluated to false, nil
 	if len(c.allowConditions) != 0 {
-		allowErrors := []error{}
-		appliedAllowReasons := []string{}
-		unevaluatedAllowConditions := []Condition{}
-		for cond := range c.AllowConditions() {
-			id := cond.GetID()
-			evalResult := evalCond(cond)
-			switch {
-			case evalResult.IsUnevaluatable():
-				unevaluatedAllowConditions = append(unevaluatedAllowConditions, cond)
-				continue
-			case evalResult.IsError():
-				allowErrors = append(allowErrors, fmt.Errorf("condition %q with effect=Allow produced error: %w", id, evalResult.Error()))
-				continue
-			case evalResult.IsTrue():
-				reason := fmt.Sprintf("condition %q allowed the request", id)
-				if desc := cond.GetDescription(); len(desc) != 0 {
-					reason += fmt.Sprintf(" with description %q", desc)
-				}
-				appliedAllowReasons = append(appliedAllowReasons, reason)
-				continue
-			default: // => evalResult.IsFalse() == true
-				continue
-			}
-		}
+		appliedAllowReasons, allowErrors, unevaluatedAllowConditions := evaluateConditions(c.AllowConditions(), evalCond, "Allow", "allowed the request")
 		// If there were at least one Allow condition that applied, then evaluation is successful, even if there
 		// were some errors that happened. Those are in this case considered warnings.
 		if len(appliedAllowReasons) != 0 {
@@ -793,6 +725,35 @@ func (c ConditionsMap) Evaluate(ctx context.Context, data ConditionsData, evalua
 
 	// All conditions evaluated to false. This means a simple default NoOpinion.
 	return ConditionsAwareDecisionNoOpinion("no conditions matched", nil)
+}
+
+func evaluateConditions(conditions iter.Seq[Condition], evalCond func(cond Condition) ConditionEvaluationResult, effect, appliedDescription string) ([]string, []error, []Condition) {
+	errs := []error{}
+	appliedCondReasons := []string{}
+	unevaluatedConditions := []Condition{}
+	for cond := range conditions {
+		id := cond.GetID()
+		evalResult := evalCond(cond)
+		switch {
+		case evalResult.IsUnevaluatable():
+			unevaluatedConditions = append(unevaluatedConditions, cond)
+			continue
+		case evalResult.IsError():
+			errs = append(errs, fmt.Errorf("condition %q with effect=%s produced error: %w", id, effect, evalResult.Error()))
+			continue
+		case evalResult.IsTrue():
+			reason := fmt.Sprintf("condition %q %s", id, appliedDescription)
+			if desc := cond.GetDescription(); len(desc) != 0 {
+				reason += fmt.Sprintf(" with description %q", desc)
+			}
+			appliedCondReasons = append(appliedCondReasons, reason)
+			continue
+		default: // => evalResult.IsFalse() == true
+			continue
+		}
+	}
+	// Arguments are returned in the order that they should be considered.
+	return appliedCondReasons, errs, unevaluatedConditions
 }
 
 func deepCopyConditions(originals []Condition) []Condition {
