@@ -1,0 +1,757 @@
+/*
+Copyright The Kubernetes Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package authorizer
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	genericfeatures "k8s.io/apiserver/pkg/features"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
+)
+
+func TestConditionsMapEvaluate(t *testing.T) {
+	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ConditionalAuthorization, true)
+
+	evalErr := errors.New("eval error")
+
+	trueResult := ConditionEvaluationResultBoolean(true)
+	falseResult := ConditionEvaluationResultBoolean(false)
+	errResult := ConditionEvaluationResultError(evalErr)
+
+	cond := func(id string, result ConditionEvaluationResult) GenericCondition {
+		return GenericCondition{
+			ID: id,
+			EvaluateFunc: func(context.Context, ConditionsData) ConditionEvaluationResult {
+				return result
+			},
+		}
+	}
+	condDesc := func(id string, desc string, result ConditionEvaluationResult) GenericCondition {
+		c := cond(id, result)
+		c.Description = desc
+		return c
+	}
+	unevalCond := func(id string) GenericCondition {
+		return GenericCondition{ID: id} // nil EvaluateFunc → unevaluatable
+	}
+
+	// fillerDenyFalse is a deny condition that always evaluates to false. It is used to bypass
+	// the constructor's short-circuit (which folds noOpinion-only ConditionsMaps to NoOpinion
+	// directly) for sub-cases that need to exercise Evaluate() on otherwise-noOpinion-only input.
+	// Since the filler is a deny condition evaluating to false, it does not change the outcome
+	// of any of the sub-cases below.
+	fillerDenyFalse := []Condition{cond("filler-deny-false", falseResult)}
+
+	type subCase struct {
+		name                string
+		denyConditions      []Condition
+		noOpinionConditions []Condition
+		allowConditions     []Condition
+		evaluateFunc        func(context.Context, ConditionsData, Condition) ConditionEvaluationResult
+	}
+
+	tests := []struct {
+		name     string
+		subCases []subCase
+		// All sub-cases must produce a decision whose String() equals wantString.
+		wantString string
+		// For ConditionsMap results, additionally verify structure:
+		wantIsConditionsMap bool
+		wantDenyCount       int
+		wantNoOpinionCount  int
+		wantAllowCount      int
+	}{
+		// ============================================================
+		// Deny: at least one deny condition matched
+		// ============================================================
+		{
+			name:       "deny: at least one deny condition matched",
+			wantString: `Deny(reason="condition \"deny-1\" denied the request")`,
+			subCases: []subCase{
+				{
+					name:           "minimal",
+					denyConditions: []Condition{cond("deny-1", trueResult)},
+				},
+				{
+					name: "matching deny trumps any other case",
+					denyConditions: []Condition{
+						cond("deny-no", falseResult),
+						unevalCond("deny-uneval"),
+						cond("deny-err", errResult),
+						cond("deny-1", trueResult),
+					},
+					noOpinionConditions: []Condition{
+						cond("nop-yes", trueResult),
+						cond("nop-err", errResult),
+						cond("nop-no", falseResult),
+						unevalCond("nop-uneval"),
+					},
+					allowConditions: []Condition{
+						cond("allow-yes", trueResult),
+						cond("allow-no", falseResult),
+						cond("allow-err", errResult),
+						unevalCond("allow-uneval"),
+					},
+				},
+				{
+					name: "with erroring deny (error ignored due to match)",
+					denyConditions: []Condition{
+						cond("deny-1", trueResult),
+						cond("deny-err", errResult),
+					},
+				},
+				{
+					name: "with unevaluatable deny (ignored due to match)",
+					denyConditions: []Condition{
+						cond("deny-1", trueResult),
+						unevalCond("deny-uneval"),
+					},
+				},
+				{
+					name: "with false+error+unevaluatable deny (all ignored due to match)",
+					denyConditions: []Condition{
+						cond("deny-1", trueResult),
+						cond("deny-2", falseResult),
+						cond("deny-err", errResult),
+						unevalCond("deny-uneval"),
+					},
+				},
+				{
+					name:                "deny match takes precedence over matching nop and allow; only fast conditions-evaluation",
+					denyConditions:      []Condition{cond("deny-1", trueResult)},
+					noOpinionConditions: []Condition{cond("nop-1", trueResult)},
+					allowConditions:     []Condition{cond("allow-1", trueResult)},
+					evaluateFunc: func(ctx context.Context, cd ConditionsData, c Condition) ConditionEvaluationResult {
+						panic("should never be called, as all conditions could readily be evaluated")
+					},
+				},
+				{
+					name:                "deny match with false nop and allow",
+					denyConditions:      []Condition{cond("deny-1", trueResult)},
+					noOpinionConditions: []Condition{cond("nop-1", falseResult)},
+					allowConditions:     []Condition{cond("allow-1", falseResult)},
+				},
+				{
+					name:                "deny match with unevaluatable nop and allow",
+					denyConditions:      []Condition{cond("deny-1", trueResult)},
+					noOpinionConditions: []Condition{unevalCond("nop-1")},
+					allowConditions:     []Condition{unevalCond("allow-1")},
+				},
+				{
+					name:                "deny match with erroring nop and allow",
+					denyConditions:      []Condition{cond("deny-1", trueResult)},
+					noOpinionConditions: []Condition{cond("nop-1", errResult)},
+					allowConditions:     []Condition{cond("allow-1", errResult)},
+				},
+				{
+					name:           "via evaluateFunc fallback (condition unevaluatable, evaluateFunc returns true)",
+					denyConditions: []Condition{unevalCond("deny-1")},
+					evaluateFunc: func(context.Context, ConditionsData, Condition) ConditionEvaluationResult {
+						return ConditionEvaluationResultBoolean(true)
+					},
+				},
+			},
+		},
+		{
+			name:       "deny: at least one deny condition matched with description",
+			wantString: `Deny(reason="condition \"deny-1\" denied the request with description \"access denied\"")`,
+			subCases: []subCase{
+				{
+					name:           "minimal",
+					denyConditions: []Condition{condDesc("deny-1", "access denied", trueResult)},
+				},
+				{
+					name:                "with false nop and allow",
+					denyConditions:      []Condition{condDesc("deny-1", "access denied", trueResult)},
+					noOpinionConditions: []Condition{cond("nop-1", falseResult)},
+					allowConditions:     []Condition{cond("allow-1", falseResult)},
+				},
+			},
+		},
+
+		// ============================================================
+		// Deny: error, fail closed
+		// ============================================================
+		{
+			name:       "deny: error fail closed",
+			wantString: `Deny(reason="one or more conditional evaluation errors occurred", err="condition \"deny-1\" with effect=Deny produced error: eval error")`,
+			subCases: []subCase{
+				{
+					name:           "minimal",
+					denyConditions: []Condition{cond("deny-1", errResult)},
+				},
+				{
+					name: "with false deny",
+					denyConditions: []Condition{
+						cond("deny-1", errResult),
+						cond("deny-2", falseResult),
+					},
+				},
+				{
+					name: "error takes precedence over unevaluatable deny",
+					denyConditions: []Condition{
+						cond("deny-1", errResult),
+						unevalCond("deny-uneval"),
+					},
+				},
+				{
+					name: "deny error trumps noopinion and allow of any form",
+					denyConditions: []Condition{
+						cond("deny-no", falseResult),
+						unevalCond("deny-uneval"),
+						cond("deny-1", errResult),
+					},
+					noOpinionConditions: []Condition{
+						cond("nop-yes", trueResult),
+						cond("nop-err", errResult),
+						cond("nop-no", falseResult),
+						unevalCond("nop-uneval"),
+					},
+					allowConditions: []Condition{
+						cond("allow-yes", trueResult),
+						cond("allow-no", falseResult),
+						cond("allow-err", errResult),
+						unevalCond("allow-uneval"),
+					},
+				},
+			},
+		},
+		// TODO: Showcase a test with two deny errors erroring at the same time.
+
+		// ============================================================
+		// NoOpinion: at least one noopinion condition matched
+		// ============================================================
+		{
+			name:       "noopinion: at least one noopinion condition matched",
+			wantString: `NoOpinion(reason="condition \"nop-1\" evaluated to NoOpinion")`,
+			subCases: []subCase{
+				{
+					name:                "with filler-deny-false",
+					denyConditions:      fillerDenyFalse,
+					noOpinionConditions: []Condition{cond("nop-1", trueResult)},
+				},
+				{
+					name: "noopinion match trumps any noopinion or allow form",
+					denyConditions: []Condition{
+						cond("deny-no", falseResult),
+					},
+					noOpinionConditions: []Condition{
+						cond("nop-err", errResult),
+						cond("nop-no", falseResult),
+						unevalCond("nop-uneval"),
+						cond("nop-1", trueResult),
+					},
+					allowConditions: []Condition{
+						cond("allow-yes", trueResult),
+						cond("allow-no", falseResult),
+						cond("allow-err", errResult),
+						unevalCond("allow-uneval"),
+					},
+				},
+				{
+					name:           "with filler-deny-false and erroring nop (error ignored due to match)",
+					denyConditions: fillerDenyFalse,
+					noOpinionConditions: []Condition{
+						cond("nop-1", trueResult),
+						cond("nop-err", errResult),
+					},
+				},
+				{
+					name:           "with filler-deny-false and unevaluatable nop (ignored due to match)",
+					denyConditions: fillerDenyFalse,
+					noOpinionConditions: []Condition{
+						cond("nop-1", trueResult),
+						unevalCond("nop-uneval"),
+					},
+				},
+				{
+					name:           "with filler-deny-false and false+error+unevaluatable nop (all ignored due to match)",
+					denyConditions: fillerDenyFalse,
+					noOpinionConditions: []Condition{
+						cond("nop-1", trueResult),
+						cond("nop-2", falseResult),
+						cond("nop-err", errResult),
+						unevalCond("nop-uneval"),
+					},
+				},
+				{
+					name:                "nop match takes precedence over matching allow",
+					noOpinionConditions: []Condition{cond("nop-1", trueResult)},
+					allowConditions:     []Condition{cond("allow-1", trueResult)},
+				},
+				{
+					name:                "with false deny, nop matches",
+					denyConditions:      []Condition{cond("deny-1", falseResult)},
+					noOpinionConditions: []Condition{cond("nop-1", trueResult)},
+					allowConditions:     []Condition{cond("allow-1", trueResult)},
+				},
+				{
+					name:                "nop match with unevaluatable allow",
+					noOpinionConditions: []Condition{cond("nop-1", trueResult)},
+					allowConditions:     []Condition{unevalCond("allow-1")},
+				},
+				{
+					name:                "nop match with erroring allow",
+					noOpinionConditions: []Condition{cond("nop-1", trueResult)},
+					allowConditions:     []Condition{cond("allow-1", errResult)},
+				},
+			},
+		},
+		{
+			name:       "noopinion: at least one noopinion condition matched with description",
+			wantString: `NoOpinion(reason="condition \"nop-1\" evaluated to NoOpinion with description \"not relevant\"")`,
+			subCases: []subCase{
+				{
+					name:                "with filler-deny-false",
+					denyConditions:      fillerDenyFalse,
+					noOpinionConditions: []Condition{condDesc("nop-1", "not relevant", trueResult)},
+				},
+				{
+					name:                "with false deny and allow",
+					denyConditions:      []Condition{cond("deny-1", falseResult)},
+					noOpinionConditions: []Condition{condDesc("nop-1", "not relevant", trueResult)},
+					allowConditions:     []Condition{cond("allow-1", falseResult)},
+				},
+			},
+		},
+
+		// ============================================================
+		// NoOpinion: error, fail closed (from nop)
+		// ============================================================
+		{
+			name:       "noopinion: nop error fail closed",
+			wantString: `NoOpinion(reason="one or more conditional evaluation errors occurred", err="condition \"nop-1\" with effect=NoOpinion produced error: eval error")`,
+			subCases: []subCase{
+				{
+					name:                "with filler-deny-false",
+					denyConditions:      fillerDenyFalse,
+					noOpinionConditions: []Condition{cond("nop-1", errResult)},
+				},
+				{
+					name: "noopinion error trumps noopinion unevaluated and any other allow",
+					noOpinionConditions: []Condition{
+						cond("nop-no", falseResult),
+						unevalCond("nop-uneval"),
+						cond("nop-1", errResult),
+					},
+					allowConditions: []Condition{
+						cond("allow-yes", trueResult),
+						cond("allow-no", falseResult),
+						cond("allow-err", errResult),
+						unevalCond("allow-uneval"),
+					},
+					denyConditions: []Condition{cond("deny-no", falseResult)},
+				},
+				{
+					name:                "nop error trumps matching allow",
+					noOpinionConditions: []Condition{cond("nop-1", errResult)},
+					allowConditions:     []Condition{cond("allow-1", trueResult)},
+				},
+				{
+					name:                "with false deny, nop error, matching allow",
+					denyConditions:      []Condition{cond("deny-1", falseResult)},
+					noOpinionConditions: []Condition{cond("nop-1", errResult)},
+					allowConditions:     []Condition{cond("allow-1", trueResult)},
+				},
+			},
+		},
+
+		// ============================================================
+		// NoOpinion: error, fail closed (from allow)
+		// ============================================================
+		{
+			name:       "noopinion: single allow error fail closed",
+			wantString: `NoOpinion(reason="one or more conditional evaluation errors occurred", err="condition \"allow-1\" with effect=Allow produced error: eval error")`,
+			subCases: []subCase{
+				{
+					name:            "minimal",
+					allowConditions: []Condition{cond("allow-1", errResult)},
+				},
+				{
+					name:                "with false deny and nop",
+					denyConditions:      []Condition{cond("deny-no", falseResult)},
+					noOpinionConditions: []Condition{cond("nop-no", falseResult)},
+					allowConditions: []Condition{
+						cond("allow-no", falseResult),
+						unevalCond("allow-uneval"),
+						cond("allow-1", errResult),
+					},
+				},
+				{
+					name:            "via evaluateFunc fallback (condition unevaluatable, evaluateFunc errors)",
+					allowConditions: []Condition{unevalCond("allow-1")},
+					evaluateFunc: func(context.Context, ConditionsData, Condition) ConditionEvaluationResult {
+						return ConditionEvaluationResultError(evalErr)
+					},
+				},
+				{
+					name:            "condition errors, evaluateFunc panics (not called)",
+					allowConditions: []Condition{cond("allow-1", errResult)},
+					evaluateFunc: func(context.Context, ConditionsData, Condition) ConditionEvaluationResult {
+						panic("should not be called")
+					},
+				},
+			},
+		},
+		{
+			name:       "noopinion: multiple allow errors fail closed",
+			wantString: `NoOpinion(reason="one or more conditional evaluation errors occurred", err="[condition \"allow-1\" with effect=Allow produced error: eval error, condition \"allow-2\" with effect=Allow produced error: eval error]")`,
+			subCases: []subCase{
+				{
+					name: "minimal",
+					allowConditions: []Condition{
+						cond("allow-1", errResult),
+						cond("allow-2", errResult),
+					},
+				},
+			},
+		},
+
+		// ============================================================
+		// NoOpinion: no conditions matched
+		// ============================================================
+		{
+			name:       "noopinion: no conditions matched",
+			wantString: `NoOpinion(reason="no conditions matched")`,
+			subCases: []subCase{
+				{
+					name:           "single deny false",
+					denyConditions: []Condition{cond("deny-1", falseResult)},
+				},
+				{
+					name:                "single nop false with filler-deny-false",
+					denyConditions:      fillerDenyFalse,
+					noOpinionConditions: []Condition{cond("nop-1", falseResult)},
+				},
+				{
+					name:            "single allow false",
+					allowConditions: []Condition{cond("allow-1", falseResult)},
+				},
+				{
+					name:                "all effects false",
+					denyConditions:      []Condition{cond("deny-1", falseResult)},
+					noOpinionConditions: []Condition{cond("nop-1", falseResult)},
+					allowConditions:     []Condition{cond("allow-1", falseResult)},
+				},
+				{
+					name:            "via evaluateFunc fallback (condition unevaluatable, evaluateFunc returns false)",
+					allowConditions: []Condition{unevalCond("allow-1")},
+					evaluateFunc: func(context.Context, ConditionsData, Condition) ConditionEvaluationResult {
+						return ConditionEvaluationResultBoolean(false)
+					},
+				},
+			},
+		},
+
+		// ============================================================
+		// NoOpinion: unevaluatable nop with no allow conditions
+		// ============================================================
+		{
+			name:       "noopinion: unevaluatable nop, no allow -> NoOpinion",
+			wantString: `NoOpinion(reason="at least one NoOpinion condition matched, or no conditions matched")`,
+			subCases: []subCase{
+				{
+					name:                "with filler-deny-false",
+					denyConditions:      fillerDenyFalse,
+					noOpinionConditions: []Condition{unevalCond("nop-1")},
+				},
+				{
+					name:                "with false deny",
+					denyConditions:      []Condition{cond("deny-1", falseResult)},
+					noOpinionConditions: []Condition{unevalCond("nop-1")},
+				},
+			},
+		},
+
+		// ============================================================
+		// Allow: at least one allow condition matched
+		// ============================================================
+		{
+			name:       "allow: at least one allow condition matched",
+			wantString: `Allow(reason="condition \"allow-1\" allowed the request")`,
+			subCases: []subCase{
+				{
+					name:            "minimal",
+					allowConditions: []Condition{cond("allow-1", trueResult)},
+				},
+				{
+					name: "with false allow",
+					allowConditions: []Condition{
+						cond("allow-no", falseResult),
+						cond("allow-1", trueResult),
+					},
+				},
+				{
+					name:                "with false deny and nop",
+					denyConditions:      []Condition{cond("deny-1", falseResult)},
+					noOpinionConditions: []Condition{cond("nop-1", falseResult)},
+					allowConditions:     []Condition{cond("allow-1", trueResult)},
+				},
+				{
+					name:            "evaluateFunc panics (not called, condition self-evaluates)",
+					allowConditions: []Condition{cond("allow-1", trueResult)},
+					evaluateFunc: func(context.Context, ConditionsData, Condition) ConditionEvaluationResult {
+						panic("should not be called")
+					},
+				},
+				{
+					name:            "via evaluateFunc fallback (condition unevaluatable, evaluateFunc returns true)",
+					allowConditions: []Condition{unevalCond("allow-1")},
+					evaluateFunc: func(context.Context, ConditionsData, Condition) ConditionEvaluationResult {
+						return ConditionEvaluationResultBoolean(true)
+					},
+				},
+			},
+		},
+		{
+			name:       "allow: at least one allow condition matched with description",
+			wantString: `Allow(reason="condition \"allow-1\" allowed the request with description \"access granted\"")`,
+			subCases: []subCase{
+				{
+					name:            "minimal",
+					allowConditions: []Condition{condDesc("allow-1", "access granted", trueResult)},
+				},
+				{
+					name:                "with false deny and nop",
+					denyConditions:      []Condition{cond("deny-1", falseResult)},
+					noOpinionConditions: []Condition{cond("nop-1", falseResult)},
+					allowConditions:     []Condition{condDesc("allow-1", "access granted", trueResult)},
+				},
+			},
+		},
+
+		// ============================================================
+		// Allow: condition matched with error warning
+		// ============================================================
+		{
+			name:       "allow: condition matched with error warning from other allow",
+			wantString: `Allow(reason="condition \"allow-1\" allowed the request", err="condition \"allow-err\" with effect=Allow produced error: eval error")`,
+			subCases: []subCase{
+				{
+					name: "minimal",
+					allowConditions: []Condition{
+						cond("allow-err", errResult),
+						cond("allow-1", trueResult),
+					},
+				},
+				{
+					name:                "with false deny and nop",
+					denyConditions:      []Condition{cond("deny-1", falseResult)},
+					noOpinionConditions: []Condition{cond("nop-1", falseResult)},
+					allowConditions: []Condition{
+						cond("allow-err", errResult),
+						cond("allow-1", trueResult),
+					},
+				},
+			},
+		},
+
+		// ============================================================
+		// ConditionsMap: refined map with unevaluatable conditions
+		// ============================================================
+		{
+			name:                "conditionsmap: deny unevaluatable, nop and allow present",
+			wantString:          `ConditionsMap(len=3)`,
+			wantIsConditionsMap: true,
+			wantDenyCount:       1,
+			wantNoOpinionCount:  1,
+			wantAllowCount:      1,
+			subCases: []subCase{
+				{
+					name:                "minimal",
+					denyConditions:      []Condition{unevalCond("deny-1")},
+					noOpinionConditions: []Condition{cond("nop-1", trueResult)},
+					allowConditions:     []Condition{cond("allow-1", trueResult)},
+				},
+				{
+					name: "one deny false, one deny unevaluatable",
+					denyConditions: []Condition{
+						cond("deny-false", falseResult),
+						unevalCond("deny-1"),
+					},
+					noOpinionConditions: []Condition{cond("nop-1", trueResult)},
+					allowConditions:     []Condition{cond("allow-1", trueResult)},
+				},
+			},
+		},
+		{
+			name:                "conditionsmap: nop unevaluatable, allow present",
+			wantString:          `ConditionsMap(len=2)`,
+			wantIsConditionsMap: true,
+			wantNoOpinionCount:  1,
+			wantAllowCount:      1,
+			subCases: []subCase{
+				{
+					name:                "minimal",
+					noOpinionConditions: []Condition{unevalCond("nop-1")},
+					allowConditions:     []Condition{cond("allow-1", trueResult)},
+				},
+				{
+					name:                "with false deny",
+					denyConditions:      []Condition{cond("deny-1", falseResult)},
+					noOpinionConditions: []Condition{unevalCond("nop-1")},
+					allowConditions:     []Condition{cond("allow-1", trueResult)},
+				},
+			},
+		},
+		{
+			name:                "conditionsmap: allow unevaluatable",
+			wantString:          `ConditionsMap(len=1)`,
+			wantIsConditionsMap: true,
+			wantAllowCount:      1,
+			subCases: []subCase{
+				{
+					name:            "minimal (nil evaluateFunc)",
+					allowConditions: []Condition{unevalCond("allow-1")},
+				},
+				{
+					name:            "evaluateFunc also returns unevaluatable",
+					allowConditions: []Condition{unevalCond("allow-1")},
+					evaluateFunc: func(context.Context, ConditionsData, Condition) ConditionEvaluationResult {
+						return ConditionsEvaluationResultUnevaluatable()
+					},
+				},
+				{
+					name:                "with false deny and nop",
+					denyConditions:      []Condition{cond("deny-1", falseResult)},
+					noOpinionConditions: []Condition{cond("nop-1", falseResult)},
+					allowConditions:     []Condition{unevalCond("allow-1")},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, sc := range tt.subCases {
+				t.Run(sc.name, func(t *testing.T) {
+					// Construct the ConditionsMap via the constructor to exercise validation.
+					decision := ConditionsAwareDecisionConditionsMap(sc.denyConditions, sc.noOpinionConditions, sc.allowConditions)
+					if !decision.IsConditionsMap() {
+						t.Fatalf("expected ConditionsMap from constructor, got %s", decision.String())
+					}
+					cm := decision.ConditionsMap()
+
+					result := evaluateConditionsMapInternal(t.Context(), cm, ConditionsData{}, sc.evaluateFunc)
+					if got := result.String(); got != tt.wantString {
+						t.Errorf("got decision %s, want %s", got, tt.wantString)
+					}
+					if tt.wantIsConditionsMap {
+						if !result.IsConditionsMap() {
+							t.Fatalf("expected ConditionsMap decision, got %s", result.String())
+						}
+						rcm := result.ConditionsMap()
+						gotDeny, gotNoOpinion, gotAllow := countConditions(rcm)
+						if gotDeny != tt.wantDenyCount {
+							t.Errorf("deny count = %d, want %d", gotDeny, tt.wantDenyCount)
+						}
+						if gotNoOpinion != tt.wantNoOpinionCount {
+							t.Errorf("noopinion count = %d, want %d", gotNoOpinion, tt.wantNoOpinionCount)
+						}
+						if gotAllow != tt.wantAllowCount {
+							t.Errorf("allow count = %d, want %d", gotAllow, tt.wantAllowCount)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func countConditions(cm ConditionsMap) (deny, noopinion, allow int) {
+	for range cm.DenyConditions() {
+		deny++
+	}
+	for range cm.NoOpinionConditions() {
+		noopinion++
+	}
+	for range cm.AllowConditions() {
+		allow++
+	}
+	return
+}
+
+// TestConditionsMapEvaluateDeepCopy verifies that when a refined ConditionsMap is returned
+// because some conditions are unevaluatable, the non-evaluated conditions from lower-priority
+// effect groups are deep-copied and independent from the original.
+func TestConditionsMapEvaluateDeepCopy(t *testing.T) {
+	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ConditionalAuthorization, true)
+
+	marker := "original"
+
+	// Unevaluatable deny → triggers refined ConditionsMap with deep-copied nop and allow.
+	decision := ConditionsAwareDecisionConditionsMap(
+		[]Condition{GenericCondition{ID: "deny-uneval"}},
+		[]Condition{&deepCopyTracker{id: "nop-1", marker: &marker}},
+		[]Condition{&deepCopyTracker{id: "allow-1", marker: &marker}},
+	)
+	if !decision.IsConditionsMap() {
+		t.Fatalf("expected ConditionsMap from constructor, got %s", decision.String())
+	}
+
+	result := evaluateConditionsMapInternal(t.Context(), decision.ConditionsMap(), ConditionsData{}, nil)
+	if !result.IsConditionsMap() {
+		t.Fatalf("expected refined ConditionsMap, got %s", result.String())
+	}
+
+	refined := result.ConditionsMap()
+	if refined.Length() != 3 {
+		t.Fatalf("expected 3 conditions in refined map, got %d", refined.Length())
+	}
+
+	// Mutate the original marker.
+	marker = "mutated"
+
+	// Verify the deep-copied conditions in the refined ConditionsMap still have "original".
+	for c := range refined.NoOpinionConditions() {
+		tracker := c.(*deepCopyTracker)
+		if *tracker.marker != "original" {
+			t.Errorf("deep copy failed for noopinion condition: marker = %q, want %q", *tracker.marker, "original")
+		}
+	}
+	for c := range refined.AllowConditions() {
+		tracker := c.(*deepCopyTracker)
+		if *tracker.marker != "original" {
+			t.Errorf("deep copy failed for allow condition: marker = %q, want %q", *tracker.marker, "original")
+		}
+	}
+}
+
+// deepCopyTracker is a Condition implementation with a pointer field to verify deep copy behavior.
+type deepCopyTracker struct {
+	id     string
+	marker *string
+}
+
+func (c *deepCopyTracker) GetID() string          { return c.id }
+func (c *deepCopyTracker) GetType() string        { return "" }
+func (c *deepCopyTracker) GetCondition() string   { return "" }
+func (c *deepCopyTracker) GetDescription() string { return "" }
+func (c *deepCopyTracker) Evaluate(context.Context, ConditionsData) ConditionEvaluationResult {
+	return ConditionsEvaluationResultUnevaluatable()
+}
+func (c *deepCopyTracker) DeepCopy() Condition {
+	cp := *c
+	if c.marker != nil {
+		m := *c.marker
+		cp.marker = &m
+	}
+	return &cp
+}

@@ -631,14 +631,18 @@ func (c GenericCondition) DeepCopy() Condition {
 	return c // no values passed by reference
 }
 
-// Evaluate evaluates the ConditionsMap primarily using the Conditions' own Evaluate() function,
+func (c ConditionsMap) Evaluate(ctx context.Context, data ConditionsData, evaluateFunc func(context.Context, ConditionsData, Condition) ConditionEvaluationResult) ConditionsAwareDecision {
+	return evaluateConditionsMapInternal(ctx, c, data, evaluateFunc)
+}
+
+// evaluateConditionsMapInternal evaluates the ConditionsMap primarily using the Conditions' own Evaluate() function,
 // and secondarily using evaluateFunc, if set. If evaluateFunc is non-nil and never returns
 // ConditionsEvaluationResultUnevaluatable, the returned decision is guaranteed to be Allow/Deny/NoOpinion.
 // However, this method can also be used to evaluate a subset of the conditions (e.g. for builtin
 // conditions evaluators that support a certain conditions type), returning ConditionsEvaluationResultUnevaluatable
 // for conditions that the evaluator does not recognize. In the latter case, a partially evaluated, deep copied
 // ConditionsMap might be returned.
-func (c ConditionsMap) Evaluate(ctx context.Context, data ConditionsData, evaluateFunc func(context.Context, ConditionsData, Condition) ConditionEvaluationResult) ConditionsAwareDecision {
+func evaluateConditionsMapInternal(ctx context.Context, c ConditionsMap, data ConditionsData, evaluateFunc func(context.Context, ConditionsData, Condition) ConditionEvaluationResult) ConditionsAwareDecision {
 	evalCond := func(cond Condition) ConditionEvaluationResult {
 		return cond.Evaluate(ctx, data)
 	}
