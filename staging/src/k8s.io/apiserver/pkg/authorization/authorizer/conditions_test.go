@@ -1028,7 +1028,7 @@ func celEvaluateConditions(ctx context.Context, conditionsMap authorizer.Conditi
 		"oldObject": oldObj,
 	}
 
-	return conditionsMap.Evaluate(ctx, data, func(ctx context.Context, _ authorizer.ConditionsData, c authorizer.Condition) (bool, error) {
+	return conditionsMap.Evaluate(ctx, data, func(ctx context.Context, c authorizer.Condition, _ authorizer.ConditionsData) (bool, error) {
 		return evalCEL(env, c.GetCondition(), vars)
 	})
 }

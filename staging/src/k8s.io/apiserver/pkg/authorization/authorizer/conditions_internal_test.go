@@ -26,7 +26,7 @@ import (
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
 )
 
-func TestConditionsMapEvaluate(t *testing.T) {
+func TestConditionsMapPartiallyEvaluate(t *testing.T) {
 	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ConditionalAuthorization, true)
 
 	evalErr := errors.New("eval error")
@@ -64,7 +64,7 @@ func TestConditionsMapEvaluate(t *testing.T) {
 		denyConditions      []Condition
 		noOpinionConditions []Condition
 		allowConditions     []Condition
-		evaluateFunc        func(context.Context, ConditionsData, Condition) ConditionEvaluationResult
+		evaluateFunc        func(context.Context, Condition, ConditionsData) ConditionEvaluationResult
 	}
 
 	tests := []struct {
@@ -138,7 +138,7 @@ func TestConditionsMapEvaluate(t *testing.T) {
 					denyConditions:      []Condition{cond("deny-1", trueResult)},
 					noOpinionConditions: []Condition{cond("nop-1", trueResult)},
 					allowConditions:     []Condition{cond("allow-1", trueResult)},
-					evaluateFunc: func(ctx context.Context, cd ConditionsData, c Condition) ConditionEvaluationResult {
+					evaluateFunc: func(context.Context, Condition, ConditionsData) ConditionEvaluationResult {
 						panic("should never be called, as all conditions could readily be evaluated")
 					},
 				},
@@ -163,7 +163,7 @@ func TestConditionsMapEvaluate(t *testing.T) {
 				{
 					name:           "via evaluateFunc fallback (condition unevaluatable, evaluateFunc returns true)",
 					denyConditions: []Condition{unevalCond("deny-1")},
-					evaluateFunc: func(context.Context, ConditionsData, Condition) ConditionEvaluationResult {
+					evaluateFunc: func(context.Context, Condition, ConditionsData) ConditionEvaluationResult {
 						return ConditionEvaluationResultBoolean(true)
 					},
 				},
@@ -397,14 +397,14 @@ func TestConditionsMapEvaluate(t *testing.T) {
 				{
 					name:            "via evaluateFunc fallback (condition unevaluatable, evaluateFunc errors)",
 					allowConditions: []Condition{unevalCond("allow-1")},
-					evaluateFunc: func(context.Context, ConditionsData, Condition) ConditionEvaluationResult {
+					evaluateFunc: func(context.Context, Condition, ConditionsData) ConditionEvaluationResult {
 						return ConditionEvaluationResultError(evalErr)
 					},
 				},
 				{
 					name:            "condition errors, evaluateFunc panics (not called)",
 					allowConditions: []Condition{cond("allow-1", errResult)},
-					evaluateFunc: func(context.Context, ConditionsData, Condition) ConditionEvaluationResult {
+					evaluateFunc: func(context.Context, Condition, ConditionsData) ConditionEvaluationResult {
 						panic("should not be called")
 					},
 				},
@@ -453,7 +453,7 @@ func TestConditionsMapEvaluate(t *testing.T) {
 				{
 					name:            "via evaluateFunc fallback (condition unevaluatable, evaluateFunc returns false)",
 					allowConditions: []Condition{unevalCond("allow-1")},
-					evaluateFunc: func(context.Context, ConditionsData, Condition) ConditionEvaluationResult {
+					evaluateFunc: func(context.Context, Condition, ConditionsData) ConditionEvaluationResult {
 						return ConditionEvaluationResultBoolean(false)
 					},
 				},
@@ -507,14 +507,14 @@ func TestConditionsMapEvaluate(t *testing.T) {
 				{
 					name:            "evaluateFunc panics (not called, condition self-evaluates)",
 					allowConditions: []Condition{cond("allow-1", trueResult)},
-					evaluateFunc: func(context.Context, ConditionsData, Condition) ConditionEvaluationResult {
+					evaluateFunc: func(context.Context, Condition, ConditionsData) ConditionEvaluationResult {
 						panic("should not be called")
 					},
 				},
 				{
 					name:            "via evaluateFunc fallback (condition unevaluatable, evaluateFunc returns true)",
 					allowConditions: []Condition{unevalCond("allow-1")},
-					evaluateFunc: func(context.Context, ConditionsData, Condition) ConditionEvaluationResult {
+					evaluateFunc: func(context.Context, Condition, ConditionsData) ConditionEvaluationResult {
 						return ConditionEvaluationResultBoolean(true)
 					},
 				},
@@ -624,7 +624,7 @@ func TestConditionsMapEvaluate(t *testing.T) {
 				{
 					name:            "evaluateFunc also returns unevaluatable",
 					allowConditions: []Condition{unevalCond("allow-1")},
-					evaluateFunc: func(context.Context, ConditionsData, Condition) ConditionEvaluationResult {
+					evaluateFunc: func(context.Context, Condition, ConditionsData) ConditionEvaluationResult {
 						return ConditionsEvaluationResultUnevaluatable()
 					},
 				},
@@ -649,6 +649,7 @@ func TestConditionsMapEvaluate(t *testing.T) {
 					}
 					cm := decision.ConditionsMap()
 
+					// Note: uses the more general internal function instead of ConditionsMap.Evaluate
 					result := evaluateConditionsMapInternal(t.Context(), cm, ConditionsData{}, sc.evaluateFunc)
 					if got := result.String(); got != tt.wantString {
 						t.Errorf("got decision %s, want %s", got, tt.wantString)

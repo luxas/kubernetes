@@ -107,8 +107,8 @@ func ConditionsAwareDecisionNoOpinion(reason string, err error) ConditionsAwareD
 }
 
 // ConditionsAwareDecisionFromParts is meant to be used by conditions-unaware Authorizer implementations
-// in order to implement Authorizer.ConditionsAwareAuthorize as:
-// "return authorizer.ConditionsAwareDecisionFromParts(self.Authorize(ctx, a))"
+// in order to implement ConditionsAwareAuthorize as:
+// "return ConditionsAwareDecisionFromParts(self.Authorize(ctx, a))"
 func ConditionsAwareDecisionFromParts(unconditional Decision, reason string, err error) ConditionsAwareDecision {
 	switch unconditional {
 	case DecisionAllow:
@@ -166,7 +166,7 @@ func (d ConditionsAwareDecision) IsUnconditional() bool {
 }
 
 // UnconditionalParts turns a ConditionsAwareDecision into the
-// triple that Authorizer.Authorize expects. If the decision is
+// triple that Authorize expects. If the decision is
 // conditional, the returned condition is Deny if there were at least
 // some Deny condition, otherwise NoOpinion.
 // This function is meant to be called when IsUnconditional() == true.
@@ -315,7 +315,7 @@ func (d ConditionsAwareDecision) String() string {
 }
 
 // ConditionsMap is a map of conditions of a given type, and represents
-// the conditional decision from the authorizer.
+// the conditional decision from the
 // It must be constructed through ConditionsAwareDecisionConditionsMap.
 // During construction, all Conditions are validated and ensured to be non-nil.
 type ConditionsMap struct {
@@ -630,13 +630,16 @@ func (c GenericCondition) DeepCopy() Condition {
 	return c // no values passed by reference
 }
 
+// EvaluateConditionFunc is a function that is able to concretely evaluate a condition to a boolean or error.
+type EvaluateConditionFunc func(ctx context.Context, condition Condition, data ConditionsData) (bool, error)
+
 // Evaluate evaluates the ConditionsMap primarily using the Conditions' own Evaluate() function,
 // and secondarily using evaluateFunc, if set.
-func (c ConditionsMap) Evaluate(ctx context.Context, data ConditionsData, evaluateFunc func(context.Context, ConditionsData, Condition) (bool, error)) (Decision, string, error) {
+func (c ConditionsMap) Evaluate(ctx context.Context, data ConditionsData, evaluateConditionFn EvaluateConditionFunc) (Decision, string, error) {
 	// This is a translation between the generic, private function, and the interface we want to expose to callers. Because we never return "unevaluatable", the returned ConditionsAwareDecision
 	// is always one of Allow/Deny/NoOpinion, and thus can we split it into UnconditionalParts
-	return evaluateConditionsMapInternal(ctx, c, data, func(ctx context.Context, condData ConditionsData, cond Condition) ConditionEvaluationResult {
-		applied, err := evaluateFunc(ctx, condData, cond)
+	return evaluateConditionsMapInternal(ctx, c, data, func(ctx context.Context, cond Condition, condData ConditionsData) ConditionEvaluationResult {
+		applied, err := evaluateConditionFn(ctx, cond, condData)
 		if err != nil {
 			return ConditionEvaluationResultError(err)
 		}
@@ -651,18 +654,15 @@ func (c ConditionsMap) Evaluate(ctx context.Context, data ConditionsData, evalua
 // conditions evaluators that support a certain conditions type), returning ConditionsEvaluationResultUnevaluatable
 // for conditions that the evaluator does not recognize. In the latter case, a partially evaluated, deep copied
 // ConditionsMap might be returned.
-func evaluateConditionsMapInternal(ctx context.Context, c ConditionsMap, data ConditionsData, evaluateFunc func(context.Context, ConditionsData, Condition) ConditionEvaluationResult) ConditionsAwareDecision {
+func evaluateConditionsMapInternal(ctx context.Context, c ConditionsMap, data ConditionsData, evaluateConditionFn PartialEvaluateConditionFunc) ConditionsAwareDecision {
 	evalCond := func(cond Condition) ConditionEvaluationResult {
-		return cond.Evaluate(ctx, data)
-	}
-	if evaluateFunc != nil {
-		evalCond = func(cond Condition) ConditionEvaluationResult {
-			result := cond.Evaluate(ctx, data)
-			if !result.IsUnevaluatable() {
-				return result
-			}
-			return evaluateFunc(ctx, data, cond)
+		// First, try to use the condition's own evaluate function.
+		// Fallback to evaluateConditionFn if set and unevaluatable
+		result := cond.Evaluate(ctx, data)
+		if result.IsUnevaluatable() && evaluateConditionFn != nil {
+			return evaluateConditionFn(ctx, cond, data)
 		}
+		return result
 	}
 
 	if len(c.denyConditions) != 0 {
@@ -775,6 +775,81 @@ func deepCopyConditions(originals []Condition) []Condition {
 		copied[i] = original.DeepCopy()
 	}
 	return copied
+}
+
+// PartialEvaluateConditionFunc allows partially evaluating a condition, returning Unevaluatable if a truth value or error cannot be assigned.
+// TODO: Just make this (*bool, error) instead, with
+// True: &true, nil
+// False: &false, nil
+// Error: <any>, non-nil
+// Unevaluatable: nil, nil instead of the ConditionEvaluationResult type?
+type PartialEvaluateConditionFunc func(ctx context.Context, condition Condition, data ConditionsData) ConditionEvaluationResult
+
+// PartiallyEvaluateConditionsAwareDecision evaluates the ConditionsAwareDecision primarily using any conditions' own Evaluate() function,
+// and secondarily using evaluateConditionFn, if set. If evaluateConditionFn is non-nil and never returns
+// ConditionsEvaluationResultUnevaluatable, the returned decision is guaranteed to be Allow/Deny/NoOpinion.
+// However, this method can also be used to evaluate a subset of the conditions (e.g. for builtin
+// conditions evaluators that support a certain conditions type), returning ConditionsEvaluationResultUnevaluatable
+// for conditions that the evaluator does not recognize. In the latter case, a partially evaluated, deep copied
+// ConditionsAwareDecision is returned.
+func PartiallyEvaluateConditionsAwareDecision(ctx context.Context, unevaluatedDecision ConditionsAwareDecision, data ConditionsData, evaluateConditionFn PartialEvaluateConditionFunc) ConditionsAwareDecision {
+	if unevaluatedDecision.IsUnconditional() {
+		return unevaluatedDecision // nothing to simplify
+	}
+	if evaluateConditionFn == nil {
+		return unevaluatedDecision // no simplification possible
+	}
+
+	if unevaluatedDecision.IsUnion() {
+		var newDecisionChain []ConditionsAwareDecision
+		// Recursively walk through the decision DAG in a depth-first manner.
+		collectAndShortcircuitOnly := false
+		for _, unevaluatedSubDecision := range unevaluatedDecision.UnionedDecisions() {
+			// If collectAndShortcircuitOnly == true, a conditional decision that couldn't
+			// be evaluated to Allow/Deny/NoOpinion was encountered during a previous
+			// loop iteration. Then all latter decisions stay unevaluated.
+			if collectAndShortcircuitOnly {
+				newDecisionChain = append(newDecisionChain, unevaluatedSubDecision)
+				continue
+			}
+
+			// When !collectAndShortcircuitOnly: All decisions so far in newDecisionChain are NoOpinions.
+
+			// Try evaluating or refining the leaf ConditionsMaps in this tree of decisions.
+			possiblyEvaluatedSubDecision := PartiallyEvaluateConditionsAwareDecision(ctx, unevaluatedSubDecision, data, evaluateConditionFn)
+
+			// Always preserve the indices and ordering of the decisions, as this ordering
+			// is used by the union authorizer to pair a decision with its
+			newDecisionChain = append(newDecisionChain, possiblyEvaluatedSubDecision)
+
+			// We successfully evaluated to something, and because all previously-seen
+			// decisions were NoOpinions, we can simplify to Allow/Deny here.
+			if possiblyEvaluatedSubDecision.IsAllow() || possiblyEvaluatedSubDecision.IsDeny() {
+				return possiblyEvaluatedSubDecision
+			}
+
+			// If NoOpinion, try the next
+			if possiblyEvaluatedSubDecision.IsNoOpinion() {
+				continue
+			}
+
+			// If we got to here, the decision is a ConditionsMap or Union. This means that
+			// there is no chance of evaluating to an unconditional decision using builtinConditionsEvaluator.
+			// Thus, instead of continuing to try to evaluate later ConditionsMaps in-process,
+			// whose computation might be wasted if previous authorizer's ConditionsMaps indeed
+			// turn out to be Allow/Deny (and not NoOpinion), just short-circuit and do the webhook.
+			//
+			// collectAndShortcircuitOnly is used to preserve the tail of the union, without
+			// evaluating the suffix.
+			collectAndShortcircuitOnly = true
+		}
+		// If we got here, the first not-NoOpinion decision was Union or ConditionsMap, which means
+		// we cannot simplify it. Return a possibly refined decision chain for webhooking.
+		return ConditionsAwareDecisionUnion(newDecisionChain...)
+	}
+
+	// Otherwise, the decision is a ConditionsMap. Try to evaluate it using the builtin evaluator.
+	return evaluateConditionsMapInternal(ctx, unevaluatedDecision.ConditionsMap(), data, evaluateConditionFn)
 }
 
 // conditionsAwareDecisionUnionSlice is an unioned conditions-aware decision type.
