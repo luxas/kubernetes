@@ -132,9 +132,10 @@ func TestConditionsMapPossibleDecisions(t *testing.T) {
 	deny := []authorizer.Condition{genericCond("deny-1")}
 
 	tests := []struct {
-		name string
-		d    authorizer.ConditionsAwareDecision
-		want sets.Set[authorizer.Decision]
+		name            string
+		d               authorizer.ConditionsAwareDecision
+		want            sets.Set[authorizer.Decision]
+		wantDecisionStr string
 	}{
 		{
 			name: "empty -> static NoOpinion", // in fact folded to a NoOpinion with an error
@@ -145,6 +146,11 @@ func TestConditionsMapPossibleDecisions(t *testing.T) {
 			name: "allow-only -> {NoOpinion, Allow}",
 			d:    authorizer.ConditionsAwareDecisionConditionsMap(nil, nil, allow),
 			want: sets.New(authorizer.DecisionNoOpinion, authorizer.DecisionAllow),
+		},
+		{
+			name: "noopinion-only -> static NoOpinion",
+			d:    authorizer.ConditionsAwareDecisionConditionsMap(nil, nop, nil),
+			want: sets.New(authorizer.DecisionNoOpinion),
 		},
 		{
 			name: "deny-only -> {NoOpinion, Deny}",
@@ -504,21 +510,21 @@ func TestConditionsAwareDecisionUnionToDecision(t *testing.T) {
 			decisions:     []authorizer.ConditionsAwareDecision{condMapAllow, deny},
 			wantIsUnion:   true,
 			wantInnerLen:  2,
-			wantInnerStrs: []string{`ConditionsMap(len=1)`, `Deny(reason="d")`},
+			wantInnerStrs: []string{`ConditionsMap(allows=1)`, `Deny(reason="d")`},
 		},
 		{
 			name:          "[ConditionsMap(deny), Allow] stays Union",
 			decisions:     []authorizer.ConditionsAwareDecision{condMapDeny, allow},
 			wantIsUnion:   true,
 			wantInnerLen:  2,
-			wantInnerStrs: []string{`ConditionsMap(len=1)`, `Allow(reason="a")`},
+			wantInnerStrs: []string{`ConditionsMap(denies=1)`, `Allow(reason="a")`},
 		},
 		{
 			name:          "[ConditionsMap(allow), NoOpinion] stays Union",
 			decisions:     []authorizer.ConditionsAwareDecision{condMapAllow, noOp},
 			wantIsUnion:   true,
 			wantInnerLen:  2,
-			wantInnerStrs: []string{`ConditionsMap(len=1)`, `NoOpinion(reason="n")`},
+			wantInnerStrs: []string{`ConditionsMap(allows=1)`, `NoOpinion(reason="n")`},
 		},
 	}
 

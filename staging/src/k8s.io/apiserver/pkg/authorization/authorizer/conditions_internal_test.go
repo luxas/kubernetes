@@ -72,11 +72,6 @@ func TestConditionsMapPartiallyEvaluate(t *testing.T) {
 		subCases []subCase
 		// All sub-cases must produce a decision whose String() equals wantString.
 		wantString string
-		// For ConditionsMap results, additionally verify structure:
-		wantIsConditionsMap bool
-		wantDenyCount       int
-		wantNoOpinionCount  int
-		wantAllowCount      int
 	}{
 		// ============================================================
 		// Deny: at least one deny condition matched
@@ -567,12 +562,8 @@ func TestConditionsMapPartiallyEvaluate(t *testing.T) {
 		// ConditionsMap: refined map with unevaluatable conditions
 		// ============================================================
 		{
-			name:                "conditionsmap: deny unevaluatable, nop and allow present",
-			wantString:          `ConditionsMap(len=3)`,
-			wantIsConditionsMap: true,
-			wantDenyCount:       1,
-			wantNoOpinionCount:  1,
-			wantAllowCount:      1,
+			name:       "conditionsmap: deny unevaluatable, nop and allow present",
+			wantString: `ConditionsMap(denies=1, noopinions=1, allows=1)`,
 			subCases: []subCase{
 				{
 					name:                "minimal",
@@ -592,11 +583,8 @@ func TestConditionsMapPartiallyEvaluate(t *testing.T) {
 			},
 		},
 		{
-			name:                "conditionsmap: nop unevaluatable, allow present",
-			wantString:          `ConditionsMap(len=2)`,
-			wantIsConditionsMap: true,
-			wantNoOpinionCount:  1,
-			wantAllowCount:      1,
+			name:       "conditionsmap: nop unevaluatable, allow present",
+			wantString: `ConditionsMap(noopinions=1, allows=1)`,
 			subCases: []subCase{
 				{
 					name:                "minimal",
@@ -612,10 +600,8 @@ func TestConditionsMapPartiallyEvaluate(t *testing.T) {
 			},
 		},
 		{
-			name:                "conditionsmap: allow unevaluatable",
-			wantString:          `ConditionsMap(len=1)`,
-			wantIsConditionsMap: true,
-			wantAllowCount:      1,
+			name:       "conditionsmap: allow unevaluatable",
+			wantString: `ConditionsMap(allows=1)`,
 			subCases: []subCase{
 				{
 					name:            "minimal (nil evaluateFunc)",
@@ -654,39 +640,10 @@ func TestConditionsMapPartiallyEvaluate(t *testing.T) {
 					if got := result.String(); got != tt.wantString {
 						t.Errorf("got decision %s, want %s", got, tt.wantString)
 					}
-					if tt.wantIsConditionsMap {
-						if !result.IsConditionsMap() {
-							t.Fatalf("expected ConditionsMap decision, got %s", result.String())
-						}
-						rcm := result.ConditionsMap()
-						gotDeny, gotNoOpinion, gotAllow := countConditions(rcm)
-						if gotDeny != tt.wantDenyCount {
-							t.Errorf("deny count = %d, want %d", gotDeny, tt.wantDenyCount)
-						}
-						if gotNoOpinion != tt.wantNoOpinionCount {
-							t.Errorf("noopinion count = %d, want %d", gotNoOpinion, tt.wantNoOpinionCount)
-						}
-						if gotAllow != tt.wantAllowCount {
-							t.Errorf("allow count = %d, want %d", gotAllow, tt.wantAllowCount)
-						}
-					}
 				})
 			}
 		})
 	}
-}
-
-func countConditions(cm ConditionsMap) (deny, noopinion, allow int) {
-	for range cm.DenyConditions() {
-		deny++
-	}
-	for range cm.NoOpinionConditions() {
-		noopinion++
-	}
-	for range cm.AllowConditions() {
-		allow++
-	}
-	return
 }
 
 // TestConditionsMapEvaluateDeepCopy verifies that when a refined ConditionsMap is returned

@@ -193,7 +193,7 @@ func TestConditionsAwareDecision(t *testing.T) {
 			},
 			wantIsConditionsMap: true,
 			wantIsUnconditional: false,
-			wantString:          `ConditionsMap(len=128)`,
+			wantString:          `ConditionsMap(allows=128)`,
 		},
 		{
 			name: "too many Allow conditions",
@@ -405,7 +405,7 @@ func TestConditionsAwareDecision(t *testing.T) {
 			wantIsUnion:             true,
 			wantContainsAllowOrDeny: false,
 			wantReason:              `[""]`,
-			wantString:              `Union[ConditionsMap(len=1)]`,
+			wantString:              `Union[ConditionsMap(allows=1)]`,
 		},
 		{
 			name: "union: single Union wrapped",
@@ -416,7 +416,7 @@ func TestConditionsAwareDecision(t *testing.T) {
 			wantContainsAllowOrDeny: true,
 			wantFailClosedIsDeny:    true,
 			wantReason:              `[["", ""]]`,
-			wantString:              `Union[Union[ConditionsMap(len=1), Allow]]`,
+			wantString:              `Union[Union[ConditionsMap(denies=1), Allow]]`,
 		},
 		{
 			name: "union: all NoOpinion yields merged NoOpinion",
@@ -485,7 +485,7 @@ func TestConditionsAwareDecision(t *testing.T) {
 			wantContainsAllowOrDeny: false,
 			wantFailClosedIsDeny:    false,
 			wantReason:              `[no-op1, "", no-op2]`,
-			wantString:              `Union[NoOpinion(reason="no-op1"), ConditionsMap(len=1), NoOpinion(reason="no-op2")]`,
+			wantString:              `Union[NoOpinion(reason="no-op1"), ConditionsMap(allows=1), NoOpinion(reason="no-op2")]`,
 		},
 		{
 			// ConditionsMap(allow-only) followed by Allow has PossibleDecisions={Allow}: if the
@@ -511,7 +511,7 @@ func TestConditionsAwareDecision(t *testing.T) {
 			wantContainsAllowOrDeny: true, // There is an inner Deny
 			wantFailClosedIsDeny:    true,
 			wantReason:              `["", no]`,
-			wantString:              `Union[ConditionsMap(len=1), Deny(reason="no")]`,
+			wantString:              `Union[ConditionsMap(allows=1), Deny(reason="no")]`,
 		},
 		{
 			name: "union: conditionsmap(deny) + noopinion",
@@ -522,7 +522,7 @@ func TestConditionsAwareDecision(t *testing.T) {
 			wantContainsAllowOrDeny: false,
 			wantFailClosedIsDeny:    true, // There are Deny conditions
 			wantReason:              `["", noop]`,
-			wantString:              `Union[ConditionsMap(len=1), NoOpinion(reason="noop")]`,
+			wantString:              `Union[ConditionsMap(denies=1), NoOpinion(reason="noop")]`,
 		},
 		{
 			name: "union: conditionsmap(deny) + allow with error",
@@ -534,7 +534,7 @@ func TestConditionsAwareDecision(t *testing.T) {
 			wantFailClosedIsDeny:    true, // There are Deny conditions
 			wantReason:              `["", allowed]`,
 			wantErrorIs:             unexpectedErr,
-			wantString:              `Union[ConditionsMap(len=1), Allow(reason="allowed", err="unexpected things happened")]`,
+			wantString:              `Union[ConditionsMap(denies=1), Allow(reason="allowed", err="unexpected things happened")]`,
 		},
 		{
 			name: "union: conditionsmap(allow) + conditionsmap(deny)",
@@ -545,7 +545,7 @@ func TestConditionsAwareDecision(t *testing.T) {
 			wantContainsAllowOrDeny: false,
 			wantFailClosedIsDeny:    true, // There are Deny conditions
 			wantReason:              `["", ""]`,
-			wantString:              `Union[ConditionsMap(len=1), ConditionsMap(len=1)]`,
+			wantString:              `Union[ConditionsMap(allows=1), ConditionsMap(denies=1)]`,
 		},
 		{
 			// The inner union [condMapAllow, Allow("ok")] simplifies to Allow(reason="1: ok").
@@ -585,7 +585,7 @@ func TestConditionsAwareDecision(t *testing.T) {
 			wantContainsAllowOrDeny: false,
 			wantFailClosedIsDeny:    true,
 			wantReason:              `["", ["", inner, ["", inner2]]]`,
-			wantString:              `Union[ConditionsMap(len=1), Union[ConditionsMap(len=1), NoOpinion(reason="inner"), Union[ConditionsMap(len=1), NoOpinion(reason="inner2")]]]`,
+			wantString:              `Union[ConditionsMap(allows=1), Union[ConditionsMap(allows=1), NoOpinion(reason="inner"), Union[ConditionsMap(denies=1), NoOpinion(reason="inner2")]]]`,
 		},
 	}
 	for _, tt := range tests {
@@ -820,7 +820,7 @@ func TestSampleAuthorizer(t *testing.T) {
 					oldObject: objWithLabels(map[string]string{"owner": "carol"}),
 					authorizeDecision: [2]string{
 						`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`,
-						`ConditionsMap(len=1)`,
+						`ConditionsMap(allows=1)`,
 					},
 					finalDecision: [2]string{
 						`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`,
@@ -833,7 +833,7 @@ func TestSampleAuthorizer(t *testing.T) {
 					oldObject: objWithLabels(nil),
 					authorizeDecision: [2]string{
 						`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`,
-						`ConditionsMap(len=1)`,
+						`ConditionsMap(allows=1)`,
 					},
 					finalDecision: [2]string{
 						`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`,
@@ -846,7 +846,7 @@ func TestSampleAuthorizer(t *testing.T) {
 					oldObject: objWithLabels(map[string]string{"owner": "carol"}),
 					authorizeDecision: [2]string{
 						`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`,
-						`ConditionsMap(len=1)`,
+						`ConditionsMap(allows=1)`,
 					},
 					finalDecision: [2]string{
 						`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`,
@@ -888,28 +888,28 @@ func TestSampleAuthorizer(t *testing.T) {
 					name:              "both objects with supersecret",
 					object:            objWithLabels(map[string]string{"supersecret": "yes"}),
 					oldObject:         objWithLabels(map[string]string{"supersecret": "yes"}),
-					authorizeDecision: [2]string{`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`, `ConditionsMap(len=2)`},
+					authorizeDecision: [2]string{`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`, `ConditionsMap(denies=2)`},
 					finalDecision:     [2]string{`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`, `Deny(reason="condition \"deny-supersecret-label-on-oldObject\" denied the request, condition \"deny-supersecret-label-on-object\" denied the request")`},
 				},
 				{
 					name:              "new with supersecret old without",
 					object:            objWithLabels(map[string]string{"supersecret": "yes"}),
 					oldObject:         objWithLabels(nil),
-					authorizeDecision: [2]string{`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`, `ConditionsMap(len=2)`},
+					authorizeDecision: [2]string{`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`, `ConditionsMap(denies=2)`},
 					finalDecision:     [2]string{`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`, `Deny(reason="condition \"deny-supersecret-label-on-object\" denied the request")`},
 				},
 				{
 					name:              "new without old with supersecret",
 					object:            objWithLabels(nil),
 					oldObject:         objWithLabels(map[string]string{"supersecret": "yes"}),
-					authorizeDecision: [2]string{`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`, `ConditionsMap(len=2)`},
+					authorizeDecision: [2]string{`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`, `ConditionsMap(denies=2)`},
 					finalDecision:     [2]string{`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`, `Deny(reason="condition \"deny-supersecret-label-on-oldObject\" denied the request")`},
 				},
 				{
 					name:              "both without supersecret",
 					object:            objWithLabels(map[string]string{"safe": "true"}),
 					oldObject:         objWithLabels(map[string]string{"safe": "true"}),
-					authorizeDecision: [2]string{`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`, `ConditionsMap(len=2)`},
+					authorizeDecision: [2]string{`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`, `ConditionsMap(denies=2)`},
 					finalDecision:     [2]string{`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`, `NoOpinion(reason="no conditions matched")`},
 				},
 			},
@@ -924,13 +924,13 @@ func TestSampleAuthorizer(t *testing.T) {
 				{
 					name:              "create with supersecret",
 					object:            objWithLabels(map[string]string{"supersecret": "yes"}),
-					authorizeDecision: [2]string{`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`, `ConditionsMap(len=2)`},
+					authorizeDecision: [2]string{`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`, `ConditionsMap(denies=2)`},
 					finalDecision:     [2]string{`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`, `Deny(reason="condition \"deny-supersecret-label-on-object\" denied the request")`},
 				},
 				{
 					name:              "create without supersecret",
 					object:            objWithLabels(map[string]string{"safe": "true"}),
-					authorizeDecision: [2]string{`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`, `ConditionsMap(len=2)`},
+					authorizeDecision: [2]string{`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`, `ConditionsMap(denies=2)`},
 					finalDecision:     [2]string{`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`, `NoOpinion(reason="no conditions matched")`},
 				},
 			},
@@ -945,13 +945,13 @@ func TestSampleAuthorizer(t *testing.T) {
 				{
 					name:              "delete with supersecret on old object",
 					oldObject:         objWithLabels(map[string]string{"supersecret": "yes"}),
-					authorizeDecision: [2]string{`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`, `ConditionsMap(len=2)`},
+					authorizeDecision: [2]string{`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`, `ConditionsMap(denies=2)`},
 					finalDecision:     [2]string{`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`, `Deny(reason="condition \"deny-supersecret-label-on-oldObject\" denied the request")`},
 				},
 				{
 					name:              "delete without supersecret on old object",
 					oldObject:         objWithLabels(map[string]string{"safe": "true"}),
-					authorizeDecision: [2]string{`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`, `ConditionsMap(len=2)`},
+					authorizeDecision: [2]string{`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`, `ConditionsMap(denies=2)`},
 					finalDecision:     [2]string{`Deny(reason="failed closed: tried to return conditional decision to conditions-unaware authorizer")`, `NoOpinion(reason="no conditions matched")`},
 				},
 			},

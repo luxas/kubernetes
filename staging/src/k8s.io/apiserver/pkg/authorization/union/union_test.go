@@ -443,7 +443,7 @@ func TestUnionEvaluateConditions(t *testing.T) {
 			authz3:                noOpinion(),
 			authz4:                noOpinion(),
 			authz5:                noOpinion(),
-			wantAuthorizeDecision: `Union[Union[Union[ConditionsMap(len=1), NoOpinion], NoOpinion], NoOpinion, NoOpinion]`,
+			wantAuthorizeDecision: `Union[Union[Union[ConditionsMap(allows=1), NoOpinion], NoOpinion], NoOpinion, NoOpinion]`,
 			wantFinalDecision:     `Allow`,
 		},
 		{
@@ -456,7 +456,7 @@ func TestUnionEvaluateConditions(t *testing.T) {
 			authz3:                noOpinion(),
 			authz4:                noOpinion(),
 			authz5:                noOpinion(),
-			wantAuthorizeDecision: `Union[Union[Union[NoOpinion, ConditionsMap(len=1)], NoOpinion], NoOpinion, NoOpinion]`,
+			wantAuthorizeDecision: `Union[Union[Union[NoOpinion, ConditionsMap(allows=1)], NoOpinion], NoOpinion, NoOpinion]`,
 			wantFinalDecision:     `NoOpinion`,
 		},
 		{
@@ -469,7 +469,7 @@ func TestUnionEvaluateConditions(t *testing.T) {
 			},
 			authz4:                noOpinion(),
 			authz5:                noOpinion(),
-			wantAuthorizeDecision: `Union[Union[NoOpinion, ConditionsMap(len=1)], NoOpinion, NoOpinion]`,
+			wantAuthorizeDecision: `Union[Union[NoOpinion, ConditionsMap(denies=1)], NoOpinion, NoOpinion]`,
 			wantFinalDecision:     `Deny`,
 		},
 		{
@@ -482,7 +482,7 @@ func TestUnionEvaluateConditions(t *testing.T) {
 				evalDecision:    authorizer.DecisionNoOpinion,
 			},
 			authz5:                noOpinion(),
-			wantAuthorizeDecision: `Union[NoOpinion, Union[ConditionsMap(len=1)], NoOpinion]`,
+			wantAuthorizeDecision: `Union[NoOpinion, Union[ConditionsMap(denies=1)], NoOpinion]`,
 			wantFinalDecision:     `NoOpinion`,
 		},
 		{
@@ -568,7 +568,7 @@ func TestUnionEvaluateConditions(t *testing.T) {
 			},
 			authz4:                noOpinion(),
 			authz5:                &evalTestAuthz{decision: authorizer.DecisionDeny},
-			wantAuthorizeDecision: `Union[Union[NoOpinion, ConditionsMap(len=1)], NoOpinion, Deny]`,
+			wantAuthorizeDecision: `Union[Union[NoOpinion, ConditionsMap(allows=1)], NoOpinion, Deny]`,
 			wantFinalDecision:     `Deny`,
 		},
 		{
@@ -594,7 +594,7 @@ func TestUnionEvaluateConditions(t *testing.T) {
 			},
 			authz4:                noOpinion(),
 			authz5:                &evalTestAuthz{decision: authorizer.DecisionDeny},
-			wantAuthorizeDecision: `Union[Union[NoOpinion, ConditionsMap(len=1)], NoOpinion, Deny]`,
+			wantAuthorizeDecision: `Union[Union[NoOpinion, ConditionsMap(allows=1)], NoOpinion, Deny]`,
 			wantFinalDecision:     `Allow`,
 		},
 		{
@@ -607,7 +607,7 @@ func TestUnionEvaluateConditions(t *testing.T) {
 			authz3:                &evalTestAuthz{decision: authorizer.DecisionAllow},
 			authz4:                noOpinion(),
 			authz5:                noOpinion(),
-			wantAuthorizeDecision: `Union[Union[Union[NoOpinion, ConditionsMap(len=1)], Allow]]`,
+			wantAuthorizeDecision: `Union[Union[Union[NoOpinion, ConditionsMap(denies=1)], Allow]]`,
 			wantFinalDecision:     `Deny`,
 		},
 		{
@@ -642,7 +642,7 @@ func TestUnionEvaluateConditions(t *testing.T) {
 			},
 			authz4:                noOpinion(),
 			authz5:                noOpinion(),
-			wantAuthorizeDecision: `Union[Union[Union[ConditionsMap(len=1), NoOpinion], ConditionsMap(len=1)], NoOpinion, NoOpinion]`,
+			wantAuthorizeDecision: `Union[Union[Union[ConditionsMap(allows=1), NoOpinion], ConditionsMap(allows=1)], NoOpinion, NoOpinion]`,
 			wantFinalDecision:     `Allow`,
 		},
 		{
@@ -658,7 +658,7 @@ func TestUnionEvaluateConditions(t *testing.T) {
 			},
 			authz4:                noOpinion(),
 			authz5:                noOpinion(),
-			wantAuthorizeDecision: `Union[Union[Union[NoOpinion, ConditionsMap(len=1)], ConditionsMap(len=1)], NoOpinion, NoOpinion]`,
+			wantAuthorizeDecision: `Union[Union[Union[NoOpinion, ConditionsMap(allows=1)], ConditionsMap(denies=1)], NoOpinion, NoOpinion]`,
 			wantFinalDecision:     `Deny`,
 		},
 		{
@@ -677,7 +677,7 @@ func TestUnionEvaluateConditions(t *testing.T) {
 				conditionEffect: effectAllow,
 				evalDecision:    authorizer.DecisionAllow,
 			},
-			wantAuthorizeDecision: `Union[Union[Union[ConditionsMap(len=1), NoOpinion], ConditionsMap(len=1)], NoOpinion, ConditionsMap(len=1)]`,
+			wantAuthorizeDecision: `Union[Union[Union[ConditionsMap(allows=1), NoOpinion], ConditionsMap(allows=1)], NoOpinion, ConditionsMap(allows=1)]`,
 			wantFinalDecision:     `Allow`,
 		},
 		{
@@ -696,7 +696,7 @@ func TestUnionEvaluateConditions(t *testing.T) {
 				conditionEffect: effectDeny,
 				evalDecision:    authorizer.DecisionDeny,
 			},
-			wantAuthorizeDecision: `Union[Union[Union[ConditionsMap(len=1), NoOpinion], ConditionsMap(len=1)], NoOpinion, ConditionsMap(len=1)]`,
+			wantAuthorizeDecision: `Union[Union[Union[ConditionsMap(allows=1), NoOpinion], ConditionsMap(allows=1)], NoOpinion, ConditionsMap(denies=1)]`,
 			wantFinalDecision:     `Allow`,
 		},
 		{
@@ -718,7 +718,7 @@ func TestUnionEvaluateConditions(t *testing.T) {
 				conditionEffect: effectAllow,
 				evalDecision:    authorizer.DecisionNoOpinion,
 			},
-			wantAuthorizeDecision: `Union[Union[Union[ConditionsMap(len=1), ConditionsMap(len=1)], NoOpinion], NoOpinion, ConditionsMap(len=1)]`,
+			wantAuthorizeDecision: `Union[Union[Union[ConditionsMap(allows=1), ConditionsMap(denies=1)], NoOpinion], NoOpinion, ConditionsMap(allows=1)]`,
 			wantFinalDecision:     `NoOpinion`,
 		},
 
@@ -740,7 +740,7 @@ func TestUnionEvaluateConditions(t *testing.T) {
 				conditionEffect: effectAllow,
 				evalDecision:    authorizer.DecisionAllow,
 			},
-			wantAuthorizeDecision: `Union[Union[Union[ConditionsMap(len=1), NoOpinion], ConditionsMap(len=1)], NoOpinion, ConditionsMap(len=1)]`,
+			wantAuthorizeDecision: `Union[Union[Union[ConditionsMap(denies=1), NoOpinion], ConditionsMap(allows=1)], NoOpinion, ConditionsMap(allows=1)]`,
 			wantFinalDecision:     `Deny`,
 		},
 		{
@@ -759,7 +759,7 @@ func TestUnionEvaluateConditions(t *testing.T) {
 				conditionEffect: effectDeny,
 				evalDecision:    authorizer.DecisionDeny,
 			},
-			wantAuthorizeDecision: `Union[Union[Union[ConditionsMap(len=1), NoOpinion], ConditionsMap(len=1)], NoOpinion, ConditionsMap(len=1)]`,
+			wantAuthorizeDecision: `Union[Union[Union[ConditionsMap(denies=1), NoOpinion], ConditionsMap(allows=1)], NoOpinion, ConditionsMap(denies=1)]`,
 			wantFinalDecision:     `Deny`,
 		},
 
@@ -794,7 +794,7 @@ func TestUnionEvaluateConditions(t *testing.T) {
 			authz3:                noOpinion(),
 			authz4:                noOpinion(),
 			authz5:                noOpinion(),
-			wantAuthorizeDecision: `Union[Union[Union[ConditionsMap(len=1), NoOpinion], NoOpinion], NoOpinion, NoOpinion]`,
+			wantAuthorizeDecision: `Union[Union[Union[ConditionsMap(allows=1), NoOpinion], NoOpinion], NoOpinion, NoOpinion]`,
 			wantFinalDecision:     `Allow(err="eval error")`,
 			wantFinalErr:          true,
 		},

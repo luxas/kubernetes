@@ -307,18 +307,15 @@ func (d ConditionsAwareDecision) String() string {
 		return fmt.Sprintf("NoOpinion%s", paramsStr())
 	}
 	if d.IsConditionsMap() {
-		params = append(params, fmt.Sprintf("len=%d", d.conditionsMap.Length()))
-		/*
-			if len(d.conditionsMap.denyConditions) != 0 {
-				params = append(params, fmt.Sprintf("denies=%d", len(d.conditionsMap.denyConditions)))
-			}
-			if len(d.conditionsMap.noOpinionConditions) != 0 {
-				params = append(params, fmt.Sprintf("noopinions=%d", len(d.conditionsMap.noOpinionConditions)))
-			}
-			if len(d.conditionsMap.allowConditions) != 0 {
-				params = append(params, fmt.Sprintf("allows=%d", len(d.conditionsMap.allowConditions)))
-			}
-		*/
+		if len(d.conditionsMap.denyConditions) != 0 {
+			params = append(params, fmt.Sprintf("denies=%d", len(d.conditionsMap.denyConditions)))
+		}
+		if len(d.conditionsMap.noOpinionConditions) != 0 {
+			params = append(params, fmt.Sprintf("noopinions=%d", len(d.conditionsMap.noOpinionConditions)))
+		}
+		if len(d.conditionsMap.allowConditions) != 0 {
+			params = append(params, fmt.Sprintf("allows=%d", len(d.conditionsMap.allowConditions)))
+		}
 		return fmt.Sprintf("ConditionsMap%s", paramsStr())
 	}
 	// Deny is written such that if none of the other modes apply,
