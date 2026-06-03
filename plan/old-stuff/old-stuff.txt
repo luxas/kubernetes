@@ -1,0 +1,10 @@
+  ax_allow : conditionsAwareAuthorize = .Allow → idealAuthorize = .Allow ∧ metadataAuthorize = .Allow ∧ evaluateConditions = .Deny
+  ax_deny : conditionsAwareAuthorize = .Deny → idealAuthorize = .Deny ∧ metadataAuthorize = .Deny ∧ evaluateConditions = .Deny
+  ax_noOpinion : conditionsAwareAuthorize = .NoOpinion → idealAuthorize = .NoOpinion ∧ metadataAuthorize = .NoOpinion ∧ evaluateConditions = .Deny
+
+  ax_conditional : ∀ hasDenyCondition hasAllowCondition either_allow_or_deny, conditionsAwareAuthorize = .ConditionsMap hasDenyCondition hasAllowCondition either_allow_or_deny →
+    idealAuthorize = evaluateConditions ∧
+    (hasDenyCondition → metadataAuthorize = .Deny) ∧
+    (¬hasDenyCondition → metadataAuthorize = .NoOpinion) ∧
+    (¬hasDenyCondition → evaluateConditions ≠ .Deny) ∧
+    (¬hasAllowCondition → evaluateConditions ≠ .Allow)

@@ -134,8 +134,10 @@ def unionIdealAuthorize(decisions : List Decision) : UnconditionalDecision :=
     | .ConditionsMap cm => cm.Ideal
     | .Union subDecisions => unionIdealAuthorize subDecisions
 
-/-- Returns the idealized unconditional decision from a Decision tree. -/
-def Decision.Ideal : Decision → UnconditionalDecision
+/-- Returns the idealized unconditional decision from a Decision tree.
+TODO: Add the metadata and data parameters here
+-/
+def Decision.Ideal  : Decision → UnconditionalDecision
   | .Allow     => .Allow
   | .Deny      => .Deny
   | .NoOpinion => .NoOpinion
