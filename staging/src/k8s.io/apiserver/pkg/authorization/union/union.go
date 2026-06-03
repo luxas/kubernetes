@@ -27,6 +27,7 @@ package union
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
@@ -73,9 +74,9 @@ func (authzHandler unionAuthzHandler) Authorize(ctx context.Context, a authorize
 
 // ConditionsAwareAuthorize is not conditions-aware, converts the Authorize decision.
 func (authzHandler unionAuthzHandler) ConditionsAwareAuthorize(ctx context.Context, a authorizer.Attributes) authorizer.ConditionsAwareDecision {
-	var decisions []authorizer.ConditionsAwareDecision
+	var decisions authorizer.ConditionsAwareDecisionUnion
 
-	for _, currAuthzHandler := range authzHandler {
+	for i, currAuthzHandler := range authzHandler {
 		// Precondition: All previously seen leaf decisions were either of NoOpinion or ConditionsMap type.
 
 		// Call the authorizer on its conditions-aware method, and add the decision to the slice,
@@ -83,18 +84,18 @@ func (authzHandler unionAuthzHandler) ConditionsAwareAuthorize(ctx context.Conte
 		// in the slice is what correlates a decision with the authorizer that should be used
 		// for evaluating it (if needed).
 		decision := currAuthzHandler.ConditionsAwareAuthorize(ctx, a)
-		decisions = append(decisions, decision)
+		decisions.Add(strconv.Itoa(i), decision)
 
 		// If there is any Allow/Deny decision leaf, no need to walk the chain further.
-		if decision.ContainsAllowOrDeny() {
-			return authorizer.ConditionsAwareDecisionUnion(decisions...)
+		if decisions.ContainsAllowOrDeny() {
+			return decisions.ToDecision()
 		}
 		// => all leaves are NoOpinion or ConditionsMap, continue to the next authorizer
 	}
 
 	// If we reached here, all leaf decisions were either of NoOpinion or ConditionsMap type.
 	// If all decisions were NoOpinions, the constructor folds into a single NoOpinion decision.
-	return authorizer.ConditionsAwareDecisionUnion(decisions...)
+	return decisions.ToDecision()
 }
 
 // EvaluateConditions is not supported by this authorizer.
@@ -116,7 +117,7 @@ func (authzHandler unionAuthzHandler) EvaluateConditions(ctx context.Context, un
 		reasonlist []string
 	)
 
-	for i, unevaluatedSubDecision := range unevaluatedDecision.UnionedDecisions() {
+	for istr, unevaluatedSubDecision := range unevaluatedDecision.UnionedDecisions() {
 		// Precondition: All previously seen leaf decisions were or evaluated to NoOpinion, or some unrecognized mode.
 
 		// If we get to an Allow or Deny in the union chain, we have our answer.
@@ -132,6 +133,10 @@ func (authzHandler unionAuthzHandler) EvaluateConditions(ctx context.Context, un
 			decision, reason, err = authorizer.DecisionNoOpinion, unevaluatedSubDecision.Reason(), unevaluatedSubDecision.Error()
 		} else {
 			// ConditionsMap or Union types are evaluated by their authorizer
+			i, err := strconv.Atoi(istr)
+			if err != nil {
+				panic(err) // TODO: make better
+			}
 			decision, reason, err = authzHandler[i].EvaluateConditions(ctx, unevaluatedSubDecision, data)
 		}
 

@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"iter"
 	"reflect"
+	"slices"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/validate/content"
@@ -71,7 +72,7 @@ type ConditionsAwareDecision struct {
 	decisionType conditionsAwareDecisionType
 
 	conditionsMap ConditionsMap
-	union         conditionsAwareDecisionUnionSlice
+	union         ConditionsAwareDecisionUnion
 
 	reason string
 	err    error
@@ -224,10 +225,10 @@ func (d ConditionsAwareDecision) ContainsAllowOrDeny() bool {
 // UnionedDecisions returns an iterator for unioned sub-decisions.
 // This iterator is non-empty if and only if IsUnion() == true.
 // The sub-decisions are iterated in their priority order.
-func (d ConditionsAwareDecision) UnionedDecisions() iter.Seq2[int, ConditionsAwareDecision] {
-	return func(yield func(int, ConditionsAwareDecision) bool) {
-		for i, subDecision := range d.union {
-			if !yield(i, subDecision) {
+func (d ConditionsAwareDecision) UnionedDecisions() iter.Seq2[string, ConditionsAwareDecision] {
+	return func(yield func(string, ConditionsAwareDecision) bool) {
+		for _, subDecision := range d.union.inner {
+			if !yield(subDecision.authorizerName, subDecision.d) {
 				return
 			}
 		}
@@ -240,13 +241,13 @@ func (d ConditionsAwareDecision) Reason() string {
 	if d.IsUnion() {
 		b := strings.Builder{}
 		b.WriteByte('[')
-		for i, sub := range d.union {
+		for i, sub := range d.union.inner {
 			if i != 0 {
 				b.WriteString(", ")
 			}
-			reason := sub.Reason()
+			reason := sub.d.Reason()
 			if len(reason) != 0 {
-				b.WriteString(sub.Reason())
+				b.WriteString(reason)
 			} else {
 				b.WriteString(`""`)
 			}
@@ -261,9 +262,9 @@ func (d ConditionsAwareDecision) Reason() string {
 // (if Allow/Deny/NoOpinion/ConditionsMap), or an aggregated error (if Union).
 func (d ConditionsAwareDecision) Error() error {
 	if d.IsUnion() {
-		errlist := make([]error, len(d.union))
-		for i, sub := range d.union {
-			errlist[i] = sub.Error()
+		errlist := make([]error, len(d.union.inner))
+		for i, sub := range d.union.inner {
+			errlist[i] = sub.d.Error()
 		}
 		return utilerrors.NewAggregate(errlist)
 	}
@@ -276,11 +277,11 @@ func (d ConditionsAwareDecision) String() string {
 		// No need to take d.reason or d.err into account, as they are always zero for the union.
 		b := strings.Builder{}
 		b.WriteString("Union[")
-		for i, sub := range d.union {
+		for i, sub := range d.union.inner {
 			if i != 0 {
 				b.WriteString(", ")
 			}
-			b.WriteString(sub.String())
+			b.WriteString(sub.d.String())
 		}
 		b.WriteByte(']')
 		return b.String()
@@ -312,6 +313,21 @@ func (d ConditionsAwareDecision) String() string {
 	// Deny is written such that if none of the other modes apply,
 	// IsDenied() is true.
 	return fmt.Sprintf("Deny%s", paramsStr())
+}
+
+func (d ConditionsAwareDecision) PossibleDecisions() sets.Set[Decision] {
+	switch {
+	case d.IsAllow():
+		return sets.New(DecisionAllow)
+	case d.IsNoOpinion():
+		return sets.New(DecisionNoOpinion)
+	case d.IsConditionsMap():
+		return d.ConditionsMap().PossibleDecisions()
+	case d.IsUnion():
+		return d.union.PossibleDecisions()
+	default:
+		return sets.New(DecisionDeny)
+	}
 }
 
 // ConditionsMap is a map of conditions of a given type, and represents
@@ -488,6 +504,17 @@ func (c ConditionsMap) AllowConditions() iter.Seq[Condition] {
 			}
 		}
 	}
+}
+
+func (c ConditionsMap) PossibleDecisions() sets.Set[Decision] {
+	possibleDecisions := sets.New(DecisionNoOpinion)
+	if len(c.allowConditions) > 0 {
+		possibleDecisions.Insert(DecisionAllow)
+	}
+	if len(c.denyConditions) > 0 {
+		possibleDecisions.Insert(DecisionDeny)
+	}
+	return possibleDecisions
 }
 
 // MaxConditionsPerMap is the maximum number of conditions allowed in a single ConditionsMap.
@@ -778,11 +805,6 @@ func deepCopyConditions(originals []Condition) []Condition {
 }
 
 // PartialEvaluateConditionFunc allows partially evaluating a condition, returning Unevaluatable if a truth value or error cannot be assigned.
-// TODO: Just make this (*bool, error) instead, with
-// True: &true, nil
-// False: &false, nil
-// Error: <any>, non-nil
-// Unevaluatable: nil, nil instead of the ConditionEvaluationResult type?
 type PartialEvaluateConditionFunc func(ctx context.Context, condition Condition, data ConditionsData) ConditionEvaluationResult
 
 // PartiallyEvaluateConditionsAwareDecision evaluates the ConditionsAwareDecision primarily using any conditions' own Evaluate() function,
@@ -801,15 +823,16 @@ func PartiallyEvaluateConditionsAwareDecision(ctx context.Context, unevaluatedDe
 	}
 
 	if unevaluatedDecision.IsUnion() {
-		var newDecisionChain []ConditionsAwareDecision
+		var newDecisionChain ConditionsAwareDecisionUnion
 		// Recursively walk through the decision DAG in a depth-first manner.
+
 		collectAndShortcircuitOnly := false
-		for _, unevaluatedSubDecision := range unevaluatedDecision.UnionedDecisions() {
+		for authorizerName, unevaluatedSubDecision := range unevaluatedDecision.UnionedDecisions() {
 			// If collectAndShortcircuitOnly == true, a conditional decision that couldn't
 			// be evaluated to Allow/Deny/NoOpinion was encountered during a previous
 			// loop iteration. Then all latter decisions stay unevaluated.
 			if collectAndShortcircuitOnly {
-				newDecisionChain = append(newDecisionChain, unevaluatedSubDecision)
+				newDecisionChain.Add(authorizerName, unevaluatedSubDecision)
 				continue
 			}
 
@@ -820,7 +843,7 @@ func PartiallyEvaluateConditionsAwareDecision(ctx context.Context, unevaluatedDe
 
 			// Always preserve the indices and ordering of the decisions, as this ordering
 			// is used by the union authorizer to pair a decision with its
-			newDecisionChain = append(newDecisionChain, possiblyEvaluatedSubDecision)
+			newDecisionChain.Add(authorizerName, possiblyEvaluatedSubDecision)
 
 			// We successfully evaluated to something, and because all previously-seen
 			// decisions were NoOpinions, we can simplify to Allow/Deny here.
@@ -845,25 +868,42 @@ func PartiallyEvaluateConditionsAwareDecision(ctx context.Context, unevaluatedDe
 		}
 		// If we got here, the first not-NoOpinion decision was Union or ConditionsMap, which means
 		// we cannot simplify it. Return a possibly refined decision chain for webhooking.
-		return ConditionsAwareDecisionUnion(newDecisionChain...)
+		return newDecisionChain.ToDecision()
 	}
 
 	// Otherwise, the decision is a ConditionsMap. Try to evaluate it using the builtin evaluator.
 	return evaluateConditionsMapInternal(ctx, unevaluatedDecision.ConditionsMap(), data, evaluateConditionFn)
 }
 
-// conditionsAwareDecisionUnionSlice is an unioned conditions-aware decision type.
-// Order of the decisions matter.
-type conditionsAwareDecisionUnionSlice []ConditionsAwareDecision
+type namedConditionsAwareDecision struct {
+	authorizerName string
+	d              ConditionsAwareDecision
+}
+
+// ConditionsAwareDecisionUnion is an unioned conditions-aware decision type, keyed by authorizer name.
+type ConditionsAwareDecisionUnion struct {
+	inner []namedConditionsAwareDecision
+	errs  []error
+}
+
+func (unionMap *ConditionsAwareDecisionUnion) Add(authorizerName string, d ConditionsAwareDecision) {
+	if slices.ContainsFunc(unionMap.inner, func(nd namedConditionsAwareDecision) bool { return nd.authorizerName == authorizerName }) {
+		unionMap.errs = append(unionMap.errs, fmt.Errorf("duplicate authorizerName %q", authorizerName))
+		return
+	}
+	if unionMap.ContainsAllowOrDeny() {
+		return // all items after the first concrete Allow or Deny aren't anyways used in evaluation, so they are not added to inner
+	}
+	unionMap.inner = append(unionMap.inner, namedConditionsAwareDecision{authorizerName: authorizerName, d: d})
+}
 
 // FailureDecision returns either a Deny or NoOpinion decision to fail closed
 // whenever processing a decision fails. If the decision contains one or
 // more Deny decisions or conditions, one must fail closed with Deny, as that could or would
 // have been the if the condition evaluation did not error. Otherwise, NoOpinion is returned.
-// TODO: We might want to make this a boolean, saying "fail with deny" instead, which only gives two, not three reasonable options.
-func (unionSlice conditionsAwareDecisionUnionSlice) FailureDecision() Decision {
-	for _, subDecision := range unionSlice {
-		if subDecision.FailureDecision() == DecisionDeny {
+func (unionMap ConditionsAwareDecisionUnion) FailureDecision() Decision {
+	for _, subDecision := range unionMap.inner {
+		if subDecision.d.FailureDecision() == DecisionDeny {
 			return DecisionDeny
 		}
 	}
@@ -872,78 +912,86 @@ func (unionSlice conditionsAwareDecisionUnionSlice) FailureDecision() Decision {
 
 // ContainsAllowOrDeny returns true whether there union contains at least one
 // Allow or Deny decision within the unioned decisions.
-func (unionSlice conditionsAwareDecisionUnionSlice) ContainsAllowOrDeny() bool {
-	for _, subDecision := range unionSlice {
-		if subDecision.ContainsAllowOrDeny() {
+func (unionMap ConditionsAwareDecisionUnion) ContainsAllowOrDeny() bool {
+	for _, subDecision := range unionMap.inner {
+		if subDecision.d.ContainsAllowOrDeny() {
 			return true
 		}
 	}
 	return false
 }
 
+func (unionMap ConditionsAwareDecisionUnion) PossibleDecisions() sets.Set[Decision] {
+	union := sets.New(DecisionNoOpinion) // Default response is NoOpinion
+	for _, subDecision := range unionMap.inner {
+		union.Insert(subDecision.d.PossibleDecisions().UnsortedList()...)
+		// Short-circuit on the first Allow or Deny, after that, decisions don't matter.
+		if unionMap.ContainsAllowOrDeny() {
+			// When there is an Allow or Deny leaf somewhere, the default response NoOpinion won't ever be returned
+			union.Delete(DecisionNoOpinion)
+			return union
+		}
+	}
+	return union
+}
+
 // ConditionsAwareDecisionUnion unions some amount of decisions together into a tree structure,
 // where Allow/Deny/NoOpinion/ConditionsMap decisions are leafs, and Union decisions are internal
 // tree nodes.
-func ConditionsAwareDecisionUnion(decisions ...ConditionsAwareDecision) ConditionsAwareDecision {
-	// If there are no decisions, no authorizer had any opinion about the request
-	// This also ensures the invariant that a Union decision always has len(d.union) != 0.
-	if len(decisions) == 0 {
-		return ConditionsAwareDecisionNoOpinion("", nil)
+func (unionMap ConditionsAwareDecisionUnion) ToDecision() ConditionsAwareDecision {
+	// If we encountered any errors (e.g. duplicate authorizernames) while building the slice,
+	// fail closed.
+	if len(unionMap.errs) != 0 {
+		err := utilerrors.NewAggregate(unionMap.errs)
+		if unionMap.FailureDecision() == DecisionDeny {
+			return ConditionsAwareDecisionDeny("failed closed", err)
+		}
+		return ConditionsAwareDecisionNoOpinion("failed closed", err)
 	}
 
-	// No need to wrap only one element
-	if len(decisions) == 1 {
-		// No need to wrap one Allow/Deny/NoOpinion in a union
-		if decisions[0].IsUnconditional() {
-			return decisions[0]
-		}
-
-		// However, ConditionsMap and Union sub-decisions must always be wrapped, such that
-		// the DAG structure is preserved (the union type is an internal node, which is used
-		// to route evaluation of the ConditionsMap to the right authorizer).
-		return ConditionsAwareDecision{
-			decisionType: conditionsAwareDecisionTypeUnion,
-			union:        decisions,
-		}
-	}
-
-	// Search for the first decision that is not a NoOpinion
-	onlyNoOpinion := true
-	reasonlist := make([]string, 0, len(decisions))
-	errlist := make([]error, 0, len(decisions))
-	for i, d := range decisions {
-		if d.IsNoOpinion() {
-			if reason := d.Reason(); len(reason) != 0 {
-				reasonlist = append(reasonlist, fmt.Sprintf("%d: %s", i, d.Reason()))
+	// If we only have one possible decision, it can readily be evaluated without evaluation.
+	if possibleDecisions := unionMap.PossibleDecisions(); possibleDecisions.Len() == 1 {
+		onlyPossibleDecision := possibleDecisions.UnsortedList()[0]
+		// Collect at least the certainly deciding decisions' reasons and errors. TODO: could we expand this?
+		reasonlist := make([]string, 0, len(unionMap.inner))
+		errlist := make([]error, 0, len(unionMap.inner))
+		for i, subDecision := range unionMap.inner {
+			if (onlyPossibleDecision == DecisionAllow && subDecision.d.IsAllow()) ||
+				(onlyPossibleDecision == DecisionNoOpinion && subDecision.d.IsNoOpinion()) ||
+				(onlyPossibleDecision == DecisionDeny && subDecision.d.IsDeny()) {
+				if reason := subDecision.d.Reason(); len(reason) != 0 {
+					reasonlist = append(reasonlist, fmt.Sprintf("%d: %s", i, reason))
+				}
+				if err := subDecision.d.Error(); err != nil {
+					errlist = append(errlist, fmt.Errorf("%d: %w", i, err))
+				}
 			}
-			if err := d.Error(); err != nil {
-				errlist = append(errlist, fmt.Errorf("%d: %w", i, err))
-			}
-			continue
 		}
-		onlyNoOpinion = false
 
-		// If we see an Allow or Deny, and previously only saw NoOpinions, return Allow/Deny
-		if d.IsAllow() || d.IsDeny() {
-			return d
+		switch onlyPossibleDecision {
+		case DecisionAllow:
+			// For example, a union of decisions with possible outcomes "[Allow, NoOpinion], [NoOpinion], [Allow], [Deny]" yields possible outcome [Allow] always,
+			// regardless of how the ConditionsMap in the beginning evaluates.
+			return ConditionsAwareDecisionAllow(strings.Join(reasonlist, ", "), utilerrors.NewAggregate(errlist))
+		case DecisionNoOpinion:
+			// This happens for instance when called on the empty slice, then the only possible mode is NoOpinion
+			// This can only happen if there were only NoOpinions in the chain, so we can gather them here. TODO: (formally) verify this
+			return ConditionsAwareDecisionNoOpinion(strings.Join(reasonlist, ", "), utilerrors.NewAggregate(errlist))
+		case DecisionDeny:
+			// For example, a union of decisions with possible outcomes "[Deny, NoOpinion], [NoOpinion], [Deny], [Allow]" yields possible outcome [Deny] always,
+			// regardless of how the ConditionsMap in the beginning evaluates.
+			return ConditionsAwareDecisionDeny(strings.Join(reasonlist, ", "), utilerrors.NewAggregate(errlist))
+		default:
+			return ConditionsAwareDecisionDeny("failed closed", errors.New("should be unreachable: ConditionsAwareDecision should only contain Allow/Deny/NoOpinion"))
 		}
-		// If a ConditionsMap or Union decision is the first not-NoOpinion response,
-		// we cannot simplify it in any way.
-		break
-	}
-	// TODO: Should we cut all decisions in the chain after we've seen an Allow or Deny?
-
-	// If we got through this loop without setting onlyNoOpinion => false, all elements were NoOpinions
-	if onlyNoOpinion {
-		return ConditionsAwareDecisionNoOpinion(strings.Join(reasonlist, ", "), utilerrors.NewAggregate(errlist))
 	}
 
-	// By this we know that:
-	// - There are at least two elements
-	// - The first not-NoOpinion decision in the list is either Conditional or Union => at least one not-NoOpinion
 	return ConditionsAwareDecision{
 		decisionType: conditionsAwareDecisionTypeUnion,
-		union:        decisions,
+		union: ConditionsAwareDecisionUnion{
+			// avoid assigning unionMap here, as then unionMap.Add could change the returned decision
+			inner: slices.Clone(unionMap.inner),
+		},
 	}
 }
 
