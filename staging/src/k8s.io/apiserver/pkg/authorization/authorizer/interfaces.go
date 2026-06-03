@@ -18,6 +18,7 @@ package authorizer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -118,6 +119,10 @@ type Authorizer interface {
 	// return authorizer.DecisionDeny, "", authorizer.ErrorConditionEvaluationNotSupported
 	EvaluateConditions(ctx context.Context, decision ConditionsAwareDecision, data ConditionsData) (authorized Decision, reason string, err error)
 }
+
+// ErrorConditionEvaluationNotSupported is returned by authorizer implementations
+// that do not support condition evaluation.
+var ErrorConditionEvaluationNotSupported = errors.New("condition evaluation not supported")
 
 // AuthorizerFunc implements Authorizer
 var _ Authorizer = AuthorizerFunc(nil)
