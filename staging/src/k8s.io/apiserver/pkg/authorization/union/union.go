@@ -107,7 +107,7 @@ func (authzHandler unionAuthzHandler) EvaluateConditions(ctx context.Context, un
 	// AuthorizeConditionsAware(). However, unionAuthzHandler.AuthorizeConditionsAware never returns a "bare" ConditionsMap,
 	// but either Allow/Deny/NoOpinion (the case above), or Union[...], even if the union only contains one element.
 	if unevaluatedDecision.IsConditionsMap() {
-		return unevaluatedDecision.FailClosedDecision(), "failed closed", errors.New("union authorizer never returns a bare ConditionsMap, cannot evaluate")
+		return unevaluatedDecision.FailureDecision(), "failed closed", errors.New("union authorizer never returns a bare ConditionsMap, cannot evaluate")
 	}
 
 	// This logic directly maps 1:1 with Authorize(), now that we get unconditional responses from the evaluation process.

@@ -332,7 +332,7 @@ func (a *evalTestAuthz) EvaluateConditions(ctx context.Context, decision authori
 		return decision.UnconditionalParts()
 	}
 	if decision.IsUnion() {
-		return decision.FailClosedDecision(), "failed closed", errors.New("evalTestAuthz never returns Union decisions, and cannot thus evaluate them")
+		return decision.FailureDecision(), "failed closed", errors.New("evalTestAuthz never returns Union decisions, and cannot thus evaluate them")
 	}
 	return a.evalDecision, "", a.evalErr
 }

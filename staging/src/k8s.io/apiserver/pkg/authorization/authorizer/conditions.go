@@ -187,23 +187,23 @@ func (d ConditionsAwareDecision) UnconditionalParts() (Decision, string, error) 
 		// For the use-case described above with regards to calling this function in Authorize, not returning
 		// an error is important, as it is valid to always fail closed, as if this happens, no unconditional
 		// permissions were given the requestor.
-		return d.FailClosedDecision(), "failed closed: tried to return conditional decision to conditions-unaware authorizer", nil
+		return d.FailureDecision(), "failed closed: tried to return conditional decision to conditions-unaware authorizer", nil
 	}
 }
 
-// FailClosedDecision returns either a Deny or NoOpinion decision to fail closed
+// FailureDecision returns either a Deny or NoOpinion decision to fail closed
 // whenever processing a decision fails. If the decision contains one or
 // more Deny decisions or conditions, one must fail closed with Deny, as that could or would
 // have been the if the condition evaluation did not error. Otherwise, NoOpinion is returned.
-func (d ConditionsAwareDecision) FailClosedDecision() Decision {
+func (d ConditionsAwareDecision) FailureDecision() Decision {
 	if d.IsAllow() || d.IsNoOpinion() {
 		return DecisionNoOpinion
 	}
 	if d.IsConditionsMap() {
-		return d.conditionsMap.FailClosedDecision()
+		return d.conditionsMap.FailureDecision()
 	}
 	if d.IsUnion() {
-		return d.union.FailClosedDecision()
+		return d.union.FailureDecision()
 	}
 	// => d.IsDenied() == true
 	return DecisionDeny
@@ -329,11 +329,11 @@ type ConditionsMap struct {
 	allowConditions     []Condition
 }
 
-// FailClosedDecision returns either a Deny or NoOpinion decision to fail closed
+// FailureDecision returns either a Deny or NoOpinion decision to fail closed
 // whenever processing a decision fails. If the decision contains one or
 // more Deny decisions or conditions, one must fail closed with Deny, as that could or would
 // have been the if the condition evaluation did not error. Otherwise, NoOpinion is returned.
-func (c ConditionsMap) FailClosedDecision() Decision {
+func (c ConditionsMap) FailureDecision() Decision {
 	if len(c.denyConditions) > 0 {
 		return DecisionDeny
 	}
@@ -414,7 +414,6 @@ func (r ConditionEvaluationResult) IsUnevaluatable() bool {
 // Condition represents one authorization condition that is part of a ConditionsMap.
 // The effect of a condition is defined by whether it is part of the Deny/NoOpinion/Allow
 // conditions list in the ConditionsMap.
-// TODO: Make this a struct, again, with an optional EvaluateFunc
 type Condition interface {
 	// GetID uniquely identifies this condition within the scope of the authorizer
 	// that authored it. Validated as a Kubernetes label key.
@@ -782,14 +781,14 @@ func deepCopyConditions(originals []Condition) []Condition {
 // Order of the decisions matter.
 type conditionsAwareDecisionUnionSlice []ConditionsAwareDecision
 
-// FailClosedDecision returns either a Deny or NoOpinion decision to fail closed
+// FailureDecision returns either a Deny or NoOpinion decision to fail closed
 // whenever processing a decision fails. If the decision contains one or
 // more Deny decisions or conditions, one must fail closed with Deny, as that could or would
 // have been the if the condition evaluation did not error. Otherwise, NoOpinion is returned.
 // TODO: We might want to make this a boolean, saying "fail with deny" instead, which only gives two, not three reasonable options.
-func (unionSlice conditionsAwareDecisionUnionSlice) FailClosedDecision() Decision {
+func (unionSlice conditionsAwareDecisionUnionSlice) FailureDecision() Decision {
 	for _, subDecision := range unionSlice {
-		if subDecision.FailClosedDecision() == DecisionDeny {
+		if subDecision.FailureDecision() == DecisionDeny {
 			return DecisionDeny
 		}
 	}

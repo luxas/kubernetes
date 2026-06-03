@@ -602,9 +602,9 @@ func TestConditionsAwareDecision(t *testing.T) {
 					if containsAllowOrDeny != tt.wantContainsAllowOrDeny {
 						t.Errorf("ContainsAllowOrDeny() = %v, want %v", containsAllowOrDeny, tt.wantContainsAllowOrDeny)
 					}
-					failClosedDecisionIsDeny := d.FailClosedDecision() == authorizer.DecisionDeny
+					failClosedDecisionIsDeny := d.FailureDecision() == authorizer.DecisionDeny
 					if failClosedDecisionIsDeny != tt.wantFailClosedIsDeny {
-						t.Errorf("FailClosedDecision() = %v, want %v", failClosedDecisionIsDeny, tt.wantFailClosedIsDeny)
+						t.Errorf("FailureDecision() = %v, want %v", failClosedDecisionIsDeny, tt.wantFailClosedIsDeny)
 					}
 					gotReason := d.Reason()
 					if gotReason != tt.wantReason {
@@ -705,7 +705,7 @@ func (a sampleAuthorizer) EvaluateConditions(ctx context.Context, unevaluated au
 		return unconditionalParts(unevaluated)
 	}
 	if !unevaluated.IsConditionsMap() {
-		// TODO: FailClosedDecision here?
+		// TODO: FailureDecision here?
 		return authorizer.DecisionDeny, "failed closed", errors.New("can only evaluate unconditional or ConditionsMap decisions")
 	}
 
@@ -1006,21 +1006,21 @@ func celEvaluateConditions(ctx context.Context, conditionsMap authorizer.Conditi
 		cel.Variable("oldObject", cel.DynType),
 	)
 	if err != nil {
-		return conditionsMap.FailClosedDecision(), "failed closed", fmt.Errorf("failed to create CEL env: %w", err)
+		return conditionsMap.FailureDecision(), "failed closed", fmt.Errorf("failed to create CEL env: %w", err)
 	}
 
 	if data.AdmissionControl == nil {
-		return conditionsMap.FailClosedDecision(), "failed closed", errors.New("evaluating a CEL condition requires non-nil data.AdmissionControl")
+		return conditionsMap.FailureDecision(), "failed closed", errors.New("evaluating a CEL condition requires non-nil data.AdmissionControl")
 	}
 
 	obj, err := objectToResolveVal(data.AdmissionControl.GetObject())
 	if err != nil {
-		return conditionsMap.FailClosedDecision(), "failed closed", fmt.Errorf("failed to convert object to CEL ref.Val: %w", err)
+		return conditionsMap.FailureDecision(), "failed closed", fmt.Errorf("failed to convert object to CEL ref.Val: %w", err)
 	}
 
 	oldObj, err := objectToResolveVal(data.AdmissionControl.GetOldObject())
 	if err != nil {
-		return conditionsMap.FailClosedDecision(), "failed closed", fmt.Errorf("failed to convert object to CEL ref.Val: %w", err)
+		return conditionsMap.FailureDecision(), "failed closed", fmt.Errorf("failed to convert object to CEL ref.Val: %w", err)
 	}
 
 	vars := map[string]any{
@@ -1078,7 +1078,7 @@ func unconditionalParts(d authorizer.ConditionsAwareDecision) (authorizer.Decisi
 		// For the use-case described above with regards to calling this function in Authorize, not returning
 		// an error is important, as it is valid to always fail closed, as if this happens, no unconditional
 		// permissions were given the requestor.
-		// TODO: FailClosedDecision here?
+		// TODO: FailureDecision here?
 		return authorizer.DecisionDeny, "failed closed: tried to return conditional decision to conditions-unaware authorizer", nil
 	}
 }
