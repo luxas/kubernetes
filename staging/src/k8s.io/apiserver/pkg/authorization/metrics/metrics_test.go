@@ -209,6 +209,10 @@ func (*dummyAuthorizer) EvaluateConditions(_ context.Context, _ authorizer.Condi
 	return authorizer.DecisionDeny, "", authorizer.ErrorConditionEvaluationNotSupported
 }
 
+func (*dummyAuthorizer) AuthorizerName() string {
+	return "test-dummyAuthorizer"
+}
+
 type dummyConditionalAuthorizer struct {
 	authorizeDecision authorizer.ConditionsAwareDecision
 	evalDecision      authorizer.Decision
@@ -234,4 +238,8 @@ func (d *dummyConditionalAuthorizer) ConditionsAwareAuthorize(ctx context.Contex
 
 func (d *dummyConditionalAuthorizer) EvaluateConditions(_ context.Context, _ authorizer.ConditionsAwareDecision, _ authorizer.ConditionsData) (authorizer.Decision, string, error) {
 	return d.evalDecision, "", d.evalErr
+}
+
+func (*dummyConditionalAuthorizer) AuthorizerName() string {
+	return "test-dummyConditionalAuthorizer"
 }

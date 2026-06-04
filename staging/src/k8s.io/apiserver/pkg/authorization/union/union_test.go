@@ -50,6 +50,10 @@ func (*mockAuthzHandler) EvaluateConditions(_ context.Context, _ authorizer.Cond
 	return authorizer.DecisionDeny, "", authorizer.ErrorConditionEvaluationNotSupported
 }
 
+func (*mockAuthzHandler) AuthorizerName() string {
+	return "test-mockAuthzHandler"
+}
+
 func TestAuthorizationSecondPasses(t *testing.T) {
 	handler1 := &mockAuthzHandler{decision: authorizer.DecisionNoOpinion}
 	handler2 := &mockAuthzHandler{decision: authorizer.DecisionAllow}
@@ -335,6 +339,10 @@ func (a *evalTestAuthz) EvaluateConditions(ctx context.Context, decision authori
 		return decision.FailureDecision(), "failed closed", errors.New("evalTestAuthz never returns Union decisions, and cannot thus evaluate them")
 	}
 	return a.evalDecision, "", a.evalErr
+}
+
+func (*evalTestAuthz) AuthorizerName() string {
+	return "test-evalTestAuthz"
 }
 
 // TestUnionEvaluateConditions tests the full Authorize + EvaluateConditions flow
@@ -855,6 +863,10 @@ func (c *countingAuthz) ConditionsAwareAuthorize(ctx context.Context, attrs auth
 func (c *countingAuthz) EvaluateConditions(ctx context.Context, d authorizer.ConditionsAwareDecision, data authorizer.ConditionsData) (authorizer.Decision, string, error) {
 	c.evaluateCondCalls++
 	return c.inner.EvaluateConditions(ctx, d, data)
+}
+
+func (c *countingAuthz) AuthorizerName() string {
+	return c.inner.AuthorizerName()
 }
 
 // TestUnionConditionsAwareAuthorizeShortCircuit verifies that once an authorizer returns

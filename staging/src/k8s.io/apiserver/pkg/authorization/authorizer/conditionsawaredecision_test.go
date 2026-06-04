@@ -986,6 +986,10 @@ func (a sampleAuthorizer) EvaluateConditions(ctx context.Context, unevaluated au
 	return celEvaluateConditions(ctx, unevaluated.ConditionsMap(), data)
 }
 
+func (a sampleAuthorizer) AuthorizerName() string {
+	return "sampleAuthorizer"
+}
+
 func objWithLabels(lbls map[string]string) *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{Object: map[string]any{}}
 	if len(lbls) > 0 {

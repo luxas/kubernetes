@@ -27,6 +27,7 @@ package union
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -156,6 +157,16 @@ func (authzHandler unionAuthzHandler) EvaluateConditions(ctx context.Context, un
 	}
 
 	return authorizer.DecisionNoOpinion, strings.Join(reasonlist, "\n"), utilerrors.NewAggregate(errlist)
+}
+
+// AuthorizerName returns a name for the union authorizer itself. Sub-authorizers retain
+// their own names; this is just a label for the wrapping union.
+func (authzHandler unionAuthzHandler) AuthorizerName() string {
+	delegateNames := make([]string, 0, len(authzHandler))
+	for _, a := range authzHandler {
+		delegateNames = append(delegateNames, a.AuthorizerName())
+	}
+	return fmt.Sprintf("authorizer.k8s.io/Union[%s]", strings.Join(delegateNames, ", "))
 }
 
 // unionAuthzRulesHandler authorizer against a chain of authorizer.RuleResolver
