@@ -55,12 +55,9 @@ func (unionMap *ConditionsAwareDecisionUnion) Add(authorizerName string, d Condi
 // whenever processing a decision fails. If the decision contains one or
 // more Deny decisions or conditions, one must fail closed with Deny, as that could or would
 // have been the if the condition evaluation did not error. Otherwise, NoOpinion is returned.
-// TODO: Use PossibleDecisions instead
 func (unionMap ConditionsAwareDecisionUnion) FailureDecision() Decision {
-	for _, subDecision := range unionMap.inner {
-		if subDecision.d.FailureDecision() == DecisionDeny {
-			return DecisionDeny
-		}
+	if unionMap.PossibleDecisions().Has(DecisionDeny) {
+		return DecisionDeny
 	}
 	return DecisionNoOpinion
 }

@@ -185,17 +185,10 @@ func (d ConditionsAwareDecision) UnconditionalParts() (Decision, string, error) 
 // more Deny decisions or conditions, one must fail closed with Deny, as that could or would
 // have been the if the condition evaluation did not error. Otherwise, NoOpinion is returned.
 func (d ConditionsAwareDecision) FailureDecision() Decision {
-	if d.IsAllow() || d.IsNoOpinion() {
-		return DecisionNoOpinion
+	if d.PossibleDecisions().Has(DecisionDeny) {
+		return DecisionDeny
 	}
-	if d.IsConditionsMap() {
-		return d.conditionsMap.FailureDecision()
-	}
-	if d.IsUnion() {
-		return d.union.FailureDecision()
-	}
-	// => d.IsDenied() == true
-	return DecisionDeny
+	return DecisionNoOpinion
 }
 
 // ContainsAllowOrDeny returns true whether there union contains at least one

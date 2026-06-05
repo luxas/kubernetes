@@ -47,7 +47,7 @@ type ConditionsMap struct {
 // more Deny decisions or conditions, one must fail closed with Deny, as that could or would
 // have been the if the condition evaluation did not error. Otherwise, NoOpinion is returned.
 func (c ConditionsMap) FailureDecision() Decision {
-	if len(c.denyConditions) > 0 {
+	if c.PossibleDecisions().Has(DecisionDeny) {
 		return DecisionDeny
 	}
 	return DecisionNoOpinion
