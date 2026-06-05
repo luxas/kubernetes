@@ -634,6 +634,350 @@ theorem FailClosedDecision_AllowOrNoOpinion (c : ConditionsMap) :
   · left; simp [h]
 
 -- ============================================================================
+-- Constructor: ConditionsAwareDecisionConditionsMap (conditions.go:533-635)
+-- ============================================================================
+--
+-- Faithful to Go's constructor: validates IDs (uniqueness + non-empty for label-key
+-- validity), enforces a maximum count (`MaxConditionsPerMap = 128`), dispatches by
+-- effect, fails closed on errors (Deny if any deny effect was seen, otherwise NoOpinion),
+-- handles the feature gate, and yields NoOpinion for an empty result.
+
+/-- Maximum conditions per `ConditionsMap` (Go conditions.go:528-530). -/
+def MaxConditionsPerMap : Nat := 128
+
+/-- Possible outcomes of `ConditionsAwareDecisionConditionsMap`. Mirrors what Go's
+    constructor can return: a final `Decision` (Deny/NoOpinion from fail-closed or
+    feature gate paths) or a `Built` ConditionsMap. -/
+inductive ConstructorResult where
+  | Deny
+  | NoOpinion
+  | Built (cm : ConditionsMap)
+
+/-- Builder state threaded through the constructor's loop. Mirrors Go's per-effect
+    accumulator slices plus the `seenIDs` set and the error list. `hasDenyEffect` is
+    *not* tracked inline here — it's computed in one pass at the call site. -/
+structure BuilderState where
+  denyConds      : List Condition
+  noOpinionConds : List Condition
+  allowConds     : List Condition
+  seenIds        : List String
+  errors         : List String   -- non-empty ⇒ fail-closed at the end
+
+def BuilderState.empty : BuilderState :=
+  ⟨[], [], [], [], []⟩
+
+/-- Simplified label-key validation (Go uses `content.IsLabelKey`). We require non-empty;
+    any further character-class restrictions are orthogonal to the constructor's logic. -/
+def isValidLabelKey (s : String) : Bool := !s.isEmpty
+
+/-- Process one condition, updating builder state per Go's loop body (conditions.go:552-598).
+    Duplicate ID or invalid ID ⇒ record an error and skip dispatch. Otherwise dispatch
+    by effect into the matching bucket. -/
+def processCondition (state : BuilderState) (cond : Condition) : BuilderState :=
+  if cond.id ∈ state.seenIds then
+    { state with errors := s!"duplicate condition ID \"{cond.id}\"" :: state.errors }
+  else if !isValidLabelKey cond.id then
+    { state with errors := s!"invalid condition ID \"{cond.id}\"" :: state.errors,
+                 seenIds := cond.id :: state.seenIds }
+  else
+    let state := { state with seenIds := cond.id :: state.seenIds }
+    match cond.effect with
+    | .Deny      => { state with denyConds      := state.denyConds      ++ [cond] }
+    | .NoOpinion => { state with noOpinionConds := state.noOpinionConds ++ [cond] }
+    | .Allow     => { state with allowConds     := state.allowConds     ++ [cond] }
+
+/-- True iff some condition in the input has `effect = .Deny`. Mirrors Go's
+    `hasDenyEffect` flag, computed in a single linear scan. -/
+def listHasDenyEffect (conditions : List Condition) : Bool :=
+  conditions.any (fun c => match c.effect with | .Deny => true | _ => false)
+
+/-- Constructor mirroring Go's `ConditionsAwareDecisionConditionsMap` (conditions.go:533-635).
+
+    Steps:
+    1. If `conditions.length > MaxConditionsPerMap` ⇒ `.Deny` (fail-closed, too many).
+    2. Process each condition via `processCondition`: dispatch by effect, accumulate
+       error messages for duplicate or invalid IDs.
+    3. If any errors: fail-closed (`.Deny` if any deny effect was seen, else `.NoOpinion`).
+    4. If the resulting map would be empty: `.NoOpinion`.
+    5. If `featureGateOn = false`: fail-closed as in step 3.
+    6. Otherwise: `.Built` the ConditionsMap.
+-/
+def ConditionsAwareDecisionConditionsMap
+    (conditions : List Condition) (featureGateOn : Bool := true) : ConstructorResult :=
+  if conditions.length > MaxConditionsPerMap then .Deny
+  else if !(conditions.foldl processCondition BuilderState.empty).errors.isEmpty then
+    (if listHasDenyEffect conditions then .Deny else .NoOpinion)
+  else if (conditions.foldl processCondition BuilderState.empty).denyConds.length +
+          (conditions.foldl processCondition BuilderState.empty).noOpinionConds.length +
+          (conditions.foldl processCondition BuilderState.empty).allowConds.length = 0 then
+    .NoOpinion
+  else if !featureGateOn then
+    (if listHasDenyEffect conditions then .Deny else .NoOpinion)
+  else
+    .Built
+      { denyConditions      := (conditions.foldl processCondition BuilderState.empty).denyConds
+        noOpinionConditions :=
+          (conditions.foldl processCondition BuilderState.empty).noOpinionConds
+        allowConditions     :=
+          (conditions.foldl processCondition BuilderState.empty).allowConds }
+
+-- ============================================================================
+-- Constructor invariants
+-- ============================================================================
+
+/-- The condition lists are built up monotonically — `processCondition` only *appends*
+    to whichever bucket it touches, never removes. Useful for the per-bucket
+    "every element has the right effect" theorems. -/
+theorem processCondition_denyConds_mono (s : BuilderState) (cond : Condition) :
+    ∃ extra, (processCondition s cond).denyConds = s.denyConds ++ extra ∧
+             ∀ c ∈ extra, c.effect = .Deny := by
+  unfold processCondition
+  split
+  · -- duplicate ID branch — no append
+    exact ⟨[], by simp, by simp⟩
+  · split
+    · -- invalid ID branch — no append
+      exact ⟨[], by simp, by simp⟩
+    · -- valid ID, dispatch by effect
+      cases hef : cond.effect with
+      | Deny =>
+        refine ⟨[cond], ?_, ?_⟩
+        · simp [hef]
+        · intro c hc
+          simp at hc; rw [hc]; exact hef
+      | NoOpinion =>
+        exact ⟨[], by simp [hef], by simp⟩
+      | Allow =>
+        exact ⟨[], by simp [hef], by simp⟩
+
+theorem processCondition_noOpinionConds_mono (s : BuilderState) (cond : Condition) :
+    ∃ extra, (processCondition s cond).noOpinionConds = s.noOpinionConds ++ extra ∧
+             ∀ c ∈ extra, c.effect = .NoOpinion := by
+  unfold processCondition
+  split
+  · exact ⟨[], by simp, by simp⟩
+  · split
+    · exact ⟨[], by simp, by simp⟩
+    · cases hef : cond.effect with
+      | Deny => exact ⟨[], by simp [hef], by simp⟩
+      | NoOpinion =>
+        refine ⟨[cond], ?_, ?_⟩
+        · simp [hef]
+        · intro c hc; simp at hc; rw [hc]; exact hef
+      | Allow => exact ⟨[], by simp [hef], by simp⟩
+
+theorem processCondition_allowConds_mono (s : BuilderState) (cond : Condition) :
+    ∃ extra, (processCondition s cond).allowConds = s.allowConds ++ extra ∧
+             ∀ c ∈ extra, c.effect = .Allow := by
+  unfold processCondition
+  split
+  · exact ⟨[], by simp, by simp⟩
+  · split
+    · exact ⟨[], by simp, by simp⟩
+    · cases hef : cond.effect with
+      | Deny => exact ⟨[], by simp [hef], by simp⟩
+      | NoOpinion => exact ⟨[], by simp [hef], by simp⟩
+      | Allow =>
+        refine ⟨[cond], ?_, ?_⟩
+        · simp [hef]
+        · intro c hc; simp at hc; rw [hc]; exact hef
+
+/-- Folding `processCondition` over a list preserves the per-bucket effect invariant:
+    every condition in `denyConds` has effect `.Deny`. -/
+theorem foldl_processCondition_deny_effect (conditions : List Condition)
+    (s : BuilderState) (h_s : ∀ c ∈ s.denyConds, c.effect = .Deny) :
+    ∀ c ∈ (conditions.foldl processCondition s).denyConds, c.effect = .Deny := by
+  induction conditions generalizing s with
+  | nil => simpa using h_s
+  | cons hd rest ih =>
+    apply ih
+    intro c hc
+    obtain ⟨extra, hext, hef⟩ := processCondition_denyConds_mono s hd
+    rw [hext] at hc
+    rcases List.mem_append.mp hc with hl | hr
+    · exact h_s c hl
+    · exact hef c hr
+
+theorem foldl_processCondition_noOpinion_effect (conditions : List Condition)
+    (s : BuilderState) (h_s : ∀ c ∈ s.noOpinionConds, c.effect = .NoOpinion) :
+    ∀ c ∈ (conditions.foldl processCondition s).noOpinionConds, c.effect = .NoOpinion := by
+  induction conditions generalizing s with
+  | nil => simpa using h_s
+  | cons hd rest ih =>
+    apply ih
+    intro c hc
+    obtain ⟨extra, hext, hef⟩ := processCondition_noOpinionConds_mono s hd
+    rw [hext] at hc
+    rcases List.mem_append.mp hc with hl | hr
+    · exact h_s c hl
+    · exact hef c hr
+
+theorem foldl_processCondition_allow_effect (conditions : List Condition)
+    (s : BuilderState) (h_s : ∀ c ∈ s.allowConds, c.effect = .Allow) :
+    ∀ c ∈ (conditions.foldl processCondition s).allowConds, c.effect = .Allow := by
+  induction conditions generalizing s with
+  | nil => simpa using h_s
+  | cons hd rest ih =>
+    apply ih
+    intro c hc
+    obtain ⟨extra, hext, hef⟩ := processCondition_allowConds_mono s hd
+    rw [hext] at hc
+    rcases List.mem_append.mp hc with hl | hr
+    · exact h_s c hl
+    · exact hef c hr
+
+/-- Internal lemma: only the success branch of the constructor returns `.Built`. Returns
+    the folded builder state's bucket lists matching `cm`'s, plus `length > 0`. -/
+private theorem built_iff_success
+    (conditions : List Condition) (featureGateOn : Bool) (cm : ConditionsMap)
+    (h : ConditionsAwareDecisionConditionsMap conditions featureGateOn = .Built cm) :
+    conditions.length ≤ MaxConditionsPerMap ∧
+    cm.denyConditions = (conditions.foldl processCondition BuilderState.empty).denyConds ∧
+    cm.noOpinionConditions =
+      (conditions.foldl processCondition BuilderState.empty).noOpinionConds ∧
+    cm.allowConditions = (conditions.foldl processCondition BuilderState.empty).allowConds ∧
+    (conditions.foldl processCondition BuilderState.empty).denyConds.length +
+      (conditions.foldl processCondition BuilderState.empty).noOpinionConds.length +
+      (conditions.foldl processCondition BuilderState.empty).allowConds.length > 0 := by
+  unfold ConditionsAwareDecisionConditionsMap at h
+  -- Outer: if conditions.length > MaxConditionsPerMap
+  split at h
+  · cases h  -- .Deny
+  -- !s.errors.isEmpty branch
+  split at h
+  · -- failClosed = if hasDeny then .Deny else .NoOpinion
+    split at h <;> cases h
+  -- total = 0 branch
+  split at h
+  · cases h  -- .NoOpinion
+  -- !featureGateOn branch
+  split at h
+  · split at h <;> cases h  -- failClosed
+  -- success branch
+  rename_i hlen _ htotal _
+  injection h with hcm
+  refine ⟨Nat.le_of_not_gt hlen, ?_, ?_, ?_, Nat.pos_of_ne_zero htotal⟩
+  · rw [← hcm]
+  · rw [← hcm]
+  · rw [← hcm]
+
+/-- **Property 1**: every condition in the `denyConditions` bucket of a `Built` map has
+    effect `.Deny`. -/
+theorem built_deny_have_deny_effect
+    (conditions : List Condition) (featureGateOn : Bool) (cm : ConditionsMap)
+    (h : ConditionsAwareDecisionConditionsMap conditions featureGateOn = .Built cm) :
+    ∀ c ∈ cm.denyConditions, c.effect = .Deny := by
+  obtain ⟨_, hdeny, _, _, _⟩ := built_iff_success conditions featureGateOn cm h
+  rw [hdeny]
+  exact foldl_processCondition_deny_effect conditions BuilderState.empty
+          (by simp [BuilderState.empty])
+
+theorem built_noOpinion_have_noOpinion_effect
+    (conditions : List Condition) (featureGateOn : Bool) (cm : ConditionsMap)
+    (h : ConditionsAwareDecisionConditionsMap conditions featureGateOn = .Built cm) :
+    ∀ c ∈ cm.noOpinionConditions, c.effect = .NoOpinion := by
+  obtain ⟨_, _, hno, _, _⟩ := built_iff_success conditions featureGateOn cm h
+  rw [hno]
+  exact foldl_processCondition_noOpinion_effect conditions BuilderState.empty
+          (by simp [BuilderState.empty])
+
+theorem built_allow_have_allow_effect
+    (conditions : List Condition) (featureGateOn : Bool) (cm : ConditionsMap)
+    (h : ConditionsAwareDecisionConditionsMap conditions featureGateOn = .Built cm) :
+    ∀ c ∈ cm.allowConditions, c.effect = .Allow := by
+  obtain ⟨_, _, _, hallow, _⟩ := built_iff_success conditions featureGateOn cm h
+  rw [hallow]
+  exact foldl_processCondition_allow_effect conditions BuilderState.empty
+          (by simp [BuilderState.empty])
+
+/-- **Property 2 (non-empty)**: a `Built` ConditionsMap is non-empty (`Length > 0`).
+    This is the Go invariant on conditions.go:349 ("when the decision is of type
+    ConditionsMap, Length() != 0"). -/
+theorem built_implies_length_positive
+    (conditions : List Condition) (featureGateOn : Bool) (cm : ConditionsMap)
+    (h : ConditionsAwareDecisionConditionsMap conditions featureGateOn = .Built cm) :
+    cm.Length > 0 := by
+  obtain ⟨_, hd, hno, ha, hpos⟩ := built_iff_success conditions featureGateOn cm h
+  simp [ConditionsMap.Length, hd, hno, ha]
+  omega
+
+/-- Helper: each `processCondition` step grows the total bucket-length by at most 1. -/
+private theorem foldl_processCondition_total_length_le
+    (conditions : List Condition) (s : BuilderState) :
+    (conditions.foldl processCondition s).denyConds.length +
+    (conditions.foldl processCondition s).noOpinionConds.length +
+    (conditions.foldl processCondition s).allowConds.length
+    ≤ s.denyConds.length + s.noOpinionConds.length + s.allowConds.length
+      + conditions.length := by
+  induction conditions generalizing s with
+  | nil => simp
+  | cons hd rest ih =>
+    simp only [List.foldl_cons, List.length_cons]
+    have step :
+        (processCondition s hd).denyConds.length +
+        (processCondition s hd).noOpinionConds.length +
+        (processCondition s hd).allowConds.length
+        ≤ s.denyConds.length + s.noOpinionConds.length + s.allowConds.length + 1 := by
+      unfold processCondition
+      split
+      · simp
+      · split
+        · simp
+        · cases cond_eff : hd.effect <;> simp [cond_eff] <;> omega
+    have := ih (processCondition s hd)
+    omega
+
+/-- **Property 3 (bounded)**: a `Built` ConditionsMap's `Length` is at most
+    `MaxConditionsPerMap`. -/
+theorem built_implies_length_bounded
+    (conditions : List Condition) (featureGateOn : Bool) (cm : ConditionsMap)
+    (h : ConditionsAwareDecisionConditionsMap conditions featureGateOn = .Built cm) :
+    cm.Length ≤ MaxConditionsPerMap := by
+  obtain ⟨hLen, hd, hno, ha, _⟩ := built_iff_success conditions featureGateOn cm h
+  have hbound :
+      (conditions.foldl processCondition BuilderState.empty).denyConds.length +
+      (conditions.foldl processCondition BuilderState.empty).noOpinionConds.length +
+      (conditions.foldl processCondition BuilderState.empty).allowConds.length ≤
+      conditions.length := by
+    have hb := foldl_processCondition_total_length_le conditions BuilderState.empty
+    simp [BuilderState.empty] at hb
+    exact hb
+  simp [ConditionsMap.Length, hd, hno, ha]
+  omega
+
+-- ============================================================================
+-- Property-based equivalence
+-- ============================================================================
+
+/-- If *every* condition in the map is evaluable (its `evalCondOf` never returns
+    `.Unevaluatable`), then `Evaluate` cannot return `.Refined` — it must commit to one
+    of `.Allow`, `.Deny`, or `.NoOpinion`. (Contrapositive of
+    `evaluate_Refined_implies_some_unevaluated`.) -/
+theorem all_evaluable_implies_no_Refined
+    (c : ConditionsMap) (data : ConditionsData)
+    (ef : Option (Condition → ConditionsData → ConditionEvaluationResult))
+    (h : ∀ cond ∈ c.Conditions, evalCondOf cond data ef ≠ .Unevaluatable)
+    : ∀ r, c.Evaluate data ef ≠ .Refined r := by
+  intro r hRefined
+  obtain ⟨cond, hmem, hUneval⟩ :=
+    evaluate_Refined_implies_some_unevaluated c data ef r hRefined
+  exact h cond hmem hUneval
+
+/-- Companion statement: under full evaluability, `Evaluate` lands in `{.Allow, .Deny, .NoOpinion}`. -/
+theorem all_evaluable_implies_final_decision
+    (c : ConditionsMap) (data : ConditionsData)
+    (ef : Option (Condition → ConditionsData → ConditionEvaluationResult))
+    (h : ∀ cond ∈ c.Conditions, evalCondOf cond data ef ≠ .Unevaluatable)
+    : c.Evaluate data ef = .Allow
+    ∨ c.Evaluate data ef = .Deny
+    ∨ c.Evaluate data ef = .NoOpinion := by
+  cases hev : c.Evaluate data ef with
+  | Allow => exact .inl rfl
+  | Deny => exact .inr (.inl rfl)
+  | NoOpinion => exact .inr (.inr rfl)
+  | Refined r => exact absurd hev (all_evaluable_implies_no_Refined c data ef h r)
+
+-- ============================================================================
 -- Signature confirmations
 -- ============================================================================
 
@@ -643,5 +987,13 @@ theorem FailClosedDecision_AllowOrNoOpinion (c : ConditionsMap) :
 #check (@evaluate_Refined_implies_some_unevaluated)
 #check (@allowConditions_empty_implies_never_Allow)
 #check (@denyConditions_empty_implies_never_Deny)
+#check @ConditionsAwareDecisionConditionsMap
+#check (@built_implies_length_positive)
+#check (@built_implies_length_bounded)
+#check (@built_deny_have_deny_effect)
+#check (@built_noOpinion_have_noOpinion_effect)
+#check (@built_allow_have_allow_effect)
+#check (@all_evaluable_implies_no_Refined)
+#check (@all_evaluable_implies_final_decision)
 
 end ConditionalAuthorization.ConditionsMapReal
