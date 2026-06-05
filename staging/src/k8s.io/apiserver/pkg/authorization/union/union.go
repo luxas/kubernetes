@@ -28,7 +28,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
@@ -77,7 +76,7 @@ func (authzHandler unionAuthzHandler) Authorize(ctx context.Context, a authorize
 func (authzHandler unionAuthzHandler) ConditionsAwareAuthorize(ctx context.Context, a authorizer.Attributes) authorizer.ConditionsAwareDecision {
 	var decisions authorizer.ConditionsAwareDecisionUnion
 
-	for i, currAuthzHandler := range authzHandler {
+	for _, currAuthzHandler := range authzHandler {
 		// Precondition: All previously seen leaf decisions were either of NoOpinion or ConditionsMap type.
 
 		// Call the authorizer on its conditions-aware method, and add the decision to the slice,
@@ -85,7 +84,7 @@ func (authzHandler unionAuthzHandler) ConditionsAwareAuthorize(ctx context.Conte
 		// in the slice is what correlates a decision with the authorizer that should be used
 		// for evaluating it (if needed).
 		decision := currAuthzHandler.ConditionsAwareAuthorize(ctx, a)
-		decisions.Add(strconv.Itoa(i), decision)
+		decisions.Add(currAuthzHandler.AuthorizerName(), decision)
 
 		// If there is any Allow/Deny decision leaf, no need to walk the chain further.
 		if decisions.ContainsAllowOrDeny() {
@@ -118,7 +117,7 @@ func (authzHandler unionAuthzHandler) EvaluateConditions(ctx context.Context, un
 		reasonlist []string
 	)
 
-	for istr, unevaluatedSubDecision := range unevaluatedDecision.UnionedDecisions() {
+	for currentAuthorizerName, unevaluatedSubDecision := range unevaluatedDecision.UnionedDecisions() {
 		// Precondition: All previously seen leaf decisions were or evaluated to NoOpinion, or some unrecognized mode.
 
 		// If we get to an Allow or Deny in the union chain, we have our answer.
@@ -134,11 +133,7 @@ func (authzHandler unionAuthzHandler) EvaluateConditions(ctx context.Context, un
 			decision, reason, err = authorizer.DecisionNoOpinion, unevaluatedSubDecision.Reason(), unevaluatedSubDecision.Error()
 		} else {
 			// ConditionsMap or Union types are evaluated by their authorizer
-			i, tmpatoierr := strconv.Atoi(istr)
-			if tmpatoierr != nil {
-				panic(tmpatoierr) // TODO: make better
-			}
-			decision, reason, err = authzHandler[i].EvaluateConditions(ctx, unevaluatedSubDecision, data)
+			decision, reason, err = authzHandler.evaluateConditions(ctx, currentAuthorizerName, unevaluatedSubDecision, data)
 		}
 
 		if err != nil {
@@ -157,6 +152,31 @@ func (authzHandler unionAuthzHandler) EvaluateConditions(ctx context.Context, un
 	}
 
 	return authorizer.DecisionNoOpinion, strings.Join(reasonlist, "\n"), utilerrors.NewAggregate(errlist)
+}
+
+func (authzHandler unionAuthzHandler) evaluateConditions(ctx context.Context, authorizerName string, unevaluatedSubDecision authorizer.ConditionsAwareDecision, data authorizer.ConditionsData) (authorizer.Decision, string, error) {
+	authorizer, err := authzHandler.getAuthorizerWithName(authorizerName)
+	if err != nil {
+		return unevaluatedSubDecision.FailureDecision(), "failed closed", err
+	}
+	return authorizer.EvaluateConditions(ctx, unevaluatedSubDecision, data)
+}
+
+func (authzHandler unionAuthzHandler) getAuthorizerWithName(authorizerName string) (authorizer.Authorizer, error) {
+	authorizers := make([]authorizer.Authorizer, 0, 1)
+	for _, a := range authzHandler {
+		if authorizerName == a.AuthorizerName() {
+			authorizers = append(authorizers, a)
+		}
+	}
+	switch len(authorizers) {
+	case 0:
+		return nil, fmt.Errorf("no authorizer with name %q found", authorizerName)
+	case 1:
+		return authorizers[0], nil
+	default:
+		return nil, fmt.Errorf("ambiguous match: found %d authorizers with name %q, don't know which one to pick", len(authorizers), authorizerName)
+	}
 }
 
 // AuthorizerName returns a name for the union authorizer itself. Sub-authorizers retain

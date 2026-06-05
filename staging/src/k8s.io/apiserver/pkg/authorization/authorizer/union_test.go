@@ -46,12 +46,13 @@ func TestConditionsAwareDecisionUnionAdd(t *testing.T) {
 	allow := authorizer.ConditionsAwareDecisionAllow("a", nil)
 	deny := authorizer.ConditionsAwareDecisionDeny("d", nil)
 	condMapAllow := authorizer.ConditionsAwareDecisionConditionsMap(nil, nil, []authorizer.Condition{genericCond("allow-1")})
+	condMapDeny := authorizer.ConditionsAwareDecisionConditionsMap([]authorizer.Condition{genericCond("deny-1")}, nil, nil)
 
-	t.Run("duplicate authorizer name fails closed", func(t *testing.T) {
+	t.Run("duplicate conditional authorizers fails closed", func(t *testing.T) {
 		var u authorizer.ConditionsAwareDecisionUnion
-		u.Add("dup", noOp)
-		u.Add("dup", noOp)
-		u.Add("allow", authorizer.ConditionsAwareDecisionAllow("", nil))
+		u.Add("nop", noOp)
+		u.Add("dup", condMapAllow)
+		u.Add("dup", condMapAllow)
 
 		d := u.ToDecision()
 		if !d.IsNoOpinion() {
@@ -62,19 +63,17 @@ func TestConditionsAwareDecisionUnionAdd(t *testing.T) {
 		}
 	})
 
-	t.Run("duplicate after Deny leaf fails closed with Deny", func(t *testing.T) {
+	t.Run("duplicate when outcome could be deny fails closed", func(t *testing.T) {
 		var u authorizer.ConditionsAwareDecisionUnion
-		u.Add("a", deny)
-		// Add another duplicate "a" - this should NOT be skipped by the Allow/Deny short-circuit,
-		// because the duplicate check runs first and appends to errs.
-		u.Add("a", noOp)
-		u.Add("allow", authorizer.ConditionsAwareDecisionAllow("", nil))
+		u.Add("dup", condMapAllow)
+		u.Add("dup", condMapDeny)
+		u.Add("a", allow)
 
 		d := u.ToDecision()
 		if !d.IsDeny() {
 			t.Errorf("expected Deny (deny leaf present), got %s", d.String())
 		}
-		if d.Error() == nil || !containsString(d.Error().Error(), `duplicate authorizerName "a"`) {
+		if d.Error() == nil || !containsString(d.Error().Error(), `duplicate authorizerName "dup"`) {
 			t.Errorf("expected aggregated duplicate error, got %v", d.Error())
 		}
 	})

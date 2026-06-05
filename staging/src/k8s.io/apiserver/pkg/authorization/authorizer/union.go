@@ -38,8 +38,11 @@ type ConditionsAwareDecisionUnion struct {
 }
 
 func (unionMap *ConditionsAwareDecisionUnion) Add(authorizerName string, d ConditionsAwareDecision) {
-	if slices.ContainsFunc(unionMap.inner, func(nd namedConditionsAwareDecision) bool { return nd.authorizerName == authorizerName }) {
+	// Ignore authorizerName validation when the authorizer gave an unconditional decision, as that won't get evaluated
+	if !d.IsUnconditional() && slices.ContainsFunc(unionMap.inner, func(nd namedConditionsAwareDecision) bool { return nd.authorizerName == authorizerName }) {
 		unionMap.errs = append(unionMap.errs, fmt.Errorf("duplicate authorizerName %q", authorizerName))
+		// add decision anyways to inner, so we can take into account its content when failing closed
+		unionMap.inner = append(unionMap.inner, namedConditionsAwareDecision{authorizerName: authorizerName, d: d})
 		return
 	}
 	if unionMap.ContainsAllowOrDeny() {
@@ -52,6 +55,7 @@ func (unionMap *ConditionsAwareDecisionUnion) Add(authorizerName string, d Condi
 // whenever processing a decision fails. If the decision contains one or
 // more Deny decisions or conditions, one must fail closed with Deny, as that could or would
 // have been the if the condition evaluation did not error. Otherwise, NoOpinion is returned.
+// TODO: Use PossibleDecisions instead
 func (unionMap ConditionsAwareDecisionUnion) FailureDecision() Decision {
 	for _, subDecision := range unionMap.inner {
 		if subDecision.d.FailureDecision() == DecisionDeny {
@@ -94,10 +98,7 @@ func (unionMap ConditionsAwareDecisionUnion) ToDecision() ConditionsAwareDecisio
 	// fail closed.
 	if len(unionMap.errs) != 0 {
 		err := utilerrors.NewAggregate(unionMap.errs)
-		if unionMap.FailureDecision() == DecisionDeny {
-			return ConditionsAwareDecisionDeny("failed closed", err)
-		}
-		return ConditionsAwareDecisionNoOpinion("failed closed", err)
+		return ConditionsAwareDecisionFromParts(unionMap.FailureDecision(), "failed closed", err)
 	}
 
 	// If we only have one possible decision, it can readily be evaluated without evaluation.

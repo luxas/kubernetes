@@ -92,7 +92,7 @@ func (alwaysDenyAuthorizer) EvaluateConditions(_ context.Context, _ authorizer.C
 }
 
 func (alwaysDenyAuthorizer) AuthorizerName() string {
-	return "k8s.io/AlwaysDeny"
+	return "authorizer.k8s.io/AlwaysDeny"
 }
 
 func (alwaysDenyAuthorizer) RulesFor(ctx context.Context, user user.Info, namespace string) ([]authorizer.ResourceRuleInfo, []authorizer.NonResourceRuleInfo, bool, error) {
@@ -120,7 +120,7 @@ func (r *privilegedGroupAuthorizer) EvaluateConditions(_ context.Context, _ auth
 }
 
 func (r *privilegedGroupAuthorizer) AuthorizerName() string {
-	return "k8s.io/PrivilegedGroups"
+	return "authorizer.k8s.io/PrivilegedGroups"
 }
 
 func (r *privilegedGroupAuthorizer) Authorize(ctx context.Context, attr authorizer.Attributes) (authorizer.Decision, string, error) {
