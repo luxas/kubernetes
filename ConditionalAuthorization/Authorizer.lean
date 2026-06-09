@@ -1,3 +1,5 @@
+import Mathlib.Data.Finset.Basic
+
 namespace ConditionalAuthorization.Authorizer
 
 inductive Decision where
@@ -58,42 +60,33 @@ structure ConditionsMap where
   ax_no_allow_cond_implies_never_allow : ¬hasAllowCondition → ∀ d, evaluate d ≠ .Allow
   ax_no_deny_cond_implies_never_deny : ¬hasDenyCondition → ∀ d, evaluate d ≠ .Deny
 
-def ConditionsMap.FailClosedDecision (c : ConditionsMap) : Decision :=
-  if c.hasDenyCondition then .Deny else .NoOpinion
+/-- Mirrors Go's `ConditionsMap.PossibleDecisions` (conditionsmap.go:97-106).
+    Returns the set of decisions this ConditionsMap can possibly evaluate to. -/
+def ConditionsMap.PossibleDecisions (c : ConditionsMap) : Finset Decision :=
+  {.NoOpinion} ∪ (if c.hasDenyCondition then {.Deny} else ∅)
+               ∪ (if c.hasAllowCondition then {.Allow} else ∅)
 
-def ConditionsMap.CanBecomeAllowed (c : ConditionsMap) : Bool :=
-  c.hasAllowCondition
+/-- Mirrors Go's `ConditionsMap.FailureDecision` (conditionsmap.go:49-54).
+    Fails closed with Deny if Deny is a possible outcome, otherwise NoOpinion. -/
+def ConditionsMap.FailureDecision (c : ConditionsMap) : Decision :=
+  if .Deny ∈ c.PossibleDecisions then .Deny else .NoOpinion
 
 def ConditionsMap.Ideal (c : ConditionsMap) (d : ConditionsData) : Decision :=
   c.evaluate d
 
-/-- A conditions-aware decision: either a leaf decision, or a union (chain) of decisions.
-    Mirrors Go's `ConditionsAwareDecision`. -/
+/-- A conditions-aware decision: either a leaf decision, a conditional ConditionsMap,
+    or a union (chain) of named decisions. Mirrors Go's `ConditionsAwareDecision`.
+    The `Union` variant carries `List (String × ConditionsAwareDecision)` matching
+    Go's `ConditionsAwareDecisionUnion.inner : []namedConditionsAwareDecision`. -/
 inductive ConditionsAwareDecision where
   | Allow
   | Deny
   | NoOpinion
   | ConditionsMap (cm: ConditionsMap)
-  | Union (decisions : List ConditionsAwareDecision)
+  | Union (decisions : List (String × ConditionsAwareDecision))
 
-/-- Returns the decision to fail closed with when processing fails.
-    If the decision contains any Deny (leaf or condition), we must fail closed with Deny —
-    otherwise NoOpinion. -/
-def ConditionsAwareDecision.FailClosedDecision : ConditionsAwareDecision → Decision
-  | .Allow     => .NoOpinion
-  | .NoOpinion => .NoOpinion
-  | .Deny      => .Deny
-  | .ConditionsMap c => c.FailClosedDecision
-  | .Union authorizers => foldFailClosed authorizers
-where
-  foldFailClosed : List ConditionsAwareDecision → Decision
-    | []      => .NoOpinion
-    | d :: ds =>
-      match d.FailClosedDecision with
-      | .Deny => .Deny
-      | _     => foldFailClosed ds
-
-/-- Returns true if the decision tree contains at least one Allow or Deny leaf. -/
+/-- Mirrors Go's `ConditionsAwareDecision.ContainsAllowOrDeny` (conditionsawaredecision.go:196-204)
+    and `ConditionsAwareDecisionUnion.ContainsAllowOrDeny` (union.go:67-74). -/
 def ConditionsAwareDecision.ContainsAllowOrDeny : ConditionsAwareDecision → Bool
   | .Allow     => true
   | .Deny      => true
@@ -101,33 +94,43 @@ def ConditionsAwareDecision.ContainsAllowOrDeny : ConditionsAwareDecision → Bo
   | .ConditionsMap _ => false
   | .Union ds => anyContainsAllowOrDeny ds
 where
-  anyContainsAllowOrDeny : List ConditionsAwareDecision → Bool
-    | []      => false
-    | d :: ds => d.ContainsAllowOrDeny || anyContainsAllowOrDeny ds
+  anyContainsAllowOrDeny : List (String × ConditionsAwareDecision) → Bool
+    | []         => false
+    | (_, d) :: ds => d.ContainsAllowOrDeny || anyContainsAllowOrDeny ds
 
-/-- Returns true if there exists some ConditionsData for which the decision could evaluate to Allow.
-
-    NOTE: For Union, we short-circuit to `false` on the *first* Deny — matching Go's
-    `unionSlice.CanBecomeAllowed` semantics (conditions.go:910-926). A simpler `||`-fold
-    would over-approximate (`[.Deny, .Allow]` would return `true` instead of `false`). -/
-def ConditionsAwareDecision.CanBecomeAllowed : ConditionsAwareDecision → Bool
-  | .Allow     => true
-  | .Deny      => false
-  | .NoOpinion => false
-  | .ConditionsMap c => c.CanBecomeAllowed
-  | .Union ds => anyCanBecomeAllowed ds
+/-- Mirrors Go's `ConditionsAwareDecision.PossibleDecisions` (conditionsawaredecision.go:307-320)
+    and `ConditionsAwareDecisionUnion.PossibleDecisions` (union.go:76-88).
+    The union version starts with {NoOpinion}, unions each sub-decision's PossibleDecisions,
+    and erases NoOpinion if any sub-decision ContainsAllowOrDeny (short-circuit). -/
+def ConditionsAwareDecision.PossibleDecisions : ConditionsAwareDecision → Finset Decision
+  | .Allow => {.Allow}
+  | .Deny => {.Deny}
+  | .NoOpinion => {.NoOpinion}
+  | .ConditionsMap cm => cm.PossibleDecisions
+  | .Union ds =>
+      let collected := collectUnionPossibleDecisions ds
+      if ConditionsAwareDecision.ContainsAllowOrDeny.anyContainsAllowOrDeny ds
+      then collected.erase .NoOpinion
+      else {.NoOpinion} ∪ collected
 where
-  anyCanBecomeAllowed : List ConditionsAwareDecision → Bool
-    | []      => false
-    | d :: ds =>
-      match d with
-      | .Deny => false  -- Go short-circuit: union with any Deny cannot become Allow
-      | _     => d.CanBecomeAllowed || anyCanBecomeAllowed ds
+  collectUnionPossibleDecisions : List (String × ConditionsAwareDecision) → Finset Decision
+    | [] => ∅
+    | (_, d) :: rest =>
+        if d.ContainsAllowOrDeny then d.PossibleDecisions
+        else d.PossibleDecisions ∪ collectUnionPossibleDecisions rest
 
-def unionIdealAuthorize (decisions : List ConditionsAwareDecision) (data : ConditionsData) : Decision :=
+/-- Mirrors Go's `ConditionsAwareDecision.FailureDecision` (conditionsawaredecision.go:187-192).
+    Fails closed: Deny if PossibleDecisions includes Deny, otherwise NoOpinion. -/
+def ConditionsAwareDecision.FailureDecision (d : ConditionsAwareDecision) : Decision :=
+  if .Deny ∈ d.PossibleDecisions then .Deny else .NoOpinion
+
+/-- The ideal evaluation of a union chain of named decisions. Iterates through the
+    (name, decision) pairs, short-circuiting on Allow/Deny, recursing on NoOpinion,
+    and evaluating ConditionsMap/Union sub-decisions. -/
+def unionIdealAuthorize (decisions : List (String × ConditionsAwareDecision)) (data : ConditionsData) : Decision :=
   match decisions with
   | [] => .NoOpinion
-  | d :: rest =>
+  | (_, d) :: rest =>
     match d with
     | .Allow     => .Allow
     | .Deny      => .Deny
