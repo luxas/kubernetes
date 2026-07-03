@@ -33,6 +33,44 @@ func init() {
 			"spec": {
 				{ErrorType: "FieldValueInvalid", Origin: "union"},
 			},
+			"spec.conditionalAuthorization": {
+				{ErrorType: "FieldValueForbidden"},
+			},
+			"spec.conditionalAuthorization.enabled": {
+				{ErrorType: "FieldValueRequired"},
+			},
+			"status.conditionalDecision": {
+				{ErrorType: "FieldValueForbidden"},
+				{ErrorType: "FieldValueInvalid", Origin: "union"},
+			},
+			"status.conditionalDecision.conditionsMap.allowConditions[*]": {
+				{ErrorType: "FieldValueDuplicate"},
+			},
+			"status.conditionalDecision.conditionsMap.allowConditions[*].id": {
+				{ErrorType: "FieldValueRequired"},
+			},
+			"status.conditionalDecision.conditionsMap.denyConditions[*]": {
+				{ErrorType: "FieldValueDuplicate"},
+			},
+			"status.conditionalDecision.conditionsMap.denyConditions[*].id": {
+				{ErrorType: "FieldValueRequired"},
+			},
+			"status.conditionalDecision.conditionsMap.noOpinionConditions[*]": {
+				{ErrorType: "FieldValueDuplicate"},
+			},
+			"status.conditionalDecision.conditionsMap.noOpinionConditions[*].id": {
+				{ErrorType: "FieldValueRequired"},
+			},
+			"status.conditionalDecision.type": {
+				{ErrorType: "FieldValueNotSupported"},
+				{ErrorType: "FieldValueRequired"},
+			},
+			"status.conditionalDecision.union[*]": {
+				{ErrorType: "FieldValueDuplicate"},
+			},
+			"status.conditionalDecision.union[*].authorizerName": {
+				{ErrorType: "FieldValueRequired"},
+			},
 		},
 	)
 }
