@@ -437,7 +437,7 @@ type ConditionsAwareDecision struct {
 	// +optional
 	// +listType=map
 	// +listMapKey=authorizerName
-	Union []ConditionsAwareDecision
+	Union []NamedConditionsAwareDecision
 }
 
 // NamedConditionsAwareDecision is a named ConditionsAwareDecision, returned by a unioned authorizer.
