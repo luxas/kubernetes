@@ -506,7 +506,7 @@ const (
 // with variants described in ConditionsAwareDecisionType, plus a reason and error.
 type ConditionsAwareDecision struct {
 	// type describes the type of the decision, and acts as an enum discriminator.
-	// +k8s:unionDiscriminator
+	// +k8s:beta=+k8s:unionDiscriminator
 	// +k8s:required
 	// +required
 	Type ConditionsAwareDecisionType `json:"type" protobuf:"bytes,1,opt,name=type,casttype=ConditionsAwareDecisionType"`
@@ -555,7 +555,7 @@ type ConditionsAwareDecision struct {
 	// +k8s:listMapKey=authorizerName
 	// +listType=map
 	// +listMapKey=authorizerName
-	Union []ConditionsAwareDecision `json:"union,omitempty" protobuf:"bytes,6,rep,name=union"`
+	Union []NamedConditionsAwareDecision `json:"union,omitempty" protobuf:"bytes,6,rep,name=union"`
 }
 
 // NamedConditionsAwareDecision is a named ConditionsAwareDecision, returned by a unioned authorizer.
@@ -570,7 +570,7 @@ type NamedConditionsAwareDecision struct {
 
 	// decision carries the inner decision returned from the authorizer.
 	// +required
-	Decision ConditionsAwareDecision `json:"decision" protobuf:"bytes,2,rep,name=union"`
+	Decision ConditionsAwareDecision `json:"decision" protobuf:"bytes,2,rep,name=decision"`
 }
 
 // UnconditionalDecision represents the data associated with an unconditional decision.
