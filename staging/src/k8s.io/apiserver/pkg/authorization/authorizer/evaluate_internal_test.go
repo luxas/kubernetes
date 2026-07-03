@@ -649,14 +649,14 @@ func TestConditionsMapPartiallyEvaluate(t *testing.T) {
 					cm := decision.ConditionsMap()
 
 					// Always assert the test case against the more general partiallyEvaluateConditionsMapInternal function
-					result := partiallyEvaluateConditionsMapInternal(t.Context(), cm, ConditionsData{}, sc.evaluateFunc)
+					result := partiallyEvaluateConditionsMapInternal(t.Context(), cm, nil, sc.evaluateFunc)
 					if got := result.String(); got != tt.wantString {
 						t.Errorf("partiallyEvaluateConditionsMapInternal: got decision %s, want %s", got, tt.wantString)
 					}
 					// However, when possible (no unevaluatable conditions), also call ConditionsMap.Evaluate
 					if !sc.disableConditionsMapEvaluate {
 						// wrap the three parts returned from ConditionsMap.Evaluate in a ConditionsAwareDecision just to get unified string assertions
-						result = ConditionsAwareDecisionFromParts(cm.Evaluate(t.Context(), ConditionsData{}, func(ctx context.Context, condition Condition, data ConditionsData) (bool, error) {
+						result = ConditionsAwareDecisionFromParts(cm.Evaluate(t.Context(), nil, func(ctx context.Context, condition Condition, data ConditionsData) (bool, error) {
 							if sc.evaluateFunc == nil {
 								t.Fatalf("ConditionsMap.Evaluate doesn't support unevaluatable conditions, set sc.testConditionsMapEvaluate=false")
 								panic("unreachable, ensure no return")

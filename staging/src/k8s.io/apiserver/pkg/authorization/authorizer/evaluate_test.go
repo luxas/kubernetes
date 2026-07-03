@@ -351,7 +351,7 @@ func TestPartiallyEvaluateConditionsAwareDecision(t *testing.T) {
 			got := authorizer.PartiallyEvaluateConditionsAwareDecision(
 				t.Context(),
 				tt.decision,
-				authorizer.ConditionsData{},
+				nil,
 				tt.builtinConditionsEvaluator,
 			)
 			if diff := cmp.Diff(tt.want, snapshotDecision(got)); diff != "" {

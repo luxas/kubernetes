@@ -119,7 +119,7 @@ type Authorizer interface {
 	// return authorizer.DecisionDeny, "", authorizer.ErrorConditionEvaluationNotSupported
 	//
 	// The context should only be used for timeouts/cancellation/tracing, and should not influence the
-	// evaluation outcome. Only the given decision and data may infuence the outcome.
+	// evaluation outcome. Only the given decision and data may infuence the outcome. data must be non-nil.
 	EvaluateConditions(ctx context.Context, decision ConditionsAwareDecision, data ConditionsData) (authorized Decision, reason string, err error)
 }
 
@@ -301,13 +301,6 @@ type EvaluateConditionFunc func(ctx context.Context, condition Condition, data C
 // MaybeEvaluateConditionFunc allows potentially evaluating a condition, returning Unevaluatable if a truth value or error cannot be assigned.
 type MaybeEvaluateConditionFunc func(ctx context.Context, condition Condition, data ConditionsData) ConditionEvaluationResult
 
-// ConditionsData is an enum type for various evaluation targets conditions
-// can be written against. At least one getter must be non-nil.
-type ConditionsData struct {
-	// ObjectsAccessor holds the request information plus old and new objects, and options, as applicable.
-	ObjectsAccessor ConditionsDataObjectsAccessor
-}
-
 // AdmissionOperation represents the admission operation,
 // for example CREATE, UPDATE, DELETE. The constants are
 // defined in k8s.io/apiserver/pkg/admission, but the
@@ -315,9 +308,9 @@ type ConditionsData struct {
 // than the admission package (thus avoiding import cycles)
 type AdmissionOperation string
 
-// ConditionsDataObjectsAccessor represents the data available during admission control, for conditions
+// ConditionsData represents the data available for conditions
 // to evaluate against. This is by design a subset of admission.Attributes.
-type ConditionsDataObjectsAccessor interface {
+type ConditionsData interface {
 	// GetName returns the name of the object as presented in the request. On a CREATE operation, the client
 	// may omit name and rely on the server to generate the name. If that is the case, this method will return
 	// the empty string

@@ -897,7 +897,7 @@ func TestUnionEvaluateConditions(t *testing.T) {
 			// Wrap in a ConditionsAwareDecision just to get a unified string formatting for assertions.
 			finalDecision := authzDecision
 			if !authzDecision.IsUnconditional() {
-				finalDecision = authorizer.ConditionsAwareDecisionFromParts(union0.EvaluateConditions(ctx, authzDecision, authorizer.ConditionsData{}))
+				finalDecision = authorizer.ConditionsAwareDecisionFromParts(union0.EvaluateConditions(ctx, authzDecision, nil))
 			}
 			finalErr := finalDecision.Error()
 			if (finalErr != nil) != tt.wantFinalErr {
@@ -1018,7 +1018,7 @@ func TestUnionEvaluateConditionsRoutesByAuthorizerName(t *testing.T) {
 		t.Fatalf("expected Union, got %s", d.String())
 	}
 
-	gotDecision, _, err := authz.EvaluateConditions(context.Background(), d, authorizer.ConditionsData{})
+	gotDecision, _, err := authz.EvaluateConditions(context.Background(), d, nil)
 	if err != nil {
 		t.Fatalf("EvaluateConditions returned error: %v", err)
 	}
