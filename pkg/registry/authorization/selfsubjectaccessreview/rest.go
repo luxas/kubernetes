@@ -32,11 +32,11 @@ import (
 )
 
 type REST struct {
-	authorizer authorizer.UnconditionalAuthorizer
+	authorizer authorizer.Authorizer
 	scheme     *runtime.Scheme
 }
 
-func NewREST(authorizer authorizer.UnconditionalAuthorizer, scheme *runtime.Scheme) *REST {
+func NewREST(authorizer authorizer.Authorizer, scheme *runtime.Scheme) *REST {
 	return &REST{authorizer, scheme}
 }
 
@@ -65,6 +65,9 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	if !ok {
 		return nil, apierrors.NewBadRequest(fmt.Sprintf("not a SelfSubjectAccessReview: %#v", obj))
 	}
+	// spec.conditionalAuthorization is not set to nil here when the feature gate is off, instead it is
+	// used to build an error in SARStatusFromAuthorize if it is set when the feature gate is off.
+
 	if errs := authorizationvalidation.ValidateSelfSubjectAccessReviewCreate(ctx, r.scheme, selfSAR); len(errs) > 0 {
 		return nil, apierrors.NewInvalid(authorizationapi.Kind(selfSAR.Kind), "", errs)
 	}
@@ -86,14 +89,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		authorizationAttributes = authorizationutil.NonResourceAttributesFrom(userToCheck, *selfSAR.Spec.NonResourceAttributes)
 	}
 
-	decision, reason, evaluationErr := r.authorizer.Authorize(ctx, authorizationAttributes)
-
-	selfSAR.Status = authorizationapi.SubjectAccessReviewStatus{
-		Allowed: (decision == authorizer.DecisionAllow),
-		Denied:  (decision == authorizer.DecisionDeny),
-		Reason:  reason,
-	}
-	selfSAR.Status.EvaluationError = authorizationutil.BuildEvaluationError(evaluationErr, authorizationAttributes)
+	selfSAR.Status = authorizationutil.SARStatusFromAuthorize(ctx, r.authorizer, authorizationAttributes, selfSAR.Spec.ConditionalAuthorization)
 
 	return selfSAR, nil
 }

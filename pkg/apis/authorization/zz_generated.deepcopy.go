@@ -83,7 +83,7 @@ func (in *ConditionsAwareDecision) DeepCopyInto(out *ConditionsAwareDecision) {
 	}
 	if in.Union != nil {
 		in, out := &in.Union, &out.Union
-		*out = make([]ConditionsAwareDecision, len(*in))
+		*out = make([]NamedConditionsAwareDecision, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
