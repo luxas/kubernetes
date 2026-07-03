@@ -144,6 +144,7 @@ type ValidationInterface interface {
 	Validate(ctx context.Context, a Attributes, o ObjectInterfaces) (err error)
 }
 
+// Operation is the type of resource operation being checked for admission control
 // This type is sourced from the authorizer package to avoid import cycles.
 type Operation = authorizer.AdmissionOperation
 
