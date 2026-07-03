@@ -17,7 +17,9 @@ limitations under the License.
 package util
 
 import (
+	"context"
 	"fmt"
+	"iter"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -27,6 +29,8 @@ import (
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
+	genericfeatures "k8s.io/apiserver/pkg/features"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	authorizationapi "k8s.io/kubernetes/pkg/apis/authorization"
 )
 
@@ -237,4 +241,111 @@ func BuildEvaluationError(evaluationError error, attrs authorizer.AttributesReco
 		}
 	}
 	return strings.Join(evaluationErrors, "; ")
+}
+
+// SARStatusFromAuthorize invokes the authorizer as appropriate (with or without conditions support), and encodes the result into SAR status.
+func SARStatusFromAuthorize(ctx context.Context, authz authorizer.Authorizer, attrs authorizer.AttributesRecord, conditionalOpts *authorizationapi.ConditionalAuthorizationOptions) authorizationapi.SubjectAccessReviewStatus {
+	// Utilize the conditions-unaware flow when the feature gate is off or the client does not request/support it
+	if !utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) || conditionalOpts == nil || !conditionalOpts.Enabled {
+		decision, reason, evaluationErr := authz.Authorize(ctx, attrs)
+
+		return authorizationapi.SubjectAccessReviewStatus{
+			Allowed: (decision == authorizer.DecisionAllow),
+			Denied:  (decision == authorizer.DecisionDeny),
+			// One could inform the user if they asked for conditional authorization, but the feature gate was disabled; however
+			// one does not know if the authorizer "would have wanted to" return something conditional, and thus could such a
+			// standard message be noisy for places where it is irrelevant.
+			Reason:          reason,
+			EvaluationError: BuildEvaluationError(evaluationErr, attrs),
+		}
+	}
+	// Feature gate is on and client specifically asked for conditional authorization to be enabled
+
+	decision := authz.ConditionsAwareAuthorize(ctx, attrs)
+	evaluationErrString := BuildEvaluationError(decision.Error(), attrs)
+	// Allow/Deny/NoOpinion decisions should be serialized as before, on the top-level SAR status.
+	if decision.IsUnconditional() {
+		return authorizationapi.SubjectAccessReviewStatus{
+			Allowed:         decision.IsAllow(),
+			Denied:          decision.IsDeny(),
+			Reason:          decision.Reason(),
+			EvaluationError: evaluationErrString,
+		}
+	}
+	// ConditionsMap or Union decision should be put under status.conditionalDecision.
+	serialized := serializeConditionsAwareDecision(decision)
+	return authorizationapi.SubjectAccessReviewStatus{
+		ConditionalDecision: &serialized,
+	}
+}
+
+func serializeConditionsAwareDecision(decision authorizer.ConditionsAwareDecision) authorizationapi.ConditionsAwareDecision {
+	var errString string
+	if decision.Error() != nil {
+		errString = decision.Error().Error()
+	}
+	switch {
+	case decision.IsAllow():
+		return authorizationapi.ConditionsAwareDecision{
+			Type: authorizationapi.ConditionsAwareDecisionTypeAllow,
+			Allow: &authorizationapi.UnconditionalDecision{
+				Reason:          decision.Reason(),
+				EvaluationError: errString,
+			},
+		}
+	case decision.IsNoOpinion():
+		return authorizationapi.ConditionsAwareDecision{
+			Type: authorizationapi.ConditionsAwareDecisionTypeNoOpinion,
+			NoOpinion: &authorizationapi.UnconditionalDecision{
+				Reason:          decision.Reason(),
+				EvaluationError: errString,
+			},
+		}
+	case decision.IsConditionsMap():
+
+		return authorizationapi.ConditionsAwareDecision{
+			Type: authorizationapi.ConditionsAwareDecisionTypeConditionsMap,
+			ConditionsMap: &authorizationapi.ConditionsMap{
+				DenyConditions:      collectConditions(decision.ConditionsMap().DenyConditions()),
+				NoOpinionConditions: collectConditions(decision.ConditionsMap().NoOpinionConditions()),
+				AllowConditions:     collectConditions(decision.ConditionsMap().AllowConditions()),
+			},
+		}
+	case decision.IsUnion():
+		subDecisions := []authorizationapi.NamedConditionsAwareDecision{}
+		for authorizerName, subDecision := range decision.UnionedDecisions() {
+			subDecisions = append(subDecisions, authorizationapi.NamedConditionsAwareDecision{
+				AuthorizerName: authorizerName,
+				Decision:       serializeConditionsAwareDecision(subDecision),
+			})
+		}
+		return authorizationapi.ConditionsAwareDecision{
+			Type: authorizationapi.ConditionsAwareDecisionTypeUnion,
+			// Reason and EvaluationError are not serialized in Unions, as that information is anyways
+			// available when reading the leaves.
+			Union: subDecisions,
+		}
+	default:
+		// If none of the other cases matched, it's a Deny
+		return authorizationapi.ConditionsAwareDecision{
+			Type: authorizationapi.ConditionsAwareDecisionTypeDeny,
+			Deny: &authorizationapi.UnconditionalDecision{
+				Reason:          decision.Reason(),
+				EvaluationError: errString,
+			},
+		}
+	}
+}
+
+func collectConditions(condIter iter.Seq[authorizer.Condition]) []authorizationapi.Condition {
+	conds := []authorizationapi.Condition{}
+	for condition := range condIter {
+		conds = append(conds, authorizationapi.Condition{
+			ID:          condition.GetID(),
+			Condition:   condition.GetCondition(),
+			Type:        condition.GetType(),
+			Description: condition.GetDescription(),
+		})
+	}
+	return conds
 }
