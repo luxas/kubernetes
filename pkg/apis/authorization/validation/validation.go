@@ -26,9 +26,24 @@ import (
 	metav1validation "k8s.io/apimachinery/pkg/apis/meta/v1/validation"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	genericfeatures "k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/registry/rest"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	authorizationapi "k8s.io/kubernetes/pkg/apis/authorization"
 )
+
+// sarValidationConfig returns the declarative validation config to use for
+// SubjectAccessReview-family create validation. It enables the
+// "ConditionalAuthorization" option when the corresponding feature gate is
+// enabled, so that the +k8s:ifDisabled("ConditionalAuthorization")=+k8s:forbidden
+// tag on spec.conditionalAuthorization does not reject the field.
+func sarValidationConfig() rest.DeclarativeValidationConfig {
+	var options []string
+	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
+		options = append(options, string(genericfeatures.ConditionalAuthorization))
+	}
+	return rest.DeclarativeValidationConfig{Options: options}
+}
 
 // ValidateSubjectAccessReviewSpec validates a SubjectAccessReviewSpec and returns an
 // ErrorList with any errors.
@@ -170,7 +185,7 @@ func validateLabelSelectorAttributes(selector *authorizationapi.LabelSelectorAtt
 func ValidateSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.Scheme, sar *authorizationapi.SubjectAccessReview) field.ErrorList {
 	errs := ValidateSubjectAccessReview(sar)
 	dv := rest.DeclarativeValidation{Scheme: scheme}
-	return dv.ValidateDeclaratively(ctx, sar, nil, errs, operation.Create, rest.DeclarativeValidationConfig{})
+	return dv.ValidateDeclaratively(ctx, sar, nil, errs, operation.Create, sarValidationConfig())
 }
 
 // ValidateSelfSubjectAccessReviewCreate is the single composition of handwritten and declarative
@@ -178,7 +193,7 @@ func ValidateSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.Sche
 func ValidateSelfSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.Scheme, sar *authorizationapi.SelfSubjectAccessReview) field.ErrorList {
 	errs := ValidateSelfSubjectAccessReview(sar)
 	dv := rest.DeclarativeValidation{Scheme: scheme}
-	return dv.ValidateDeclaratively(ctx, sar, nil, errs, operation.Create, rest.DeclarativeValidationConfig{})
+	return dv.ValidateDeclaratively(ctx, sar, nil, errs, operation.Create, sarValidationConfig())
 }
 
 // ValidateLocalSubjectAccessReviewCreate is the single composition of handwritten and declarative
@@ -186,5 +201,5 @@ func ValidateSelfSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.
 func ValidateLocalSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.Scheme, sar *authorizationapi.LocalSubjectAccessReview) field.ErrorList {
 	errs := ValidateLocalSubjectAccessReview(sar)
 	dv := rest.DeclarativeValidation{Scheme: scheme}
-	return dv.ValidateDeclaratively(ctx, sar, nil, errs, operation.Create, rest.DeclarativeValidationConfig{})
+	return dv.ValidateDeclaratively(ctx, sar, nil, errs, operation.Create, sarValidationConfig())
 }
