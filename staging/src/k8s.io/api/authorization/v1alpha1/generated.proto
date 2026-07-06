@@ -37,6 +37,8 @@ message AuthorizationConditionsRequest {
   optional ConditionsAwareDecision decision = 1;
 
   // admissionControlData may contain additional information for evaluating the conditions.
+  // +k8s:unionMember
+  // +k8s:optional
   // +optional
   optional AuthorizationConditionsTargetAdmissionControl admissionControlData = 2;
 }
@@ -57,10 +59,12 @@ message AuthorizationConditionsReview {
   optional .k8s.io.apimachinery.pkg.apis.meta.v1.ObjectMeta metadata = 1;
 
   // request describes the attributes for the authorization conditions request.
+  // +k8s:optional
   // +optional
   optional AuthorizationConditionsRequest request = 2;
 
   // response describes the attributes for the authorization conditions response.
+  // +k8s:optional
   // +optional
   optional AuthorizationConditionsResponse response = 3;
 }
