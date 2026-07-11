@@ -497,14 +497,24 @@ func (w *WebhookAuthorizer) EvaluateConditions(ctx context.Context, decision aut
 		return authorizer.DecisionNoOpinion, "", nil
 	}
 
-	// TODO(luxas): Make sure response is part of PossibleDecisions
+	// TODO(luxas): Enforce validation here. However, that validation code cannot be in any internal packages, where validations usually are.
+	// TODO(luxas): Make it impossible to have allowed=true and conditionalDecision.type=Deny
 
 	switch result.Response.Decision.Type {
 	case authorizationv1alpha1.ConditionsAwareDecisionTypeAllow:
+		if !decision.PossibleDecisions().Has(authorizer.DecisionAllow) {
+			return decision.FailureDecision(), "failed closed", fmt.Errorf("webhook authorizer tried to return Allow from EvaluateConditions, even though that was not a possible outcome")
+		}
 		return authorizer.DecisionAllow, deserializeV1Alpha1Reason(result.Response.Decision.Allow), deserializeV1Alpha1EvaluationError(result.Response.Decision.Allow)
 	case authorizationv1alpha1.ConditionsAwareDecisionTypeDeny:
+		if !decision.PossibleDecisions().Has(authorizer.DecisionDeny) {
+			return decision.FailureDecision(), "failed closed", fmt.Errorf("webhook authorizer tried to return Deny from EvaluateConditions, even though that was not a possible outcome")
+		}
 		return authorizer.DecisionDeny, deserializeV1Alpha1Reason(result.Response.Decision.Deny), deserializeV1Alpha1EvaluationError(result.Response.Decision.Deny)
 	case authorizationv1alpha1.ConditionsAwareDecisionTypeNoOpinion:
+		if !decision.PossibleDecisions().Has(authorizer.DecisionNoOpinion) {
+			return decision.FailureDecision(), "failed closed", fmt.Errorf("webhook authorizer tried to return NoOpinion from EvaluateConditions, even though that was not a possible outcome")
+		}
 		return authorizer.DecisionNoOpinion, deserializeV1Alpha1Reason(result.Response.Decision.NoOpinion), deserializeV1Alpha1EvaluationError(result.Response.Decision.NoOpinion)
 	default:
 		return decision.FailureDecision(), "failed closed", fmt.Errorf("unrecognized decision type %q", result.Response.Decision.Type)
@@ -899,6 +909,7 @@ func (t *authorizationConditionsReviewV1Alpha1Client) Create(ctx context.Context
 		Body(authorizationConditionsReview).
 		Do(ctx)
 
+	// TODO(luxas): Enforce a limited read here?
 	restResult.StatusCode(&statusCode)
 	err = restResult.Into(result)
 	return

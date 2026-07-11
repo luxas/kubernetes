@@ -687,6 +687,88 @@ func TestEvaluateConditions(t *testing.T) {
 				}
 			},
 		},
+		// The returned decision must be a subset of decision.PossibleDecisions();
+		// otherwise the webhook is treated as misbehaving and we fail closed to
+		// decision.FailureDecision(). Each case below hits a different arm of the
+		// switch that enforces this in EvaluateConditions. IDs and types must be
+		// domain-prefixed or ConditionsAwareDecisionConditionsMap will collapse
+		// the decision to an unconditional failure.
+		{
+			// PossibleDecisions of a Deny-only ConditionsMap is {NoOpinion, Deny},
+			// so returning Allow is out-of-band. FailureDecision() is Deny because
+			// Deny is a possible outcome.
+			name: "deny-only conditions map: webhook returns Allow fails closed",
+			decision: authorizer.ConditionsAwareDecisionConditionsMap(
+				[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/deny"}},
+				nil, nil,
+			),
+			acrResponse: &authorizationv1alpha1.AuthorizationConditionsReview{
+				Response: &authorizationv1alpha1.AuthorizationConditionsResponse{
+					Decision: authorizationv1alpha1.ConditionsAwareDecision{
+						Type:  authorizationv1alpha1.ConditionsAwareDecisionTypeAllow,
+						Allow: &authorizationv1alpha1.UnconditionalDecision{Reason: "should not be honored"},
+					},
+				},
+			},
+			decisionOnError: authorizer.DecisionNoOpinion,
+			wantDecision:    authorizer.DecisionDeny,
+			wantReason:      "failed closed",
+			wantErr:         true,
+			wantErrContains: "tried to return Allow from EvaluateConditions, even though that was not a possible outcome",
+		},
+		{
+			// PossibleDecisions of an Allow-only ConditionsMap is {NoOpinion, Allow},
+			// so returning Deny is out-of-band. FailureDecision() is NoOpinion because
+			// Deny is not a possible outcome.
+			name: "allow-only conditions map: webhook returns Deny fails closed",
+			decision: authorizer.ConditionsAwareDecisionConditionsMap(
+				nil, nil,
+				[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/allow"}},
+			),
+			acrResponse: &authorizationv1alpha1.AuthorizationConditionsReview{
+				Response: &authorizationv1alpha1.AuthorizationConditionsResponse{
+					Decision: authorizationv1alpha1.ConditionsAwareDecision{
+						Type: authorizationv1alpha1.ConditionsAwareDecisionTypeDeny,
+						Deny: &authorizationv1alpha1.UnconditionalDecision{Reason: "should not be honored"},
+					},
+				},
+			},
+			decisionOnError: authorizer.DecisionDeny,
+			wantDecision:    authorizer.DecisionNoOpinion,
+			wantReason:      "failed closed",
+			wantErr:         true,
+			wantErrContains: "tried to return Deny from EvaluateConditions, even though that was not a possible outcome",
+		},
+		{
+			// A Union that contains any unconditional Allow/Deny leaf drops NoOpinion
+			// from PossibleDecisions, so a webhook returning NoOpinion is out-of-band.
+			// This is the only way to exercise the NoOpinion arm of the check with a
+			// decision that is still conditional (unconditional decisions short-circuit
+			// earlier via IsUnconditional).
+			name: "union with unconditional allow leaf: webhook returns NoOpinion fails closed",
+			decision: func() authorizer.ConditionsAwareDecision {
+				var u authorizer.ConditionsAwareDecisionUnion
+				u.Add("example.com/cm", authorizer.ConditionsAwareDecisionConditionsMap(
+					[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/deny"}},
+					nil, nil,
+				))
+				u.Add("example.com/allow", authorizer.ConditionsAwareDecisionAllow("unconditional allow", nil))
+				return u.ToDecision()
+			}(),
+			acrResponse: &authorizationv1alpha1.AuthorizationConditionsReview{
+				Response: &authorizationv1alpha1.AuthorizationConditionsResponse{
+					Decision: authorizationv1alpha1.ConditionsAwareDecision{
+						Type:      authorizationv1alpha1.ConditionsAwareDecisionTypeNoOpinion,
+						NoOpinion: &authorizationv1alpha1.UnconditionalDecision{Reason: "should not be honored"},
+					},
+				},
+			},
+			decisionOnError: authorizer.DecisionNoOpinion,
+			wantDecision:    authorizer.DecisionDeny,
+			wantReason:      "failed closed",
+			wantErr:         true,
+			wantErrContains: "tried to return NoOpinion from EvaluateConditions, even though that was not a possible outcome",
+		},
 	}
 
 	for _, tc := range tests {
