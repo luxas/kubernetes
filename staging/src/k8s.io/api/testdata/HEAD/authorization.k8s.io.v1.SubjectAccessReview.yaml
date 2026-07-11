@@ -33,6 +33,8 @@ metadata:
   selfLink: selfLinkValue
   uid: uidValue
 spec:
+  conditionalAuthorization:
+    enabled: true
   extra:
     extraKey:
     - extraValue
@@ -67,6 +69,37 @@ spec:
   user: userValue
 status:
   allowed: true
+  conditionalDecision:
+    allow:
+      evaluationError: evaluationErrorValue
+      reason: reasonValue
+    conditionsMap:
+      allowConditions:
+      - condition: conditionValue
+        description: descriptionValue
+        id: idValue
+        type: typeValue
+      denyConditions:
+      - condition: conditionValue
+        description: descriptionValue
+        id: idValue
+        type: typeValue
+      noOpinionConditions:
+      - condition: conditionValue
+        description: descriptionValue
+        id: idValue
+        type: typeValue
+    deny:
+      evaluationError: evaluationErrorValue
+      reason: reasonValue
+    noOpinion:
+      evaluationError: evaluationErrorValue
+      reason: reasonValue
+    type: typeValue
+    union:
+    - authorizerName: authorizerNameValue
+      decision:
+        type: ""
   denied: true
   evaluationError: evaluationErrorValue
   reason: reasonValue
