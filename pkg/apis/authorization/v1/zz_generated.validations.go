@@ -467,15 +467,15 @@ func Validate_ConditionsAwareDecision(
 				return // do not proceed
 			}
 			// lists with map semantics require unique keys
-			if e := validate.Unique(ctx, op, fldPath, obj, oldObj,
-				func(a authorizationv1.NamedConditionsAwareDecision, b authorizationv1.NamedConditionsAwareDecision) bool {
+			if e := validate.ValSliceUnique(ctx, op, fldPath, obj, oldObj,
+				func(a *authorizationv1.NamedConditionsAwareDecision, b *authorizationv1.NamedConditionsAwareDecision) bool {
 					return a.AuthorizerName == b.AuthorizerName
 				}); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			// iterate the list and call the type's validation function
-			if e := validate.EachSliceVal(ctx, op, fldPath, obj, oldObj,
-				func(a authorizationv1.NamedConditionsAwareDecision, b authorizationv1.NamedConditionsAwareDecision) bool {
+			if e := validate.EachValSliceVal(ctx, op, fldPath, obj, oldObj,
+				func(a *authorizationv1.NamedConditionsAwareDecision, b *authorizationv1.NamedConditionsAwareDecision) bool {
 					return a.AuthorizerName == b.AuthorizerName
 				}, validate.SemanticDeepEqual, Validate_NamedConditionsAwareDecision); len(e) != 0 {
 				errs = append(errs, e...)
@@ -533,13 +533,13 @@ func Validate_ConditionsMap(
 				return // do not proceed
 			}
 			// lists with map semantics require unique keys
-			if e := validate.Unique(ctx, op, fldPath, obj, oldObj,
-				func(a authorizationv1.Condition, b authorizationv1.Condition) bool { return a.ID == b.ID }); len(e) != 0 {
+			if e := validate.ValSliceUnique(ctx, op, fldPath, obj, oldObj,
+				func(a *authorizationv1.Condition, b *authorizationv1.Condition) bool { return a.ID == b.ID }); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			// iterate the list and call the type's validation function
-			if e := validate.EachSliceVal(ctx, op, fldPath, obj, oldObj,
-				func(a authorizationv1.Condition, b authorizationv1.Condition) bool { return a.ID == b.ID }, validate.DirectEqual, Validate_Condition); len(e) != 0 {
+			if e := validate.EachValSliceVal(ctx, op, fldPath, obj, oldObj,
+				func(a *authorizationv1.Condition, b *authorizationv1.Condition) bool { return a.ID == b.ID }, validate.DirectEqual, Validate_Condition); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -571,13 +571,13 @@ func Validate_ConditionsMap(
 				return // do not proceed
 			}
 			// lists with map semantics require unique keys
-			if e := validate.Unique(ctx, op, fldPath, obj, oldObj,
-				func(a authorizationv1.Condition, b authorizationv1.Condition) bool { return a.ID == b.ID }); len(e) != 0 {
+			if e := validate.ValSliceUnique(ctx, op, fldPath, obj, oldObj,
+				func(a *authorizationv1.Condition, b *authorizationv1.Condition) bool { return a.ID == b.ID }); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			// iterate the list and call the type's validation function
-			if e := validate.EachSliceVal(ctx, op, fldPath, obj, oldObj,
-				func(a authorizationv1.Condition, b authorizationv1.Condition) bool { return a.ID == b.ID }, validate.DirectEqual, Validate_Condition); len(e) != 0 {
+			if e := validate.EachValSliceVal(ctx, op, fldPath, obj, oldObj,
+				func(a *authorizationv1.Condition, b *authorizationv1.Condition) bool { return a.ID == b.ID }, validate.DirectEqual, Validate_Condition); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -609,13 +609,13 @@ func Validate_ConditionsMap(
 				return // do not proceed
 			}
 			// lists with map semantics require unique keys
-			if e := validate.Unique(ctx, op, fldPath, obj, oldObj,
-				func(a authorizationv1.Condition, b authorizationv1.Condition) bool { return a.ID == b.ID }); len(e) != 0 {
+			if e := validate.ValSliceUnique(ctx, op, fldPath, obj, oldObj,
+				func(a *authorizationv1.Condition, b *authorizationv1.Condition) bool { return a.ID == b.ID }); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			// iterate the list and call the type's validation function
-			if e := validate.EachSliceVal(ctx, op, fldPath, obj, oldObj,
-				func(a authorizationv1.Condition, b authorizationv1.Condition) bool { return a.ID == b.ID }, validate.DirectEqual, Validate_Condition); len(e) != 0 {
+			if e := validate.EachValSliceVal(ctx, op, fldPath, obj, oldObj,
+				func(a *authorizationv1.Condition, b *authorizationv1.Condition) bool { return a.ID == b.ID }, validate.DirectEqual, Validate_Condition); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
