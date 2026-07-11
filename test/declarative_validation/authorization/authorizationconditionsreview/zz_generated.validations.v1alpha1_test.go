@@ -30,36 +30,65 @@ func init() {
 	coverage.RegisterDeclaredRules(
 		schema.GroupVersionKind{Group: "authorization.k8s.io", Version: "v1alpha1", Kind: "AuthorizationConditionsReview"},
 		coverage.FieldRules{
-			"metadata.generation": {
-				{ErrorType: "FieldValueInvalid", Origin: "minimum"},
-			},
-			"metadata.managedFields[*].operation": {
-				{ErrorType: "FieldValueNotSupported"},
-				{ErrorType: "FieldValueRequired"},
-			},
 			"request": {
 				{ErrorType: "FieldValueInvalid", Origin: "union"},
 			},
-			"request.decision": {
-				{ErrorType: "FieldValueInvalid", Origin: "union"},
+			"request.decision.conditionsMap.allowConditions": {
+				{ErrorType: "FieldValueTooMany", Origin: "maxItems"},
 			},
 			"request.decision.conditionsMap.allowConditions[*]": {
 				{ErrorType: "FieldValueDuplicate"},
 			},
+			"request.decision.conditionsMap.allowConditions[*].condition": {
+				{ErrorType: "FieldValueTooLong", Origin: "maxBytes"},
+			},
+			"request.decision.conditionsMap.allowConditions[*].description": {
+				{ErrorType: "FieldValueTooLong", Origin: "maxBytes"},
+			},
 			"request.decision.conditionsMap.allowConditions[*].id": {
+				{ErrorType: "FieldValueInvalid", Origin: "format=k8s-label-key"},
 				{ErrorType: "FieldValueRequired"},
+			},
+			"request.decision.conditionsMap.allowConditions[*].type": {
+				{ErrorType: "FieldValueInvalid", Origin: "format=k8s-label-key"},
+			},
+			"request.decision.conditionsMap.denyConditions": {
+				{ErrorType: "FieldValueTooMany", Origin: "maxItems"},
 			},
 			"request.decision.conditionsMap.denyConditions[*]": {
 				{ErrorType: "FieldValueDuplicate"},
 			},
+			"request.decision.conditionsMap.denyConditions[*].condition": {
+				{ErrorType: "FieldValueTooLong", Origin: "maxBytes"},
+			},
+			"request.decision.conditionsMap.denyConditions[*].description": {
+				{ErrorType: "FieldValueTooLong", Origin: "maxBytes"},
+			},
 			"request.decision.conditionsMap.denyConditions[*].id": {
+				{ErrorType: "FieldValueInvalid", Origin: "format=k8s-label-key"},
 				{ErrorType: "FieldValueRequired"},
+			},
+			"request.decision.conditionsMap.denyConditions[*].type": {
+				{ErrorType: "FieldValueInvalid", Origin: "format=k8s-label-key"},
+			},
+			"request.decision.conditionsMap.noOpinionConditions": {
+				{ErrorType: "FieldValueTooMany", Origin: "maxItems"},
 			},
 			"request.decision.conditionsMap.noOpinionConditions[*]": {
 				{ErrorType: "FieldValueDuplicate"},
 			},
+			"request.decision.conditionsMap.noOpinionConditions[*].condition": {
+				{ErrorType: "FieldValueTooLong", Origin: "maxBytes"},
+			},
+			"request.decision.conditionsMap.noOpinionConditions[*].description": {
+				{ErrorType: "FieldValueTooLong", Origin: "maxBytes"},
+			},
 			"request.decision.conditionsMap.noOpinionConditions[*].id": {
+				{ErrorType: "FieldValueInvalid", Origin: "format=k8s-label-key"},
 				{ErrorType: "FieldValueRequired"},
+			},
+			"request.decision.conditionsMap.noOpinionConditions[*].type": {
+				{ErrorType: "FieldValueInvalid", Origin: "format=k8s-label-key"},
 			},
 			"request.decision.type": {
 				{ErrorType: "FieldValueNotSupported"},
@@ -71,26 +100,62 @@ func init() {
 			"request.decision.union[*].authorizerName": {
 				{ErrorType: "FieldValueRequired"},
 			},
-			"response.decision": {
-				{ErrorType: "FieldValueInvalid", Origin: "union"},
+			"response.decision.conditionsMap.allowConditions": {
+				{ErrorType: "FieldValueTooMany", Origin: "maxItems"},
 			},
 			"response.decision.conditionsMap.allowConditions[*]": {
 				{ErrorType: "FieldValueDuplicate"},
 			},
+			"response.decision.conditionsMap.allowConditions[*].condition": {
+				{ErrorType: "FieldValueTooLong", Origin: "maxBytes"},
+			},
+			"response.decision.conditionsMap.allowConditions[*].description": {
+				{ErrorType: "FieldValueTooLong", Origin: "maxBytes"},
+			},
 			"response.decision.conditionsMap.allowConditions[*].id": {
+				{ErrorType: "FieldValueInvalid", Origin: "format=k8s-label-key"},
 				{ErrorType: "FieldValueRequired"},
+			},
+			"response.decision.conditionsMap.allowConditions[*].type": {
+				{ErrorType: "FieldValueInvalid", Origin: "format=k8s-label-key"},
+			},
+			"response.decision.conditionsMap.denyConditions": {
+				{ErrorType: "FieldValueTooMany", Origin: "maxItems"},
 			},
 			"response.decision.conditionsMap.denyConditions[*]": {
 				{ErrorType: "FieldValueDuplicate"},
 			},
+			"response.decision.conditionsMap.denyConditions[*].condition": {
+				{ErrorType: "FieldValueTooLong", Origin: "maxBytes"},
+			},
+			"response.decision.conditionsMap.denyConditions[*].description": {
+				{ErrorType: "FieldValueTooLong", Origin: "maxBytes"},
+			},
 			"response.decision.conditionsMap.denyConditions[*].id": {
+				{ErrorType: "FieldValueInvalid", Origin: "format=k8s-label-key"},
 				{ErrorType: "FieldValueRequired"},
+			},
+			"response.decision.conditionsMap.denyConditions[*].type": {
+				{ErrorType: "FieldValueInvalid", Origin: "format=k8s-label-key"},
+			},
+			"response.decision.conditionsMap.noOpinionConditions": {
+				{ErrorType: "FieldValueTooMany", Origin: "maxItems"},
 			},
 			"response.decision.conditionsMap.noOpinionConditions[*]": {
 				{ErrorType: "FieldValueDuplicate"},
 			},
+			"response.decision.conditionsMap.noOpinionConditions[*].condition": {
+				{ErrorType: "FieldValueTooLong", Origin: "maxBytes"},
+			},
+			"response.decision.conditionsMap.noOpinionConditions[*].description": {
+				{ErrorType: "FieldValueTooLong", Origin: "maxBytes"},
+			},
 			"response.decision.conditionsMap.noOpinionConditions[*].id": {
+				{ErrorType: "FieldValueInvalid", Origin: "format=k8s-label-key"},
 				{ErrorType: "FieldValueRequired"},
+			},
+			"response.decision.conditionsMap.noOpinionConditions[*].type": {
+				{ErrorType: "FieldValueInvalid", Origin: "format=k8s-label-key"},
 			},
 			"response.decision.type": {
 				{ErrorType: "FieldValueNotSupported"},

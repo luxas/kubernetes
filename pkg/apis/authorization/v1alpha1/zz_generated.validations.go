@@ -281,6 +281,9 @@ func Validate_Condition(
 			if earlyReturn {
 				return // do not proceed
 			}
+			if e := validate.LabelKey(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
 			return
 		}
 		oldVal := safe.Field(oldObj,
@@ -308,6 +311,9 @@ func Validate_Condition(
 			}
 			if earlyReturn {
 				return // do not proceed
+			}
+			if e := validate.MaxBytes(ctx, op, fldPath, obj, oldObj, 10240).MarkBeta(); len(e) != 0 {
+				errs = append(errs, e...)
 			}
 			return
 		}
@@ -337,6 +343,9 @@ func Validate_Condition(
 			if earlyReturn {
 				return // do not proceed
 			}
+			if e := validate.LabelKey(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
 			return
 		}
 		oldVal := safe.Field(oldObj,
@@ -364,6 +373,9 @@ func Validate_Condition(
 			}
 			if earlyReturn {
 				return // do not proceed
+			}
+			if e := validate.MaxBytes(ctx, op, fldPath, obj, oldObj, 1024).MarkBeta(); len(e) != 0 {
+				errs = append(errs, e...)
 			}
 			return
 		}
@@ -655,6 +667,10 @@ func Validate_ConditionsMap(
 			}
 			// call field-attached validations
 			earlyReturn := false
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 128).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
 			if e := validate.OptionalSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
@@ -693,6 +709,10 @@ func Validate_ConditionsMap(
 			}
 			// call field-attached validations
 			earlyReturn := false
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 128).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
 			if e := validate.OptionalSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
@@ -731,6 +751,10 @@ func Validate_ConditionsMap(
 			}
 			// call field-attached validations
 			earlyReturn := false
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 128).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
 			if e := validate.OptionalSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
