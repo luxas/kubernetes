@@ -320,7 +320,7 @@ type ConditionalAuthorizationOptions struct {
 // data available later in the request chain, e.g. objects available in admission.
 type Condition struct {
 	// ID uniquely identifies this condition within the scope of the authorizer
-	// that authored it. Validated as a Kubernetes label key.
+	// that authored it and ConditionsMap it is part of. Validated as a Kubernetes label key.
 	// Any domain of form *.k8s.io or *.kubernetes.io is reserved for Kubernetes use.
 	// +required
 	ID string
@@ -347,7 +347,7 @@ type Condition struct {
 
 // ConditionsMap represents a map of conditions, keyed by ID across all conditions, across
 // all effects. The ConditionsMap must have at least one Allow condition or at least one
-// Deny condition. It cannot contain more than 128 conditions. The conditions are evaluated
+// Deny condition. It cannot contain more than 128 conditions in total. The conditions are evaluated
 // against data available later, to determine whether the authorizer that authored the conditions
 // allows or denies the request.
 // If all conditions in the map evaluate to false, the final decision must be NoOpinion.

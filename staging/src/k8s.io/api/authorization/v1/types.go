@@ -411,9 +411,10 @@ type ConditionalAuthorizationOptions struct {
 // data available later in the request chain, e.g. objects available in admission.
 type Condition struct {
 	// id uniquely identifies this condition within the scope of the authorizer
-	// that authored it. Validated as a Kubernetes label key.
+	// that authored it and ConditionsMap it is part of. Validated as a Kubernetes label key.
 	// Any domain of form *.k8s.io or *.kubernetes.io is reserved for Kubernetes use.
 	// +k8s:required
+	// +k8s:format=k8s-label-key
 	// +required
 	ID string `json:"id" protobuf:"bytes,1,opt,name=id"`
 
@@ -421,6 +422,7 @@ type Condition struct {
 	// It is a pure, deterministic function from ConditionsData to a boolean (or error).
 	// Might or might not be human-readable.
 	// Optional, if the ID alone is enough for the authorizer to know how to evaluate the condition.
+	// +k8s:maxBytes=10240
 	// +k8s:optional
 	// +optional
 	Condition string `json:"condition,omitempty" protobuf:"bytes,2,opt,name=condition"`
@@ -429,12 +431,14 @@ type Condition struct {
 	// Should be formatted as a Kubernetes label key.
 	// Any domain of form *.k8s.io or *.kubernetes.io is reserved for Kubernetes use.
 	// Optional. Can be omitted if the authorizer already knows how to evaluate the condition.
+	// +k8s:format=k8s-label-key
 	// +k8s:optional
 	// +optional
 	Type string `json:"type,omitempty" protobuf:"bytes,3,opt,name=type"`
 
 	// description is an optional human-friendly description that can be shown
 	// as an error message or for debugging. Optional.
+	// +k8s:maxBytes=1024
 	// +k8s:optional
 	// +optional
 	Description string `json:"description,omitempty" protobuf:"bytes,4,opt,name=description"`
@@ -442,7 +446,7 @@ type Condition struct {
 
 // ConditionsMap represents a map of conditions, keyed by ID across all conditions, across
 // all effects. The ConditionsMap must have at least one Allow condition or at least one
-// Deny condition. It cannot contain more than 128 conditions. The conditions are evaluated
+// Deny condition. It cannot contain more than 128 conditions in total. The conditions are evaluated
 // against data available later, to determine whether the authorizer that authored the conditions
 // allows or denies the request.
 // If all conditions in the map evaluate to false, the final decision must be NoOpinion.
@@ -453,6 +457,7 @@ type ConditionsMap struct {
 	// +listMapKey=id
 	// +k8s:listType=map
 	// +k8s:listMapKey=id
+	// +k8s:maxLength=128
 	// +k8s:optional
 	// +optional
 	DenyConditions []Condition `json:"denyConditions" protobuf:"bytes,1,rep,name=denyConditions"`
@@ -463,6 +468,7 @@ type ConditionsMap struct {
 	// +listMapKey=id
 	// +k8s:listType=map
 	// +k8s:listMapKey=id
+	// +k8s:maxLength=128
 	// +k8s:optional
 	// +optional
 	NoOpinionConditions []Condition `json:"noOpinionConditions" protobuf:"bytes,2,rep,name=noOpinionConditions"`
@@ -473,6 +479,7 @@ type ConditionsMap struct {
 	// +listMapKey=id
 	// +k8s:listType=map
 	// +k8s:listMapKey=id
+	// +k8s:maxLength=128
 	// +k8s:optional
 	// +optional
 	AllowConditions []Condition `json:"allowConditions" protobuf:"bytes,3,rep,name=allowConditions"`
@@ -570,6 +577,7 @@ type NamedConditionsAwareDecision struct {
 	// This name must be unique within a given union authorizer, not necessarily globally.
 	// +required
 	// +k8s:required
+	// +k8s:format=k8s-label-key
 	AuthorizerName string `json:"authorizerName" protobuf:"bytes,1,opt,name=authorizerName"`
 
 	// decision carries the inner decision returned from the authorizer.
