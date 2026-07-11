@@ -25,7 +25,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
+	genericfeatures "k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/registry/rest"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	authorizationapi "k8s.io/kubernetes/pkg/apis/authorization"
 	authorizationvalidation "k8s.io/kubernetes/pkg/apis/authorization/validation"
 	authorizationutil "k8s.io/kubernetes/pkg/registry/authorization/util"
@@ -65,8 +67,13 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	if !ok {
 		return nil, apierrors.NewBadRequest(fmt.Sprintf("not a SelfSubjectAccessReview: %#v", obj))
 	}
-	// spec.conditionalAuthorization is not set to nil here when the feature gate is off, instead it is
-	// used to build an error in SARStatusFromAuthorize if it is set when the feature gate is off.
+
+	// Clear the options for opting into conditions-awareness when the feature gate is off.
+	// This means that we fallback to the conditions-unaware Authorize when the feature gate is
+	// off, even though both the client and authorizer might have supported conditions.
+	if !utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
+		selfSAR.Spec.ConditionalAuthorization = nil
+	}
 
 	if errs := authorizationvalidation.ValidateSelfSubjectAccessReviewCreate(ctx, r.scheme, selfSAR); len(errs) > 0 {
 		return nil, apierrors.NewInvalid(authorizationapi.Kind(selfSAR.Kind), "", errs)
@@ -89,7 +96,21 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		authorizationAttributes = authorizationutil.NonResourceAttributesFrom(userToCheck, *selfSAR.Spec.NonResourceAttributes)
 	}
 
-	selfSAR.Status = authorizationutil.SARStatusFromAuthorize(ctx, r.authorizer, authorizationAttributes, selfSAR.Spec.ConditionalAuthorization)
+	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) && authorizationutil.SupportsConditions(selfSAR.Spec.ConditionalAuthorization) {
+		// conditions-aware flow, feature gate is on and client supports conditions
+		conditionsAwareDecision := r.authorizer.ConditionsAwareAuthorize(ctx, authorizationAttributes)
+		selfSAR.Status = authorizationutil.ConditionsAwareDecisionToSARStatus(ctx, authorizationAttributes, conditionsAwareDecision)
+	} else {
+		// conditions-unaware flow, feature gate is off or client does not support conditions
+		decision, reason, evaluationErr := r.authorizer.Authorize(ctx, authorizationAttributes)
+
+		selfSAR.Status = authorizationapi.SubjectAccessReviewStatus{
+			Allowed:         (decision == authorizer.DecisionAllow),
+			Denied:          (decision == authorizer.DecisionDeny),
+			Reason:          reason,
+			EvaluationError: authorizationutil.BuildEvaluationError(evaluationErr, authorizationAttributes),
+		}
+	}
 
 	return selfSAR, nil
 }

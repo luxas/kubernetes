@@ -202,6 +202,36 @@ func TestCreate(t *testing.T) {
 			},
 		},
 
+		// When the ConditionalAuthorization feature gate is off (default), the REST handler
+		// must silently clear spec.conditionalAuthorization instead of rejecting the request as
+		// invalid, and fall back to the conditions-unaware Authorize path so the response is
+		// exactly what a non-conditions-aware client would have received.
+		"conditionalAuthorization set with feature gate off falls back to Authorize": {
+			spec: authorizationapi.SubjectAccessReviewSpec{
+				User: "bob",
+				ResourceAttributes: &authorizationapi.ResourceAttributes{
+					Namespace: "myns",
+					Verb:      "get",
+					Resource:  "pods",
+				},
+				ConditionalAuthorization: &authorizationapi.ConditionalAuthorizationOptions{Enabled: true},
+			},
+			decision: authorizer.DecisionAllow,
+			reason:   "allowed",
+			expectedAttrs: authorizer.AttributesRecord{
+				User:            &user.DefaultInfo{Name: "bob"},
+				Namespace:       "myns",
+				Verb:            "get",
+				Resource:        "pods",
+				APIVersion:      "*",
+				ResourceRequest: true,
+			},
+			expectedStatus: authorizationapi.SubjectAccessReviewStatus{
+				Allowed: true,
+				Reason:  "allowed",
+			},
+		},
+
 		"resource denied, valid selectors": {
 			spec: authorizationapi.SubjectAccessReviewSpec{
 				User: "bob",

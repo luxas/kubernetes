@@ -29,8 +29,6 @@ import (
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
-	genericfeatures "k8s.io/apiserver/pkg/features"
-	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	authorizationapi "k8s.io/kubernetes/pkg/apis/authorization"
 )
 
@@ -244,32 +242,14 @@ func BuildEvaluationError(evaluationError error, attrs authorizer.AttributesReco
 }
 
 // SARStatusFromAuthorize invokes the authorizer as appropriate (with or without conditions support), and encodes the result into SAR status.
-func SARStatusFromAuthorize(ctx context.Context, authz authorizer.Authorizer, attrs authorizer.AttributesRecord, conditionalOpts *authorizationapi.ConditionalAuthorizationOptions) authorizationapi.SubjectAccessReviewStatus {
-	// Utilize the conditions-unaware flow when the feature gate is off or the client does not request/support it
-	if !utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) || conditionalOpts == nil || !conditionalOpts.Enabled {
-		decision, reason, evaluationErr := authz.Authorize(ctx, attrs)
-
-		return authorizationapi.SubjectAccessReviewStatus{
-			Allowed: (decision == authorizer.DecisionAllow),
-			Denied:  (decision == authorizer.DecisionDeny),
-			// One could inform the user if they asked for conditional authorization, but the feature gate was disabled; however
-			// one does not know if the authorizer "would have wanted to" return something conditional, and thus could such a
-			// standard message be noisy for places where it is irrelevant.
-			Reason:          reason,
-			EvaluationError: BuildEvaluationError(evaluationErr, attrs),
-		}
-	}
-	// Feature gate is on and client specifically asked for conditional authorization to be enabled
-
-	decision := authz.ConditionsAwareAuthorize(ctx, attrs)
-	evaluationErrString := BuildEvaluationError(decision.Error(), attrs)
+func ConditionsAwareDecisionToSARStatus(ctx context.Context, attrs authorizer.AttributesRecord, decision authorizer.ConditionsAwareDecision) authorizationapi.SubjectAccessReviewStatus {
 	// Allow/Deny/NoOpinion decisions should be serialized as before, on the top-level SAR status.
 	if decision.IsUnconditional() {
 		return authorizationapi.SubjectAccessReviewStatus{
 			Allowed:         decision.IsAllow(),
 			Denied:          decision.IsDeny(),
 			Reason:          decision.Reason(),
-			EvaluationError: evaluationErrString,
+			EvaluationError: BuildEvaluationError(decision.Error(), attrs),
 		}
 	}
 	// ConditionsMap or Union decision should be put under status.conditionalDecision.
@@ -277,6 +257,12 @@ func SARStatusFromAuthorize(ctx context.Context, authz authorizer.Authorizer, at
 	return authorizationapi.SubjectAccessReviewStatus{
 		ConditionalDecision: &serialized,
 	}
+}
+
+// SupportsConditions indicates whether the ConditionalAuthorizationOptions are such that
+// the client has opted into authorization conditions-awareness.
+func SupportsConditions(options *authorizationapi.ConditionalAuthorizationOptions) bool {
+	return options != nil && options.Enabled
 }
 
 func serializeConditionsAwareDecision(decision authorizer.ConditionsAwareDecision) authorizationapi.ConditionsAwareDecision {
