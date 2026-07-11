@@ -274,12 +274,12 @@ type SelfSubjectAccessReviewSpec struct {
 // SubjectAccessReviewStatus
 type SubjectAccessReviewStatus struct {
 	// allowed is required. True if the action would be allowed, false otherwise.
-	// Mutually exclusive with denied and conditionalDecision.
+	// allowed=true is mutually exclusive with denied=true and conditionalDecision != nil.
 	Allowed bool `json:"allowed" protobuf:"varint,1,opt,name=allowed"`
 	// denied is optional. True if the action would be denied, otherwise false
 	// If allowed is false, denied is false, and conditionalDecision is unset,
 	// then the authorizer has no opinion on whether to authorize the action.
-	// Mutually exclusive with allowed and conditionalDecision.
+	// denied=true is mutually exclusive with allowed=true and conditionalDecision != nil.
 	// +optional
 	Denied bool `json:"denied,omitempty" protobuf:"varint,4,opt,name=denied"`
 	// reason is optional.  It indicates why a request was allowed or denied.
@@ -292,7 +292,7 @@ type SubjectAccessReviewStatus struct {
 	EvaluationError string `json:"evaluationError,omitempty" protobuf:"bytes,3,opt,name=evaluationError"`
 
 	// conditionalDecision represents a conditional decision returned by the authorizer.
-	// Mutually exclusive with allowed and denied.
+	// Mutually exclusive with allowed=true and denied=true.
 	// The top-level decision type should be ConditionsAwareDecisionTypeConditionsMap or
 	// ConditionsAwareDecisionTypeUnion, as Allow/Deny/NoOpinion decisions can be represented
 	// with SubjectAccessReviewStatus.Allowed and SubjectAccessReviewStatus.Denied alone.
