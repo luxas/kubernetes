@@ -36,6 +36,7 @@ type AuthorizationConditionsReview struct {
 	// In AuthorizationConditionsReview, it must be an empty struct.
 	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
 	// +optional
+	// +k8s:opaqueType
 	metav1.ObjectMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
 
 	// request describes the attributes for the authorization conditions request.
@@ -166,7 +167,7 @@ type Condition struct {
 	// It is a pure, deterministic function from ConditionsData to a boolean (or error).
 	// Might or might not be human-readable.
 	// Optional, if the ID alone is enough for the authorizer to know how to evaluate the condition.
-	// +k8s:maxBytes=10240
+	// +k8s:beta=+k8s:maxBytes=10240
 	// +k8s:optional
 	// +optional
 	Condition string `json:"condition,omitempty" protobuf:"bytes,2,opt,name=condition"`
@@ -182,7 +183,7 @@ type Condition struct {
 
 	// description is an optional human-friendly description that can be shown
 	// as an error message or for debugging. Optional.
-	// +k8s:maxBytes=1024
+	// +k8s:beta=+k8s:maxBytes=1024
 	// +k8s:optional
 	// +optional
 	Description string `json:"description,omitempty" protobuf:"bytes,4,opt,name=description"`
@@ -201,7 +202,7 @@ type ConditionsMap struct {
 	// +listMapKey=id
 	// +k8s:listType=map
 	// +k8s:listMapKey=id
-	// +k8s:maxLength=128
+	// +k8s:maxItems=128
 	// +k8s:optional
 	// +optional
 	DenyConditions []Condition `json:"denyConditions" protobuf:"bytes,1,rep,name=denyConditions"`
@@ -212,7 +213,7 @@ type ConditionsMap struct {
 	// +listMapKey=id
 	// +k8s:listType=map
 	// +k8s:listMapKey=id
-	// +k8s:maxLength=128
+	// +k8s:maxItems=128
 	// +k8s:optional
 	// +optional
 	NoOpinionConditions []Condition `json:"noOpinionConditions" protobuf:"bytes,2,rep,name=noOpinionConditions"`
@@ -223,7 +224,7 @@ type ConditionsMap struct {
 	// +listMapKey=id
 	// +k8s:listType=map
 	// +k8s:listMapKey=id
-	// +k8s:maxLength=128
+	// +k8s:maxItems=128
 	// +k8s:optional
 	// +optional
 	AllowConditions []Condition `json:"allowConditions" protobuf:"bytes,3,rep,name=allowConditions"`
