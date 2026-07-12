@@ -340,4 +340,7 @@ type ConditionsData interface {
 	GetKind() schema.GroupVersionKind
 	// GetUserInfo is information about the requesting user
 	GetUserInfo() user.Info
+
+	// TODO(luxas): Temporary
+	AddAnnotation(key, value string) error
 }

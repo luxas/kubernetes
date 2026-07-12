@@ -451,9 +451,9 @@ func TestEvaluateConditions(t *testing.T) {
 			),
 			acrResponse: &authorizationv1alpha1.AuthorizationConditionsReview{
 				Response: &authorizationv1alpha1.AuthorizationConditionsResponse{
-					Decision: authorizationv1alpha1.ConditionsAwareDecision{
-						Type:  authorizationv1alpha1.ConditionsAwareDecisionTypeAllow,
-						Allow: &authorizationv1alpha1.UnconditionalDecision{Reason: "condition matched"},
+					Decision: authorizationv1.ConditionsAwareDecision{
+						Type:  authorizationv1.ConditionsAwareDecisionTypeAllow,
+						Allow: &authorizationv1.UnconditionalDecision{Reason: "condition matched"},
 					},
 				},
 			},
@@ -473,9 +473,9 @@ func TestEvaluateConditions(t *testing.T) {
 			),
 			acrResponse: &authorizationv1alpha1.AuthorizationConditionsReview{
 				Response: &authorizationv1alpha1.AuthorizationConditionsResponse{
-					Decision: authorizationv1alpha1.ConditionsAwareDecision{
-						Type: authorizationv1alpha1.ConditionsAwareDecisionTypeDeny,
-						Deny: &authorizationv1alpha1.UnconditionalDecision{Reason: "restricted label found"},
+					Decision: authorizationv1.ConditionsAwareDecision{
+						Type: authorizationv1.ConditionsAwareDecisionTypeDeny,
+						Deny: &authorizationv1.UnconditionalDecision{Reason: "restricted label found"},
 					},
 				},
 			},
@@ -491,9 +491,9 @@ func TestEvaluateConditions(t *testing.T) {
 			),
 			acrResponse: &authorizationv1alpha1.AuthorizationConditionsReview{
 				Response: &authorizationv1alpha1.AuthorizationConditionsResponse{
-					Decision: authorizationv1alpha1.ConditionsAwareDecision{
-						Type:      authorizationv1alpha1.ConditionsAwareDecisionTypeNoOpinion,
-						NoOpinion: &authorizationv1alpha1.UnconditionalDecision{Reason: "no matching condition"},
+					Decision: authorizationv1.ConditionsAwareDecision{
+						Type:      authorizationv1.ConditionsAwareDecisionTypeNoOpinion,
+						NoOpinion: &authorizationv1.UnconditionalDecision{Reason: "no matching condition"},
 					},
 				},
 			},
@@ -552,9 +552,9 @@ func TestEvaluateConditions(t *testing.T) {
 			),
 			acrResponse: &authorizationv1alpha1.AuthorizationConditionsReview{
 				Response: &authorizationv1alpha1.AuthorizationConditionsResponse{
-					Decision: authorizationv1alpha1.ConditionsAwareDecision{
-						Type:  authorizationv1alpha1.ConditionsAwareDecisionTypeAllow,
-						Allow: &authorizationv1alpha1.UnconditionalDecision{},
+					Decision: authorizationv1.ConditionsAwareDecision{
+						Type:  authorizationv1.ConditionsAwareDecisionTypeAllow,
+						Allow: &authorizationv1.UnconditionalDecision{},
 					},
 				},
 			},
@@ -569,7 +569,7 @@ func TestEvaluateConditions(t *testing.T) {
 				if req == nil {
 					t.Fatal("expected Request to be non-nil in ACR")
 				}
-				if req.Decision.Type != authorizationv1alpha1.ConditionsAwareDecisionTypeConditionsMap {
+				if req.Decision.Type != authorizationv1.ConditionsAwareDecisionTypeConditionsMap {
 					t.Errorf("expected ConditionsMap decision type in ACR request, got %q", req.Decision.Type)
 				}
 				if req.Decision.ConditionsMap == nil {
@@ -597,9 +597,9 @@ func TestEvaluateConditions(t *testing.T) {
 			),
 			acrResponse: &authorizationv1alpha1.AuthorizationConditionsReview{
 				Response: &authorizationv1alpha1.AuthorizationConditionsResponse{
-					Decision: authorizationv1alpha1.ConditionsAwareDecision{
-						Type: authorizationv1alpha1.ConditionsAwareDecisionTypeAllow,
-						Allow: &authorizationv1alpha1.UnconditionalDecision{
+					Decision: authorizationv1.ConditionsAwareDecision{
+						Type: authorizationv1.ConditionsAwareDecisionTypeAllow,
+						Allow: &authorizationv1.UnconditionalDecision{
 							Reason:          "partial allow",
 							EvaluationError: "condition 'c' evaluation had a warning",
 						},
@@ -621,7 +621,7 @@ func TestEvaluateConditions(t *testing.T) {
 			),
 			acrResponse: &authorizationv1alpha1.AuthorizationConditionsReview{
 				Response: &authorizationv1alpha1.AuthorizationConditionsResponse{
-					Decision: authorizationv1alpha1.ConditionsAwareDecision{
+					Decision: authorizationv1.ConditionsAwareDecision{
 						Type: "UnknownDecisionType",
 					},
 				},
@@ -639,7 +639,7 @@ func TestEvaluateConditions(t *testing.T) {
 			),
 			acrResponse: &authorizationv1alpha1.AuthorizationConditionsReview{
 				Response: &authorizationv1alpha1.AuthorizationConditionsResponse{
-					Decision: authorizationv1alpha1.ConditionsAwareDecision{
+					Decision: authorizationv1.ConditionsAwareDecision{
 						Type: "UnknownDecisionType",
 					},
 				},
@@ -666,9 +666,9 @@ func TestEvaluateConditions(t *testing.T) {
 			}(),
 			acrResponse: &authorizationv1alpha1.AuthorizationConditionsReview{
 				Response: &authorizationv1alpha1.AuthorizationConditionsResponse{
-					Decision: authorizationv1alpha1.ConditionsAwareDecision{
-						Type: authorizationv1alpha1.ConditionsAwareDecisionTypeDeny,
-						Deny: &authorizationv1alpha1.UnconditionalDecision{},
+					Decision: authorizationv1.ConditionsAwareDecision{
+						Type: authorizationv1.ConditionsAwareDecisionTypeDeny,
+						Deny: &authorizationv1.UnconditionalDecision{},
 					},
 				},
 			},
@@ -679,7 +679,7 @@ func TestEvaluateConditions(t *testing.T) {
 				if acr == nil {
 					t.Fatal("expected ACR to be called")
 				}
-				if acr.Request.Decision.Type != authorizationv1alpha1.ConditionsAwareDecisionTypeUnion {
+				if acr.Request.Decision.Type != authorizationv1.ConditionsAwareDecisionTypeUnion {
 					t.Errorf("expected Union type in ACR request, got %q", acr.Request.Decision.Type)
 				}
 				if len(acr.Request.Decision.Union) != 2 {
@@ -704,9 +704,9 @@ func TestEvaluateConditions(t *testing.T) {
 			),
 			acrResponse: &authorizationv1alpha1.AuthorizationConditionsReview{
 				Response: &authorizationv1alpha1.AuthorizationConditionsResponse{
-					Decision: authorizationv1alpha1.ConditionsAwareDecision{
-						Type:  authorizationv1alpha1.ConditionsAwareDecisionTypeAllow,
-						Allow: &authorizationv1alpha1.UnconditionalDecision{Reason: "should not be honored"},
+					Decision: authorizationv1.ConditionsAwareDecision{
+						Type:  authorizationv1.ConditionsAwareDecisionTypeAllow,
+						Allow: &authorizationv1.UnconditionalDecision{Reason: "should not be honored"},
 					},
 				},
 			},
@@ -727,9 +727,9 @@ func TestEvaluateConditions(t *testing.T) {
 			),
 			acrResponse: &authorizationv1alpha1.AuthorizationConditionsReview{
 				Response: &authorizationv1alpha1.AuthorizationConditionsResponse{
-					Decision: authorizationv1alpha1.ConditionsAwareDecision{
-						Type: authorizationv1alpha1.ConditionsAwareDecisionTypeDeny,
-						Deny: &authorizationv1alpha1.UnconditionalDecision{Reason: "should not be honored"},
+					Decision: authorizationv1.ConditionsAwareDecision{
+						Type: authorizationv1.ConditionsAwareDecisionTypeDeny,
+						Deny: &authorizationv1.UnconditionalDecision{Reason: "should not be honored"},
 					},
 				},
 			},
@@ -757,9 +757,9 @@ func TestEvaluateConditions(t *testing.T) {
 			}(),
 			acrResponse: &authorizationv1alpha1.AuthorizationConditionsReview{
 				Response: &authorizationv1alpha1.AuthorizationConditionsResponse{
-					Decision: authorizationv1alpha1.ConditionsAwareDecision{
-						Type:      authorizationv1alpha1.ConditionsAwareDecisionTypeNoOpinion,
-						NoOpinion: &authorizationv1alpha1.UnconditionalDecision{Reason: "should not be honored"},
+					Decision: authorizationv1.ConditionsAwareDecision{
+						Type:      authorizationv1.ConditionsAwareDecisionTypeNoOpinion,
+						NoOpinion: &authorizationv1.UnconditionalDecision{Reason: "should not be honored"},
 					},
 				},
 			},
@@ -893,9 +893,9 @@ func TestEvaluateConditions_EndToEnd(t *testing.T) {
 				Kind:       "AuthorizationConditionsReview",
 			},
 			Response: &authorizationv1alpha1.AuthorizationConditionsResponse{
-				Decision: authorizationv1alpha1.ConditionsAwareDecision{
-					Type:  authorizationv1alpha1.ConditionsAwareDecisionTypeAllow,
-					Allow: &authorizationv1alpha1.UnconditionalDecision{Reason: "webhook allowed"},
+				Decision: authorizationv1.ConditionsAwareDecision{
+					Type:  authorizationv1.ConditionsAwareDecisionTypeAllow,
+					Allow: &authorizationv1.UnconditionalDecision{Reason: "webhook allowed"},
 				},
 			},
 		}
@@ -942,7 +942,7 @@ func TestEvaluateConditions_EndToEnd(t *testing.T) {
 	if receivedACR.Request == nil {
 		t.Fatal("expected Request to be non-nil")
 	}
-	if receivedACR.Request.Decision.Type != authorizationv1alpha1.ConditionsAwareDecisionTypeConditionsMap {
+	if receivedACR.Request.Decision.Type != authorizationv1.ConditionsAwareDecisionTypeConditionsMap {
 		t.Errorf("expected ConditionsMap in ACR request, got %q", receivedACR.Request.Decision.Type)
 	}
 }

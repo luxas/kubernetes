@@ -598,4 +598,22 @@ type UnconditionalDecision struct {
 	// +k8s:optional
 	// +optional
 	EvaluationError string `json:"evaluationError,omitempty" protobuf:"bytes,2,opt,name=evaluationError"`
+
+	// auditAnnotations is an unstructured key value map set by an authorizer (e.g. policy=temporary-break-glass), that is
+	// eventually added as additional context to the audit log for this request.
+	// The authorizerName in the union will be prepended to the annotation key, and joined through ":", e.g.
+	// "kubernetes.io/webhook:example.com/custom:policy=temporary-break-glass".
+	// +k8s:optional
+	// +optional
+	AuditAnnotations map[string]string `json:"auditAnnotations,omitempty" protobuf:"bytes,3,opt,name=auditAnnotations"`
+
+	// warnings is a list of warning messages to return to the requesting API client.
+	// Warning messages describe a problem the client making the API request should correct or be aware of.
+	// Limit warnings to 120 characters if possible.
+	// Warnings over 256 characters and large numbers of warnings may be truncated.
+	// +k8s:optional
+	// +optional
+	// +k8s:listType=atomic
+	// +listType=atomic
+	Warnings []string `json:"warnings,omitempty" protobuf:"bytes,4,rep,name=warnings"`
 }

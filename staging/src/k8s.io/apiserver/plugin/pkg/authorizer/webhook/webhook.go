@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"time"
 
+	admissionv1 "k8s.io/api/admission/v1"
 	v1 "k8s.io/api/admission/v1"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
@@ -40,6 +41,7 @@ import (
 	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/util/cache"
 	utilnet "k8s.io/apimachinery/pkg/util/net"
+	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apiserver/pkg/apis/apiserver"
 	apiservervalidation "k8s.io/apiserver/pkg/apis/apiserver/validation"
@@ -47,6 +49,7 @@ import (
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	authorizationcel "k8s.io/apiserver/pkg/authorization/cel"
 	"k8s.io/apiserver/pkg/util/webhook"
+	"k8s.io/apiserver/pkg/warning"
 	"k8s.io/apiserver/plugin/pkg/authorizer/webhook/metrics"
 	"k8s.io/client-go/kubernetes/scheme"
 	authorizationv1client "k8s.io/client-go/kubernetes/typed/authorization/v1"
@@ -442,6 +445,8 @@ func (w *WebhookAuthorizer) EvaluateConditions(ctx context.Context, decision aut
 		},
 	}
 
+	evaluateRequestUUID := uuid.NewUUID()
+
 	if data != nil {
 		var serializedUserInfo authenticationv1.UserInfo
 		if userInfo := data.GetUserInfo(); userInfo != nil {
@@ -452,7 +457,11 @@ func (w *WebhookAuthorizer) EvaluateConditions(ctx context.Context, decision aut
 				Extra:    convertToAuthenticationExtra(userInfo.GetExtra()),
 			}
 		}
-		r.Request.AdmissionControlData = &authorizationv1alpha1.AuthorizationConditionsTargetAdmissionControl{
+		r.Request.AdmissionRequest = &admissionv1.AdmissionRequest{
+			UID:                evaluateRequestUUID,
+			Kind:               metav1.GroupVersionKind(data.GetKind()),
+			Resource:           metav1.GroupVersionResource(data.GetResource()),
+			SubResource:        data.GetSubresource(),
 			RequestKind:        ptr.To(metav1.GroupVersionKind(data.GetKind())),
 			RequestResource:    ptr.To(metav1.GroupVersionResource(data.GetResource())),
 			RequestSubResource: data.GetSubresource(),
@@ -497,35 +506,52 @@ func (w *WebhookAuthorizer) EvaluateConditions(ctx context.Context, decision aut
 		return authorizer.DecisionNoOpinion, "", nil
 	}
 
+	// Verify that the webhook authorizer set UID correctly for the request.
+	if result.Response.UID != evaluateRequestUUID {
+		return decision.FailureDecision(), "failed closed", fmt.Errorf("uid mismatch in webhook EvaluateConditions for webhook with name %q, expected %q but got %q", w.name, evaluateRequestUUID, result.Response.UID)
+	}
+
 	// TODO(luxas): Enforce validation here. However, that validation code cannot be in any internal packages, where validations usually are.
 	// TODO(luxas): Make it impossible to have allowed=true and conditionalDecision.type=Deny
+	// TODO(luxas): Add AuditAnnotations+Warning additions here properly
 
 	switch result.Response.Decision.Type {
-	case authorizationv1alpha1.ConditionsAwareDecisionTypeAllow:
-		if !decision.PossibleDecisions().Has(authorizer.DecisionAllow) {
-			return decision.FailureDecision(), "failed closed", fmt.Errorf("webhook authorizer tried to return Allow from EvaluateConditions, even though that was not a possible outcome")
-		}
-		return authorizer.DecisionAllow, deserializeV1Alpha1Reason(result.Response.Decision.Allow), deserializeV1Alpha1EvaluationError(result.Response.Decision.Allow)
-	case authorizationv1alpha1.ConditionsAwareDecisionTypeDeny:
+	case authorizationv1.ConditionsAwareDecisionTypeDeny:
 		if !decision.PossibleDecisions().Has(authorizer.DecisionDeny) {
 			return decision.FailureDecision(), "failed closed", fmt.Errorf("webhook authorizer tried to return Deny from EvaluateConditions, even though that was not a possible outcome")
 		}
-		return authorizer.DecisionDeny, deserializeV1Alpha1Reason(result.Response.Decision.Deny), deserializeV1Alpha1EvaluationError(result.Response.Decision.Deny)
-	case authorizationv1alpha1.ConditionsAwareDecisionTypeNoOpinion:
+		w.addAnnotationsAndWarnings(ctx, result.Response.Decision.Deny, data)
+		return authorizer.DecisionDeny, deserializeV1Reason(result.Response.Decision.Deny), deserializeV1EvaluationError(result.Response.Decision.Deny)
+	case authorizationv1.ConditionsAwareDecisionTypeNoOpinion:
 		if !decision.PossibleDecisions().Has(authorizer.DecisionNoOpinion) {
 			return decision.FailureDecision(), "failed closed", fmt.Errorf("webhook authorizer tried to return NoOpinion from EvaluateConditions, even though that was not a possible outcome")
 		}
-		return authorizer.DecisionNoOpinion, deserializeV1Alpha1Reason(result.Response.Decision.NoOpinion), deserializeV1Alpha1EvaluationError(result.Response.Decision.NoOpinion)
+		w.addAnnotationsAndWarnings(ctx, result.Response.Decision.NoOpinion, data)
+		return authorizer.DecisionNoOpinion, deserializeV1Reason(result.Response.Decision.NoOpinion), deserializeV1EvaluationError(result.Response.Decision.NoOpinion)
+	case authorizationv1.ConditionsAwareDecisionTypeAllow:
+		if !decision.PossibleDecisions().Has(authorizer.DecisionAllow) {
+			return decision.FailureDecision(), "failed closed", fmt.Errorf("webhook authorizer tried to return Allow from EvaluateConditions, even though that was not a possible outcome")
+		}
+		w.addAnnotationsAndWarnings(ctx, result.Response.Decision.Allow, data)
+		return authorizer.DecisionAllow, deserializeV1Reason(result.Response.Decision.Allow), deserializeV1EvaluationError(result.Response.Decision.Allow)
 	default:
 		return decision.FailureDecision(), "failed closed", fmt.Errorf("unrecognized decision type %q", result.Response.Decision.Type)
 	}
 }
 
-func deserializeV1Alpha1EvaluationError(ud *authorizationv1alpha1.UnconditionalDecision) error {
-	if ud == nil || len(ud.EvaluationError) == 0 {
-		return nil
+func (w *WebhookAuthorizer) addAnnotationsAndWarnings(ctx context.Context, ud *authorizationv1.UnconditionalDecision, data authorizer.ConditionsData) {
+	if ud == nil {
+		return
 	}
-	return errors.New(ud.EvaluationError)
+	for k, v := range ud.AuditAnnotations {
+		key := w.name + "/" + k
+		if err := data.AddAnnotation(key, v); err != nil {
+			klog.Warningf("Failed to set audit annotation %s to %s for webhook authorizer %s: %v", key, v, w.name, err)
+		}
+	}
+	for _, w := range ud.Warnings {
+		warning.AddWarning(ctx, "", w)
+	}
 }
 
 func deserializeV1EvaluationError(ud *authorizationv1.UnconditionalDecision) error {
@@ -533,13 +559,6 @@ func deserializeV1EvaluationError(ud *authorizationv1.UnconditionalDecision) err
 		return nil
 	}
 	return errors.New(ud.EvaluationError)
-}
-
-func deserializeV1Alpha1Reason(ud *authorizationv1alpha1.UnconditionalDecision) string {
-	if ud == nil {
-		return ""
-	}
-	return ud.Reason
 }
 
 func deserializeV1Reason(ud *authorizationv1.UnconditionalDecision) string {
@@ -591,57 +610,57 @@ func deserializeConditions(serializedConditions []authorizationv1.Condition) []a
 }
 
 // TODO(luxas): Deduplicate this code with authorizationutil (helpers.go)
-func serializeConditionsAwareDecision(decision authorizer.ConditionsAwareDecision) authorizationv1alpha1.ConditionsAwareDecision {
+func serializeConditionsAwareDecision(decision authorizer.ConditionsAwareDecision) authorizationv1.ConditionsAwareDecision {
 	var errString string
 	if decision.Error() != nil {
 		errString = decision.Error().Error()
 	}
 	switch {
 	case decision.IsAllow():
-		return authorizationv1alpha1.ConditionsAwareDecision{
-			Type: authorizationv1alpha1.ConditionsAwareDecisionTypeAllow,
-			Allow: &authorizationv1alpha1.UnconditionalDecision{
+		return authorizationv1.ConditionsAwareDecision{
+			Type: authorizationv1.ConditionsAwareDecisionTypeAllow,
+			Allow: &authorizationv1.UnconditionalDecision{
 				Reason:          decision.Reason(),
 				EvaluationError: errString,
 			},
 		}
 	case decision.IsNoOpinion():
-		return authorizationv1alpha1.ConditionsAwareDecision{
-			Type: authorizationv1alpha1.ConditionsAwareDecisionTypeNoOpinion,
-			NoOpinion: &authorizationv1alpha1.UnconditionalDecision{
+		return authorizationv1.ConditionsAwareDecision{
+			Type: authorizationv1.ConditionsAwareDecisionTypeNoOpinion,
+			NoOpinion: &authorizationv1.UnconditionalDecision{
 				Reason:          decision.Reason(),
 				EvaluationError: errString,
 			},
 		}
 	case decision.IsConditionsMap():
 
-		return authorizationv1alpha1.ConditionsAwareDecision{
-			Type: authorizationv1alpha1.ConditionsAwareDecisionTypeConditionsMap,
-			ConditionsMap: &authorizationv1alpha1.ConditionsMap{
+		return authorizationv1.ConditionsAwareDecision{
+			Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
+			ConditionsMap: &authorizationv1.ConditionsMap{
 				DenyConditions:      collectConditions(decision.ConditionsMap().DenyConditions()),
 				NoOpinionConditions: collectConditions(decision.ConditionsMap().NoOpinionConditions()),
 				AllowConditions:     collectConditions(decision.ConditionsMap().AllowConditions()),
 			},
 		}
 	case decision.IsUnion():
-		subDecisions := []authorizationv1alpha1.NamedConditionsAwareDecision{}
+		subDecisions := []authorizationv1.NamedConditionsAwareDecision{}
 		for authorizerName, subDecision := range decision.UnionedDecisions() {
-			subDecisions = append(subDecisions, authorizationv1alpha1.NamedConditionsAwareDecision{
+			subDecisions = append(subDecisions, authorizationv1.NamedConditionsAwareDecision{
 				AuthorizerName: authorizerName,
 				Decision:       serializeConditionsAwareDecision(subDecision),
 			})
 		}
-		return authorizationv1alpha1.ConditionsAwareDecision{
-			Type: authorizationv1alpha1.ConditionsAwareDecisionTypeUnion,
+		return authorizationv1.ConditionsAwareDecision{
+			Type: authorizationv1.ConditionsAwareDecisionTypeUnion,
 			// Reason and EvaluationError are not serialized in Unions, as that information is anyways
 			// available when reading the leaves.
 			Union: subDecisions,
 		}
 	default:
 		// If none of the other cases matched, it's a Deny
-		return authorizationv1alpha1.ConditionsAwareDecision{
-			Type: authorizationv1alpha1.ConditionsAwareDecisionTypeDeny,
-			Deny: &authorizationv1alpha1.UnconditionalDecision{
+		return authorizationv1.ConditionsAwareDecision{
+			Type: authorizationv1.ConditionsAwareDecisionTypeDeny,
+			Deny: &authorizationv1.UnconditionalDecision{
 				Reason:          decision.Reason(),
 				EvaluationError: errString,
 			},
@@ -649,10 +668,10 @@ func serializeConditionsAwareDecision(decision authorizer.ConditionsAwareDecisio
 	}
 }
 
-func collectConditions(condIter iter.Seq[authorizer.Condition]) []authorizationv1alpha1.Condition {
-	conds := []authorizationv1alpha1.Condition{}
+func collectConditions(condIter iter.Seq[authorizer.Condition]) []authorizationv1.Condition {
+	conds := []authorizationv1.Condition{}
 	for condition := range condIter {
-		conds = append(conds, authorizationv1alpha1.Condition{
+		conds = append(conds, authorizationv1.Condition{
 			ID:          condition.GetID(),
 			Condition:   condition.GetCondition(),
 			Type:        condition.GetType(),
@@ -811,6 +830,7 @@ func convertToAuthenticationExtra(extra map[string][]string) map[string]authenti
 
 func authorizationConditionsReviewInterfaceFromConfig(config *rest.Config, version string, retryBackoff wait.Backoff) (*authorizationConditionsClientGW, error) {
 	localScheme := runtime.NewScheme()
+	// TODO(luxas): Is this enough even though types are used from admissionv1 and authorizationv1?
 	if err := authorizationv1alpha1.AddToScheme(localScheme); err != nil {
 		return nil, err
 	}

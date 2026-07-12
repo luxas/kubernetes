@@ -31,6 +31,7 @@ import (
 
 	"github.com/google/cel-go/cel"
 
+	admissionv1 "k8s.io/api/admission/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	authorizationv1alpha1 "k8s.io/api/authorization/v1alpha1"
 	autoscalingv1 "k8s.io/api/autoscaling/v1"
@@ -2372,14 +2373,14 @@ func crdReplicasSARHandler(sar *authorizationv1.SubjectAccessReview, conditionsT
 // write request objects, and sets the response.
 func acrEvaluateCEL(t *testing.T, expectedConditionsType string) func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
 	return func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
-		if acr.Request.Decision.Type != authorizationv1alpha1.ConditionsAwareDecisionTypeConditionsMap {
+		if acr.Request.Decision.Type != authorizationv1.ConditionsAwareDecisionTypeConditionsMap {
 			t.Fatalf("expected ConditionsMap decision to evaluate, got %q", acr.Request.Decision.Type)
 		}
 		conditionsMap := acr.Request.Decision.ConditionsMap
 		if conditionsMap == nil {
 			t.Fatalf("expected ConditionsMap in ACR to be non-nil")
 		}
-		checkType := func(cond authorizationv1alpha1.Condition) {
+		checkType := func(cond authorizationv1.Condition) {
 			if cond.Type != expectedConditionsType {
 				t.Fatalf("expected condition type %q, got %q for condition %q", expectedConditionsType, cond.Type, cond.ID)
 			}
@@ -2393,9 +2394,9 @@ func acrEvaluateCEL(t *testing.T, expectedConditionsType string) func(acr *autho
 		for _, cond := range conditionsMap.AllowConditions {
 			checkType(cond)
 		}
-		decisionType := celEvaluateConditions(t, acr.Request.AdmissionControlData, conditionsMap)
+		decisionType := celEvaluateConditions(t, acr.Request.AdmissionRequest, conditionsMap)
 		acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
-			Decision: authorizationv1alpha1.ConditionsAwareDecision{
+			Decision: authorizationv1.ConditionsAwareDecision{
 				Type: decisionType,
 			},
 		}
@@ -2580,7 +2581,7 @@ func safeResourceAttr(sar *authorizationv1.SubjectAccessReview, fn func(*authori
 // against the objects in the write request. It follows the condition precedence:
 // Deny > NoOpinion > Allow (matching EvaluateConditionSet semantics).
 // Returns (allowed, denied).
-func celEvaluateConditions(t *testing.T, wr *authorizationv1alpha1.AuthorizationConditionsTargetAdmissionControl, conditionsMap *authorizationv1alpha1.ConditionsMap) authorizationv1alpha1.ConditionsAwareDecisionType {
+func celEvaluateConditions(t *testing.T, req *admissionv1.AdmissionRequest, conditionsMap *authorizationv1.ConditionsMap) authorizationv1.ConditionsAwareDecisionType {
 	t.Helper()
 
 	if conditionsMap == nil || (len(conditionsMap.DenyConditions)+len(conditionsMap.NoOpinionConditions)+len(conditionsMap.AllowConditions)) == 0 {
@@ -2598,22 +2599,22 @@ func celEvaluateConditions(t *testing.T, wr *authorizationv1alpha1.Authorization
 
 	// Deserialize object and oldObject from RawExtension JSON
 	var objectMap map[string]any
-	if len(wr.Object.Raw) > 0 {
-		if err := json.Unmarshal(wr.Object.Raw, &objectMap); err != nil {
+	if len(req.Object.Raw) > 0 {
+		if err := json.Unmarshal(req.Object.Raw, &objectMap); err != nil {
 			t.Fatalf("failed to unmarshal object: %v", err)
 		}
 	}
 
 	var oldObjectMap map[string]any
-	if len(wr.OldObject.Raw) > 0 {
-		if err := json.Unmarshal(wr.OldObject.Raw, &oldObjectMap); err != nil {
+	if len(req.OldObject.Raw) > 0 {
+		if err := json.Unmarshal(req.OldObject.Raw, &oldObjectMap); err != nil {
 			t.Fatalf("failed to unmarshal oldObject: %v", err)
 		}
 	}
 
 	requestMap := map[string]any{
 		// Expose only previously-unseen data for now.
-		"operation": string(wr.Operation),
+		"operation": string(req.Operation),
 	}
 
 	vars := map[string]any{
@@ -2625,26 +2626,26 @@ func celEvaluateConditions(t *testing.T, wr *authorizationv1alpha1.Authorization
 	// Phase 1: Deny conditions
 	for _, cond := range conditionsMap.DenyConditions {
 		if evalCEL(t, env, cond.Condition, vars) {
-			return authorizationv1alpha1.ConditionsAwareDecisionTypeDeny
+			return authorizationv1.ConditionsAwareDecisionTypeDeny
 		}
 	}
 
 	// Phase 2: NoOpinion conditions
 	for _, cond := range conditionsMap.NoOpinionConditions {
 		if evalCEL(t, env, cond.Condition, vars) {
-			return authorizationv1alpha1.ConditionsAwareDecisionTypeNoOpinion
+			return authorizationv1.ConditionsAwareDecisionTypeNoOpinion
 		}
 	}
 
 	// Phase 3: Allow conditions
 	for _, cond := range conditionsMap.AllowConditions {
 		if evalCEL(t, env, cond.Condition, vars) {
-			return authorizationv1alpha1.ConditionsAwareDecisionTypeAllow
+			return authorizationv1.ConditionsAwareDecisionTypeAllow
 		}
 	}
 
 	// Default: NoOpinion
-	return authorizationv1alpha1.ConditionsAwareDecisionTypeNoOpinion
+	return authorizationv1.ConditionsAwareDecisionTypeNoOpinion
 }
 
 // evalCEL compiles and evaluates a single CEL expression, returning true/false.
