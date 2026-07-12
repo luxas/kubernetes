@@ -44,6 +44,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/dynamic"
 	clientset "k8s.io/client-go/kubernetes"
@@ -347,7 +348,7 @@ authorizers:
 					ConditionsMap: &authorizationv1.ConditionsMap{
 						AllowConditions: []authorizationv1.Condition{
 							{
-								ID:          "always-allow",
+								ID: "example.com/always-allow",
 								Condition:   "true",
 								Type:        conditionsType,
 								Description: "always allow condition",
@@ -376,7 +377,7 @@ authorizers:
 					ConditionsMap: &authorizationv1.ConditionsMap{
 						DenyConditions: []authorizationv1.Condition{
 							{
-								ID:          "always-deny",
+								ID: "example.com/always-deny",
 								Condition:   "true",
 								Type:        conditionsType,
 								Description: "always deny condition",
@@ -384,7 +385,7 @@ authorizers:
 						},
 						AllowConditions: []authorizationv1.Condition{
 							{
-								ID:          "always-allow",
+								ID: "example.com/always-allow",
 								Condition:   "true",
 								Type:        conditionsType,
 								Description: "base allow condition",
@@ -410,7 +411,7 @@ authorizers:
 					ConditionsMap: &authorizationv1.ConditionsMap{
 						NoOpinionConditions: []authorizationv1.Condition{
 							{
-								ID:          "no-opinion",
+								ID: "example.com/no-opinion",
 								Condition:   "true",
 								Type:        conditionsType,
 								Description: "no opinion condition",
@@ -448,7 +449,7 @@ authorizers:
 					ConditionsMap: &authorizationv1.ConditionsMap{
 						AllowConditions: []authorizationv1.Condition{
 							{
-								ID:          "allow-safe-prefix",
+								ID: "example.com/allow-safe-prefix",
 								Condition:   `object.metadata.name.startsWith("safe-")`,
 								Type:        conditionsType,
 								Description: "only allow configmaps with safe- prefix",
@@ -475,7 +476,7 @@ authorizers:
 					ConditionsMap: &authorizationv1.ConditionsMap{
 						AllowConditions: []authorizationv1.Condition{
 							{
-								ID:          "allow-safe-prefix",
+								ID: "example.com/allow-safe-prefix",
 								Condition:   `object.metadata.name.startsWith("safe-")`,
 								Type:        conditionsType,
 								Description: "only allow configmaps with safe- prefix",
@@ -501,7 +502,7 @@ authorizers:
 					ConditionsMap: &authorizationv1.ConditionsMap{
 						DenyConditions: []authorizationv1.Condition{
 							{
-								ID: "deny-restricted-label",
+								ID: "example.com/deny-restricted-label",
 								Condition: `has(object.metadata.labels) && ` +
 									`has(object.metadata.labels.restricted) && ` +
 									`object.metadata.labels.restricted == "true"`,
@@ -511,7 +512,7 @@ authorizers:
 						},
 						AllowConditions: []authorizationv1.Condition{
 							{
-								ID:          "allow-all",
+								ID: "example.com/allow-all",
 								Condition:   "true",
 								Type:        conditionsType,
 								Description: "base allow",
@@ -540,7 +541,7 @@ authorizers:
 					ConditionsMap: &authorizationv1.ConditionsMap{
 						AllowConditions: []authorizationv1.Condition{
 							{
-								ID: "allow-approved-data",
+								ID: "example.com/allow-approved-data",
 								Condition: `has(object.data) && ` +
 									`has(object.data.approved) && ` +
 									`object.data.approved == "yes"`,
@@ -570,7 +571,7 @@ authorizers:
 					ConditionsMap: &authorizationv1.ConditionsMap{
 						AllowConditions: []authorizationv1.Condition{
 							{
-								ID: "allow-approved-data",
+								ID: "example.com/allow-approved-data",
 								Condition: `has(object.data) && ` +
 									`has(object.data.approved) && ` +
 									`object.data.approved == "yes"`,
@@ -599,7 +600,7 @@ authorizers:
 					ConditionsMap: &authorizationv1.ConditionsMap{
 						DenyConditions: []authorizationv1.Condition{
 							{
-								ID:          "deny-updates",
+								ID: "example.com/deny-updates",
 								Condition:   `request.operation == "UPDATE"`,
 								Type:        conditionsType,
 								Description: "deny update operations",
@@ -607,7 +608,7 @@ authorizers:
 						},
 						AllowConditions: []authorizationv1.Condition{
 							{
-								ID:          "allow-creates",
+								ID: "example.com/allow-creates",
 								Condition:   `request.operation == "CREATE"`,
 								Type:        conditionsType,
 								Description: "allow create operations",
@@ -642,7 +643,7 @@ authorizers:
 					ConditionsMap: &authorizationv1.ConditionsMap{
 						DenyConditions: []authorizationv1.Condition{
 							{
-								ID:          "deny-all",
+								ID: "example.com/deny-all",
 								Condition:   "true",
 								Type:        conditionsType,
 								Description: "deny everything",
@@ -650,7 +651,7 @@ authorizers:
 						},
 						NoOpinionConditions: []authorizationv1.Condition{
 							{
-								ID:          "noop-all",
+								ID: "example.com/noop-all",
 								Condition:   "true",
 								Type:        conditionsType,
 								Description: "no opinion on everything",
@@ -658,7 +659,7 @@ authorizers:
 						},
 						AllowConditions: []authorizationv1.Condition{
 							{
-								ID:          "allow-all",
+								ID: "example.com/allow-all",
 								Condition:   "true",
 								Type:        conditionsType,
 								Description: "allow everything",
@@ -684,7 +685,7 @@ authorizers:
 					ConditionsMap: &authorizationv1.ConditionsMap{
 						NoOpinionConditions: []authorizationv1.Condition{
 							{
-								ID: "noop-on-pending-review",
+								ID: "example.com/noop-on-pending-review",
 								Condition: `has(object.metadata.labels) && ` +
 									`has(object.metadata.labels.review) && ` +
 									`object.metadata.labels.review == "pending"`,
@@ -694,7 +695,7 @@ authorizers:
 						},
 						AllowConditions: []authorizationv1.Condition{
 							{
-								ID:          "allow-all",
+								ID: "example.com/allow-all",
 								Condition:   "true",
 								Type:        conditionsType,
 								Description: "allow everything",
@@ -741,7 +742,7 @@ authorizers:
 							ConditionsMap: &authorizationv1.ConditionsMap{
 								AllowConditions: []authorizationv1.Condition{
 									{
-										ID: "require-owner-label",
+										ID: "example.com/require-owner-label",
 										Condition: `has(object.metadata.labels) && ` +
 											`has(object.metadata.labels.creator) && ` +
 											`object.metadata.labels.creator == "update-create-allow-user"`,
@@ -796,7 +797,7 @@ authorizers:
 							ConditionsMap: &authorizationv1.ConditionsMap{
 								AllowConditions: []authorizationv1.Condition{
 									{
-										ID: "require-owner-label",
+										ID: "example.com/require-owner-label",
 										Condition: `has(object.metadata.labels) && ` +
 											`has(object.metadata.labels.creator) && ` +
 											`object.metadata.labels.creator == "update-create-deny-user"`,
@@ -843,7 +844,7 @@ authorizers:
 							ConditionsMap: &authorizationv1.ConditionsMap{
 								AllowConditions: []authorizationv1.Condition{
 									{
-										ID: "allow-unclassified",
+										ID: "example.com/allow-unclassified",
 										Condition: `has(object.metadata.labels) && ` +
 											`has(object.metadata.labels.classified) && ` +
 											`object.metadata.labels.classified == "false"`,
@@ -860,7 +861,7 @@ authorizers:
 							ConditionsMap: &authorizationv1.ConditionsMap{
 								AllowConditions: []authorizationv1.Condition{
 									{
-										ID: "require-owner-label",
+										ID: "example.com/require-owner-label",
 										Condition: `has(object.metadata.labels) && ` +
 											`has(object.metadata.labels.creator) && ` +
 											`object.metadata.labels.creator == "update-create-deny-user"`,
@@ -959,7 +960,7 @@ authorizers:
 								ConditionsMap: &authorizationv1.ConditionsMap{
 									AllowConditions: []authorizationv1.Condition{
 										{
-											ID: "require-production-namespace",
+											ID: "example.com/require-production-namespace",
 											Condition: `namespaceObject != null && ` +
 												`has(namespaceObject.metadata) && ` +
 												`has(namespaceObject.metadata.labels) && ` +
@@ -998,7 +999,7 @@ authorizers:
 								ConditionsMap: &authorizationv1.ConditionsMap{
 									AllowConditions: []authorizationv1.Condition{
 										{
-											ID: "require-staging-namespace",
+											ID: "example.com/require-staging-namespace",
 											Condition: `namespaceObject != null && ` +
 												`has(namespaceObject.metadata) && ` +
 												`has(namespaceObject.metadata.labels) && ` +
@@ -1636,9 +1637,9 @@ authorizers:
 			ConditionsMap: &authorizationv1.ConditionsMap{
 				AllowConditions: []authorizationv1.Condition{
 					{
-						ID:          "allow-safe-prefix",
+						ID: "example.com/allow-safe-prefix",
 						Condition:   `object.metadata.name.startsWith("safe-")`,
-						Type:        "opaque-cel-condition-type",
+						Type:        "example.com/opaque-cel-condition-type",
 						Description: "only allow configmaps with safe- prefix",
 					},
 				},
@@ -1676,7 +1677,7 @@ authorizers:
 				sar.Status.ConditionalDecision = conditionalDecision
 			}
 		}
-		webhookServer.handler.acrHandler = acrEvaluateCEL(t, "opaque-cel-condition-type")
+		webhookServer.handler.acrHandler = acrEvaluateCEL(t, "example.com/opaque-cel-condition-type")
 
 		t.Run("SubjectAccessReview with conditional authorization requested", func(t *testing.T) {
 			sar := &authorizationv1.SubjectAccessReview{
@@ -1968,9 +1969,9 @@ authorizers:
 						ConditionsMap: &authorizationv1.ConditionsMap{
 							DenyConditions: []authorizationv1.Condition{
 								{
-									ID:        "deny-sensitive-label",
+									ID: "example.com/deny-sensitive-label",
 									Condition: `has(object.metadata.labels) && has(object.metadata.labels.sensitive)`,
-									Type:      "opaque-cel-condition-type",
+									Type:      "example.com/opaque-cel-condition-type",
 								},
 							},
 						},
@@ -2040,7 +2041,7 @@ authorizers:
 							Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
 							ConditionsMap: &authorizationv1.ConditionsMap{
 								DenyConditions: []authorizationv1.Condition{{
-									ID: "deny-all", Condition: "true", Type: "opaque",
+									ID: "example.com/deny-all", Condition: "true", Type: "example.com/opaque",
 								}},
 							},
 						}
@@ -2077,7 +2078,7 @@ authorizers:
 							Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
 							ConditionsMap: &authorizationv1.ConditionsMap{
 								AllowConditions: []authorizationv1.Condition{{
-									ID: "allow-all", Condition: "true", Type: "opaque",
+									ID: "example.com/allow-all", Condition: "true", Type: "example.com/opaque",
 								}},
 							},
 						}
@@ -2124,7 +2125,7 @@ authorizers:
 				Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
 				ConditionsMap: &authorizationv1.ConditionsMap{
 					DenyConditions: []authorizationv1.Condition{{
-						ID: "deny-all", Condition: "true", Type: "opaque",
+						ID: "example.com/deny-all", Condition: "true", Type: "example.com/opaque",
 					}},
 				},
 			}
@@ -2132,7 +2133,7 @@ authorizers:
 				Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
 				ConditionsMap: &authorizationv1.ConditionsMap{
 					AllowConditions: []authorizationv1.Condition{{
-						ID: "allow-all", Condition: "true", Type: "opaque",
+						ID: "example.com/allow-all", Condition: "true", Type: "example.com/opaque",
 					}},
 				},
 			}
@@ -2246,7 +2247,7 @@ func compoundAuthzSARHandler(matchResource string) func(sar *authorizationv1.Sub
 			ConditionsMap: &authorizationv1.ConditionsMap{
 				Conditions: []authorizationv1.Condition{
 					{
-						ID:     "require-protectedlabel-permission",
+						ID: "example.com/require-protectedlabel-permission",
 						Effect: authorizationv1.ConditionEffectAllow,
 						Condition: `!has(object.metadata.labels) || !('protected-label' in object.metadata.labels) || ` +
 							`authorizer.group('example.com').resource('protectedlabels').name('protected-label').check('use').allowed()`,
@@ -2310,7 +2311,7 @@ func hpaCPUUtilizationSARHandler(sar *authorizationv1.SubjectAccessReview, condi
 		ConditionsMap: &authorizationv1.ConditionsMap{
 			AllowConditions: []authorizationv1.Condition{
 				{
-					ID:          "limit-cpu-utilization",
+					ID: "example.com/limit-cpu-utilization",
 					Condition:   condition,
 					Type:        conditionsType,
 					Description: "only allow HPAs with CPU utilization at most 80%",
@@ -2358,7 +2359,7 @@ func crdReplicasSARHandler(sar *authorizationv1.SubjectAccessReview, conditionsT
 		ConditionsMap: &authorizationv1.ConditionsMap{
 			AllowConditions: []authorizationv1.Condition{
 				{
-					ID:          "limit-replicas",
+					ID: "example.com/limit-replicas",
 					Condition:   condition,
 					Type:        conditionsType,
 					Description: "only allow if replicas <= 10",
@@ -2395,7 +2396,14 @@ func acrEvaluateCEL(t *testing.T, expectedConditionsType string) func(acr *autho
 			checkType(cond)
 		}
 		decisionType := celEvaluateConditions(t, acr.Request.AdmissionRequest, conditionsMap)
+		// The webhook client rejects the response when Response.UID does not match the
+		// UID the apiserver put on Request.AdmissionRequest, so echo it back here.
+		var uid types.UID
+		if acr.Request.AdmissionRequest != nil {
+			uid = acr.Request.AdmissionRequest.UID
+		}
 		acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
+			UID: uid,
 			Decision: authorizationv1.ConditionsAwareDecision{
 				Type: decisionType,
 			},
@@ -2422,9 +2430,9 @@ func celConditionalTestCases(processSAR func(sar *authorizationv1.SubjectAccessR
 		// When the condition type is opaque, the webhook should be called to resolve the condition.
 		"using-webhook-only": func(ws *webhookServerHandler) {
 			ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
-				processSAR(sar, "opaque-cel-condition-type")
+				processSAR(sar, "example.com/opaque-cel-condition-type")
 			}
-			ws.acrHandler = acrEvaluateCEL(ws.t, "opaque-cel-condition-type")
+			ws.acrHandler = acrEvaluateCEL(ws.t, "example.com/opaque-cel-condition-type")
 		},
 		// TODO(luxas): Reactivate this when we support in-tree evaluation.
 		// When the condition type is k8s.io/authorization-cel, in-tree evaluation handles it.
