@@ -31,6 +31,8 @@ import (
 	authorizationv1 "k8s.io/api/authorization/v1"
 	authorizationv1alpha1 "k8s.io/api/authorization/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	authorizationcel "k8s.io/apiserver/pkg/authorization/cel"
@@ -58,6 +60,8 @@ func (f *fakeSubjectAccessReviewer) Create(_ context.Context, sar *authorization
 }
 
 // fakeAuthorizationConditionsReviewer implements authorizationConditionsReviewer for testing.
+// It mirrors real webhook behavior by echoing the request's AdmissionRequest.UID back
+// into the response, so the caller's UID correlation check succeeds.
 type fakeAuthorizationConditionsReviewer struct {
 	response *authorizationv1alpha1.AuthorizationConditionsReview
 	err      error
@@ -69,8 +73,33 @@ func (f *fakeAuthorizationConditionsReviewer) Create(_ context.Context, acr *aut
 	if f.err != nil {
 		return nil, 0, f.err
 	}
+	if f.response != nil && f.response.Response != nil && acr.Request != nil && acr.Request.AdmissionRequest != nil {
+		f.response.Response.UID = acr.Request.AdmissionRequest.UID
+	}
 	return f.response, 200, nil
 }
+
+// fakeConditionsData is a minimal authorizer.ConditionsData used by EvaluateConditions
+// tests. It carries just enough to satisfy the interface; individual tests do not
+// depend on any particular field value.
+type fakeConditionsData struct{}
+
+func (fakeConditionsData) GetName() string                          { return "obj" }
+func (fakeConditionsData) GetNamespace() string                     { return "default" }
+func (fakeConditionsData) GetResource() schema.GroupVersionResource { return schema.GroupVersionResource{} }
+func (fakeConditionsData) GetSubresource() string                   { return "" }
+func (fakeConditionsData) GetOperation() authorizer.AdmissionOperation {
+	return authorizer.AdmissionOperation("CREATE")
+}
+func (fakeConditionsData) GetOperationOptions() runtime.Object { return nil }
+func (fakeConditionsData) IsDryRun() bool                      { return false }
+func (fakeConditionsData) GetObject() runtime.Object           { return nil }
+func (fakeConditionsData) GetOldObject() runtime.Object        { return nil }
+func (fakeConditionsData) GetKind() schema.GroupVersionKind    { return schema.GroupVersionKind{} }
+func (fakeConditionsData) GetUserInfo() user.Info {
+	return &user.DefaultInfo{Name: "alice"}
+}
+func (fakeConditionsData) AddAnnotation(_, _ string) error { return nil }
 
 // newTestWebhookAuthorizer creates a WebhookAuthorizer with fake clients for testing.
 func newTestWebhookAuthorizer(
@@ -124,9 +153,9 @@ func TestConditionsAwareAuthorize(t *testing.T) {
 					ConditionsMap: &authorizationv1.ConditionsMap{
 						AllowConditions: []authorizationv1.Condition{
 							{
-								ID:          "allow-safe-prefix",
+								ID:          "example.com/allow-safe-prefix",
 								Condition:   `object.metadata.name.startsWith("safe-")`,
-								Type:        "opaque-cel",
+								Type:        "example.com/opaque-cel",
 								Description: "only allow objects with safe- prefix",
 							},
 						},
@@ -224,8 +253,8 @@ func TestConditionsAwareAuthorize(t *testing.T) {
 								ConditionsMap: &authorizationv1.ConditionsMap{
 									DenyConditions: []authorizationv1.Condition{
 										{
-											ID:   "check-label",
-											Type: "opaque",
+											ID:   "example.com/check-label",
+											Type: "example.com/opaque",
 										},
 									},
 								},
@@ -286,7 +315,7 @@ func TestAuthorize_FoldDown(t *testing.T) {
 				Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
 				ConditionsMap: &authorizationv1.ConditionsMap{
 					DenyConditions: []authorizationv1.Condition{
-						{ID: "deny-all", Type: "opaque"},
+						{ID: "example.com/deny-all", Type: "example.com/opaque"},
 					},
 				},
 			},
@@ -315,7 +344,7 @@ func TestAuthorize_FoldDown(t *testing.T) {
 										Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
 										ConditionsMap: &authorizationv1.ConditionsMap{
 											DenyConditions: []authorizationv1.Condition{
-												{ID: "deny-sth", Type: "opaque"},
+												{ID: "example.com/deny-sth", Type: "example.com/opaque"},
 											},
 										},
 									},
@@ -335,7 +364,7 @@ func TestAuthorize_FoldDown(t *testing.T) {
 				Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
 				ConditionsMap: &authorizationv1.ConditionsMap{
 					AllowConditions: []authorizationv1.Condition{
-						{ID: "allow-all", Type: "opaque"},
+						{ID: "example.com/allow-all", Type: "example.com/opaque"},
 					},
 				},
 			},
@@ -417,7 +446,7 @@ func TestEvaluateConditions(t *testing.T) {
 		{
 			name: "no reviewer, Deny condition, failurePolicy=Deny",
 			decision: authorizer.ConditionsAwareDecisionConditionsMap(
-				[]authorizer.Condition{authorizer.GenericCondition{ID: "deny-all", Type: "opaque"}},
+				[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/deny-all", Type: "example.com/opaque"}},
 				nil, nil,
 			),
 			noACRReviewer:   true,
@@ -430,7 +459,7 @@ func TestEvaluateConditions(t *testing.T) {
 			name: "no reviewer, Allow-only condition, failurePolicy=NoOpinion",
 			decision: authorizer.ConditionsAwareDecisionConditionsMap(
 				nil, nil,
-				[]authorizer.Condition{authorizer.GenericCondition{ID: "allow-all", Type: "opaque"}},
+				[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/allow-all", Type: "example.com/opaque"}},
 			),
 			noACRReviewer:   true,
 			decisionOnError: authorizer.DecisionNoOpinion,
@@ -444,9 +473,9 @@ func TestEvaluateConditions(t *testing.T) {
 			decision: authorizer.ConditionsAwareDecisionConditionsMap(
 				nil, nil,
 				[]authorizer.Condition{authorizer.GenericCondition{
-					ID:        "allow-safe-prefix",
+					ID:        "example.com/allow-safe-prefix",
 					Condition: `object.metadata.name.startsWith("safe-")`,
-					Type:      "opaque-cel",
+					Type:      "example.com/opaque-cel",
 				}},
 			),
 			acrResponse: &authorizationv1alpha1.AuthorizationConditionsReview{
@@ -465,9 +494,9 @@ func TestEvaluateConditions(t *testing.T) {
 			name: "webhook returns deny",
 			decision: authorizer.ConditionsAwareDecisionConditionsMap(
 				[]authorizer.Condition{authorizer.GenericCondition{
-					ID:        "deny-restricted",
+					ID:        "example.com/deny-restricted",
 					Condition: `has(object.metadata.labels.restricted)`,
-					Type:      "opaque-cel",
+					Type:      "example.com/opaque-cel",
 				}},
 				nil, nil,
 			),
@@ -487,7 +516,7 @@ func TestEvaluateConditions(t *testing.T) {
 			name: "webhook returns no opinion",
 			decision: authorizer.ConditionsAwareDecisionConditionsMap(
 				nil, nil,
-				[]authorizer.Condition{authorizer.GenericCondition{ID: "some-condition", Type: "opaque"}},
+				[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/some-condition", Type: "example.com/opaque"}},
 			),
 			acrResponse: &authorizationv1alpha1.AuthorizationConditionsReview{
 				Response: &authorizationv1alpha1.AuthorizationConditionsResponse{
@@ -505,7 +534,7 @@ func TestEvaluateConditions(t *testing.T) {
 		{
 			name: "webhook error, failurePolicy=Deny",
 			decision: authorizer.ConditionsAwareDecisionConditionsMap(
-				[]authorizer.Condition{authorizer.GenericCondition{ID: "d", Type: "opaque"}},
+				[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/d", Type: "example.com/opaque"}},
 				nil, nil,
 			),
 			acrErr:          fmt.Errorf("conditions review webhook unavailable"),
@@ -518,7 +547,7 @@ func TestEvaluateConditions(t *testing.T) {
 			name: "webhook error, failurePolicy=NoOpinion",
 			decision: authorizer.ConditionsAwareDecisionConditionsMap(
 				nil, nil,
-				[]authorizer.Condition{authorizer.GenericCondition{ID: "a", Type: "opaque"}},
+				[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/a", Type: "example.com/opaque"}},
 			),
 			acrErr: fmt.Errorf("conditions review webhook unavailable"),
 			// even though DecisionOnError is Deny, there were no Deny conditions, so there authorizer would never have produced a Deny in any case, so this is "ignored" on purpose
@@ -532,7 +561,7 @@ func TestEvaluateConditions(t *testing.T) {
 			name: "nil Response field returns NoOpinion",
 			decision: authorizer.ConditionsAwareDecisionConditionsMap(
 				nil, nil,
-				[]authorizer.Condition{authorizer.GenericCondition{ID: "c", Type: "opaque"}},
+				[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/c", Type: "example.com/opaque"}},
 			),
 			acrResponse:     &authorizationv1alpha1.AuthorizationConditionsReview{},
 			decisionOnError: authorizer.DecisionNoOpinion,
@@ -545,9 +574,9 @@ func TestEvaluateConditions(t *testing.T) {
 			decision: authorizer.ConditionsAwareDecisionConditionsMap(
 				nil, nil,
 				[]authorizer.Condition{authorizer.GenericCondition{
-					ID:        "allow-by-name",
+					ID:        "example.com/allow-by-name",
 					Condition: `object.metadata.name.startsWith("safe-")`,
-					Type:      "opaque-cel",
+					Type:      "example.com/opaque-cel",
 				}},
 			),
 			acrResponse: &authorizationv1alpha1.AuthorizationConditionsReview{
@@ -579,11 +608,11 @@ func TestEvaluateConditions(t *testing.T) {
 					t.Fatalf("expected 1 allow condition in ACR request, got %d", len(req.Decision.ConditionsMap.AllowConditions))
 				}
 				cond := req.Decision.ConditionsMap.AllowConditions[0]
-				if cond.ID != "allow-by-name" {
-					t.Errorf("expected condition ID %q, got %q", "allow-by-name", cond.ID)
+				if cond.ID != "example.com/allow-by-name" {
+					t.Errorf("expected condition ID %q, got %q", "example.com/allow-by-name", cond.ID)
 				}
-				if cond.Type != "opaque-cel" {
-					t.Errorf("expected condition type %q, got %q", "opaque-cel", cond.Type)
+				if cond.Type != "example.com/opaque-cel" {
+					t.Errorf("expected condition type %q, got %q", "example.com/opaque-cel", cond.Type)
 				}
 			},
 		},
@@ -593,7 +622,7 @@ func TestEvaluateConditions(t *testing.T) {
 			name: "evaluation error alongside allow decision",
 			decision: authorizer.ConditionsAwareDecisionConditionsMap(
 				nil, nil,
-				[]authorizer.Condition{authorizer.GenericCondition{ID: "c", Type: "opaque"}},
+				[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/c", Type: "example.com/opaque"}},
 			),
 			acrResponse: &authorizationv1alpha1.AuthorizationConditionsReview{
 				Response: &authorizationv1alpha1.AuthorizationConditionsResponse{
@@ -616,7 +645,7 @@ func TestEvaluateConditions(t *testing.T) {
 		{
 			name: "unknown response type fails closed, deny condition",
 			decision: authorizer.ConditionsAwareDecisionConditionsMap(
-				[]authorizer.Condition{authorizer.GenericCondition{ID: "c", Type: "opaque"}},
+				[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/c", Type: "example.com/opaque"}},
 				nil, nil,
 			),
 			acrResponse: &authorizationv1alpha1.AuthorizationConditionsReview{
@@ -635,7 +664,7 @@ func TestEvaluateConditions(t *testing.T) {
 			name: "unknown response type fails closed, allow condition",
 			decision: authorizer.ConditionsAwareDecisionConditionsMap(
 				nil, nil,
-				[]authorizer.Condition{authorizer.GenericCondition{ID: "c", Type: "opaque"}},
+				[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/c", Type: "example.com/opaque"}},
 			),
 			acrResponse: &authorizationv1alpha1.AuthorizationConditionsReview{
 				Response: &authorizationv1alpha1.AuthorizationConditionsResponse{
@@ -658,7 +687,7 @@ func TestEvaluateConditions(t *testing.T) {
 			decision: func() authorizer.ConditionsAwareDecision {
 				var u authorizer.ConditionsAwareDecisionUnion
 				u.Add("cm", authorizer.ConditionsAwareDecisionConditionsMap(
-					[]authorizer.Condition{authorizer.GenericCondition{ID: "check-label", Type: "opaque"}},
+					[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/check-label", Type: "example.com/opaque"}},
 					nil, nil,
 				))
 				u.Add("allow", authorizer.ConditionsAwareDecisionAllow("first-allow", nil))
@@ -748,11 +777,11 @@ func TestEvaluateConditions(t *testing.T) {
 			name: "union with unconditional allow leaf: webhook returns NoOpinion fails closed",
 			decision: func() authorizer.ConditionsAwareDecision {
 				var u authorizer.ConditionsAwareDecisionUnion
-				u.Add("example.com/cm", authorizer.ConditionsAwareDecisionConditionsMap(
+				u.Add("cm", authorizer.ConditionsAwareDecisionConditionsMap(
 					[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/deny"}},
 					nil, nil,
 				))
-				u.Add("example.com/allow", authorizer.ConditionsAwareDecisionAllow("unconditional allow", nil))
+				u.Add("allow", authorizer.ConditionsAwareDecisionAllow("unconditional allow", nil))
 				return u.ToDecision()
 			}(),
 			acrResponse: &authorizationv1alpha1.AuthorizationConditionsReview{
@@ -784,7 +813,7 @@ func TestEvaluateConditions(t *testing.T) {
 			}
 
 			wh := newTestWebhookAuthorizer(&fakeSubjectAccessReviewer{}, acrReviewer, tc.decisionOnError)
-			d, reason, err := wh.EvaluateConditions(context.Background(), tc.decision, nil)
+			d, reason, err := wh.EvaluateConditions(context.Background(), tc.decision, fakeConditionsData{})
 
 			if (err != nil) != tc.wantErr {
 				t.Errorf("wantErr=%v, got err=%v", tc.wantErr, err)
@@ -821,9 +850,9 @@ func TestConditionsAwareAuthorize_EndToEnd(t *testing.T) {
 		ConditionsMap: &authorizationv1.ConditionsMap{
 			AllowConditions: []authorizationv1.Condition{
 				{
-					ID:          "allow-prefix",
+					ID:          "example.com/allow-prefix",
 					Condition:   `object.metadata.name.startsWith("ok-")`,
-					Type:        "opaque-cel",
+					Type:        "example.com/opaque-cel",
 					Description: "only allow objects starting with ok-",
 				},
 			},
@@ -893,6 +922,7 @@ func TestEvaluateConditions_EndToEnd(t *testing.T) {
 				Kind:       "AuthorizationConditionsReview",
 			},
 			Response: &authorizationv1alpha1.AuthorizationConditionsResponse{
+				UID: acr.Request.AdmissionRequest.UID,
 				Decision: authorizationv1.ConditionsAwareDecision{
 					Type:  authorizationv1.ConditionsAwareDecisionTypeAllow,
 					Allow: &authorizationv1.UnconditionalDecision{Reason: "webhook allowed"},
@@ -907,9 +937,9 @@ func TestEvaluateConditions_EndToEnd(t *testing.T) {
 	condDecision := authorizer.ConditionsAwareDecisionConditionsMap(
 		nil, nil,
 		[]authorizer.Condition{authorizer.GenericCondition{
-			ID:        "allow-safe",
+			ID:        "example.com/allow-safe",
 			Condition: `object.metadata.name.startsWith("safe-")`,
-			Type:      "opaque-cel",
+			Type:      "example.com/opaque-cel",
 		}},
 	)
 
@@ -924,7 +954,7 @@ func TestEvaluateConditions_EndToEnd(t *testing.T) {
 	}
 
 	wh := newTestWebhookAuthorizer(&fakeSubjectAccessReviewer{}, acrReviewer, authorizer.DecisionNoOpinion)
-	d, reason, err := wh.EvaluateConditions(context.Background(), condDecision, nil)
+	d, reason, err := wh.EvaluateConditions(context.Background(), condDecision, fakeConditionsData{})
 
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)

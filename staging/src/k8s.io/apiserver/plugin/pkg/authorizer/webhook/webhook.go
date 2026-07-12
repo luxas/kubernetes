@@ -432,6 +432,13 @@ func (w *WebhookAuthorizer) EvaluateConditions(ctx context.Context, decision aut
 		return decision.FailureDecision(), "failed closed", fmt.Errorf("got unconditional decision in EvaluateConditions")
 	}
 
+	// EvaluateConditions must be handed data to evaluate against. Without any
+	// data there is nothing for the remote authorizer to condition on, and no
+	// AdmissionRequest UID to correlate the response with. Fail closed.
+	if data == nil {
+		return decision.FailureDecision(), "failed closed", fmt.Errorf("data must be non-nil in EvaluateConditions")
+	}
+
 	// Fail closed when evaluation is not supported
 	if w.authorizationConditionsReviewer == nil {
 		return decision.FailureDecision(), "failed closed", fmt.Errorf("no authorization conditions review client configured for the webhook authorizer, cannot evaluate conditions")
@@ -447,39 +454,37 @@ func (w *WebhookAuthorizer) EvaluateConditions(ctx context.Context, decision aut
 
 	evaluateRequestUUID := uuid.NewUUID()
 
-	if data != nil {
-		var serializedUserInfo authenticationv1.UserInfo
-		if userInfo := data.GetUserInfo(); userInfo != nil {
-			serializedUserInfo = authenticationv1.UserInfo{
-				Username: userInfo.GetName(),
-				Groups:   userInfo.GetGroups(),
-				UID:      userInfo.GetUID(),
-				Extra:    convertToAuthenticationExtra(userInfo.GetExtra()),
-			}
+	var serializedUserInfo authenticationv1.UserInfo
+	if userInfo := data.GetUserInfo(); userInfo != nil {
+		serializedUserInfo = authenticationv1.UserInfo{
+			Username: userInfo.GetName(),
+			Groups:   userInfo.GetGroups(),
+			UID:      userInfo.GetUID(),
+			Extra:    convertToAuthenticationExtra(userInfo.GetExtra()),
 		}
-		r.Request.AdmissionRequest = &admissionv1.AdmissionRequest{
-			UID:                evaluateRequestUUID,
-			Kind:               metav1.GroupVersionKind(data.GetKind()),
-			Resource:           metav1.GroupVersionResource(data.GetResource()),
-			SubResource:        data.GetSubresource(),
-			RequestKind:        ptr.To(metav1.GroupVersionKind(data.GetKind())),
-			RequestResource:    ptr.To(metav1.GroupVersionResource(data.GetResource())),
-			RequestSubResource: data.GetSubresource(),
-			Name:               data.GetName(),
-			Namespace:          data.GetNamespace(),
-			Operation:          v1.Operation(data.GetOperation()),
-			UserInfo:           serializedUserInfo,
-			Object: runtime.RawExtension{
-				Object: data.GetObject(),
-			},
-			OldObject: runtime.RawExtension{
-				Object: data.GetOldObject(),
-			},
-			DryRun: ptr.To(data.IsDryRun()),
-			Options: runtime.RawExtension{
-				Object: data.GetOperationOptions(),
-			},
-		}
+	}
+	r.Request.AdmissionRequest = &admissionv1.AdmissionRequest{
+		UID:                evaluateRequestUUID,
+		Kind:               metav1.GroupVersionKind(data.GetKind()),
+		Resource:           metav1.GroupVersionResource(data.GetResource()),
+		SubResource:        data.GetSubresource(),
+		RequestKind:        ptr.To(metav1.GroupVersionKind(data.GetKind())),
+		RequestResource:    ptr.To(metav1.GroupVersionResource(data.GetResource())),
+		RequestSubResource: data.GetSubresource(),
+		Name:               data.GetName(),
+		Namespace:          data.GetNamespace(),
+		Operation:          v1.Operation(data.GetOperation()),
+		UserInfo:           serializedUserInfo,
+		Object: runtime.RawExtension{
+			Object: data.GetObject(),
+		},
+		OldObject: runtime.RawExtension{
+			Object: data.GetOldObject(),
+		},
+		DryRun: ptr.To(data.IsDryRun()),
+		Options: runtime.RawExtension{
+			Object: data.GetOperationOptions(),
+		},
 	}
 
 	var result *authorizationv1alpha1.AuthorizationConditionsReview
