@@ -107,7 +107,7 @@ func init() {
 				{ErrorType: "FieldValueDuplicate"},
 			},
 			"status.conditionalDecision.union[*].authorizerName": {
-				{ErrorType: "FieldValueInvalid", Origin: "format=k8s-label-key"},
+				{ErrorType: "FieldValueInvalid", Origin: "format=k8s-long-name"},
 				{ErrorType: "FieldValueRequired"},
 			},
 		},

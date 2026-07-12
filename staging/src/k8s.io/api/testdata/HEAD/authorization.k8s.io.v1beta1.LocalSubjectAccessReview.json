@@ -104,15 +104,33 @@
       "type": "typeValue",
       "deny": {
         "reason": "reasonValue",
-        "evaluationError": "evaluationErrorValue"
+        "evaluationError": "evaluationErrorValue",
+        "auditAnnotations": {
+          "auditAnnotationsKey": "auditAnnotationsValue"
+        },
+        "warnings": [
+          "warningsValue"
+        ]
       },
       "noOpinion": {
         "reason": "reasonValue",
-        "evaluationError": "evaluationErrorValue"
+        "evaluationError": "evaluationErrorValue",
+        "auditAnnotations": {
+          "auditAnnotationsKey": "auditAnnotationsValue"
+        },
+        "warnings": [
+          "warningsValue"
+        ]
       },
       "allow": {
         "reason": "reasonValue",
-        "evaluationError": "evaluationErrorValue"
+        "evaluationError": "evaluationErrorValue",
+        "auditAnnotations": {
+          "auditAnnotationsKey": "auditAnnotationsValue"
+        },
+        "warnings": [
+          "warningsValue"
+        ]
       },
       "conditionsMap": {
         "denyConditions": [

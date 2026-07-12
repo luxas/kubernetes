@@ -48,15 +48,33 @@
       "type": "typeValue",
       "deny": {
         "reason": "reasonValue",
-        "evaluationError": "evaluationErrorValue"
+        "evaluationError": "evaluationErrorValue",
+        "auditAnnotations": {
+          "auditAnnotationsKey": "auditAnnotationsValue"
+        },
+        "warnings": [
+          "warningsValue"
+        ]
       },
       "noOpinion": {
         "reason": "reasonValue",
-        "evaluationError": "evaluationErrorValue"
+        "evaluationError": "evaluationErrorValue",
+        "auditAnnotations": {
+          "auditAnnotationsKey": "auditAnnotationsValue"
+        },
+        "warnings": [
+          "warningsValue"
+        ]
       },
       "allow": {
         "reason": "reasonValue",
-        "evaluationError": "evaluationErrorValue"
+        "evaluationError": "evaluationErrorValue",
+        "auditAnnotations": {
+          "auditAnnotationsKey": "auditAnnotationsValue"
+        },
+        "warnings": [
+          "warningsValue"
+        ]
       },
       "conditionsMap": {
         "denyConditions": [
@@ -93,7 +111,19 @@
         }
       ]
     },
-    "admissionControlData": {
+    "admissionRequest": {
+      "uid": "uidValue",
+      "kind": {
+        "group": "groupValue",
+        "version": "versionValue",
+        "kind": "kindValue"
+      },
+      "resource": {
+        "group": "groupValue",
+        "version": "versionValue",
+        "resource": "resourceValue"
+      },
+      "subResource": "subResourceValue",
       "requestKind": {
         "group": "groupValue",
         "version": "versionValue",
@@ -154,19 +184,38 @@
     }
   },
   "response": {
+    "uid": "uidValue",
     "decision": {
       "type": "typeValue",
       "deny": {
         "reason": "reasonValue",
-        "evaluationError": "evaluationErrorValue"
+        "evaluationError": "evaluationErrorValue",
+        "auditAnnotations": {
+          "auditAnnotationsKey": "auditAnnotationsValue"
+        },
+        "warnings": [
+          "warningsValue"
+        ]
       },
       "noOpinion": {
         "reason": "reasonValue",
-        "evaluationError": "evaluationErrorValue"
+        "evaluationError": "evaluationErrorValue",
+        "auditAnnotations": {
+          "auditAnnotationsKey": "auditAnnotationsValue"
+        },
+        "warnings": [
+          "warningsValue"
+        ]
       },
       "allow": {
         "reason": "reasonValue",
-        "evaluationError": "evaluationErrorValue"
+        "evaluationError": "evaluationErrorValue",
+        "auditAnnotations": {
+          "auditAnnotationsKey": "auditAnnotationsValue"
+        },
+        "warnings": [
+          "warningsValue"
+        ]
       },
       "conditionsMap": {
         "denyConditions": [

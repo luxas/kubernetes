@@ -33,8 +33,12 @@ metadata:
   selfLink: selfLinkValue
   uid: uidValue
 request:
-  admissionControlData:
+  admissionRequest:
     dryRun: true
+    kind:
+      group: groupValue
+      kind: kindValue
+      version: versionValue
     name: nameValue
     namespace: namespaceValue
     object:
@@ -68,6 +72,12 @@ request:
       resource: resourceValue
       version: versionValue
     requestSubResource: requestSubResourceValue
+    resource:
+      group: groupValue
+      resource: resourceValue
+      version: versionValue
+    subResource: subResourceValue
+    uid: uidValue
     userInfo:
       extra:
         extraKey:
@@ -78,8 +88,12 @@ request:
       username: usernameValue
   decision:
     allow:
+      auditAnnotations:
+        auditAnnotationsKey: auditAnnotationsValue
       evaluationError: evaluationErrorValue
       reason: reasonValue
+      warnings:
+      - warningsValue
     conditionsMap:
       allowConditions:
       - condition: conditionValue
@@ -97,11 +111,19 @@ request:
         id: idValue
         type: typeValue
     deny:
+      auditAnnotations:
+        auditAnnotationsKey: auditAnnotationsValue
       evaluationError: evaluationErrorValue
       reason: reasonValue
+      warnings:
+      - warningsValue
     noOpinion:
+      auditAnnotations:
+        auditAnnotationsKey: auditAnnotationsValue
       evaluationError: evaluationErrorValue
       reason: reasonValue
+      warnings:
+      - warningsValue
     type: typeValue
     union:
     - authorizerName: authorizerNameValue
@@ -110,8 +132,12 @@ request:
 response:
   decision:
     allow:
+      auditAnnotations:
+        auditAnnotationsKey: auditAnnotationsValue
       evaluationError: evaluationErrorValue
       reason: reasonValue
+      warnings:
+      - warningsValue
     conditionsMap:
       allowConditions:
       - condition: conditionValue
@@ -129,13 +155,22 @@ response:
         id: idValue
         type: typeValue
     deny:
+      auditAnnotations:
+        auditAnnotationsKey: auditAnnotationsValue
       evaluationError: evaluationErrorValue
       reason: reasonValue
+      warnings:
+      - warningsValue
     noOpinion:
+      auditAnnotations:
+        auditAnnotationsKey: auditAnnotationsValue
       evaluationError: evaluationErrorValue
       reason: reasonValue
+      warnings:
+      - warningsValue
     type: typeValue
     union:
     - authorizerName: authorizerNameValue
       decision:
         type: ""
+  uid: uidValue

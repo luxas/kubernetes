@@ -736,7 +736,7 @@ func Validate_NamedConditionsAwareDecision(
 			if earlyReturn {
 				return // do not proceed
 			}
-			if e := validate.LabelKey(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := validate.LongName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return

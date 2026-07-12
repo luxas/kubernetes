@@ -14,7 +14,7 @@
           },
           "id": {
             "default": "",
-            "description": "id uniquely identifies this condition within the scope of the authorizer that authored it. Validated as a Kubernetes label key. Any domain of form *.k8s.io or *.kubernetes.io is reserved for Kubernetes use.",
+            "description": "id uniquely identifies this condition within the scope of the authorizer that authored it and ConditionsMap it is part of. Validated as a Kubernetes label key. Any domain of form *.k8s.io or *.kubernetes.io is reserved for Kubernetes use.",
             "type": "string"
           },
           "type": {
@@ -99,7 +99,7 @@
         "type": "object"
       },
       "io.k8s.api.authorization.v1.ConditionsMap": {
-        "description": "ConditionsMap represents a map of conditions, keyed by ID across all conditions, across all effects. The ConditionsMap must have at least one Allow condition or at least one Deny condition. It cannot contain more than 128 conditions. The conditions are evaluated against data available later, to determine whether the authorizer that authored the conditions allows or denies the request. If all conditions in the map evaluate to false, the final decision must be NoOpinion.",
+        "description": "ConditionsMap represents a map of conditions, keyed by ID across all conditions, across all effects. The ConditionsMap must have at least one Allow condition or at least one Deny condition. It cannot contain more than 128 conditions in total. The conditions are evaluated against data available later, to determine whether the authorizer that authored the conditions allows or denies the request. If all conditions in the map evaluate to false, the final decision must be NoOpinion.",
         "properties": {
           "allowConditions": {
             "description": "allowConditions contains the conditions with Allow effect. If any such condition evaluates to true, the ConditionsMap as a whole must evaluate to Allow.",
@@ -632,7 +632,7 @@
         "properties": {
           "allowed": {
             "default": false,
-            "description": "allowed is required. True if the action would be allowed, false otherwise. Mutually exclusive with denied and conditionalDecision.",
+            "description": "allowed is required. True if the action would be allowed, false otherwise. allowed=true is mutually exclusive with denied=true and conditionalDecision != nil.",
             "type": "boolean"
           },
           "conditionalDecision": {
@@ -641,10 +641,10 @@
                 "$ref": "#/components/schemas/io.k8s.api.authorization.v1.ConditionsAwareDecision"
               }
             ],
-            "description": "conditionalDecision represents a conditional decision returned by the authorizer. Mutually exclusive with allowed and denied. The top-level decision type should be ConditionsAwareDecisionTypeConditionsMap or ConditionsAwareDecisionTypeUnion, as Allow/Deny/NoOpinion decisions can be represented with SubjectAccessReviewStatus.Allowed and SubjectAccessReviewStatus.Denied alone. May only be set if spec.conditionalAuthorization is non-null. Requires the ConditionalAuthorization feature to be enabled."
+            "description": "conditionalDecision represents a conditional decision returned by the authorizer. Mutually exclusive with allowed=true and denied=true. The top-level decision type should be ConditionsAwareDecisionTypeConditionsMap or ConditionsAwareDecisionTypeUnion, as Allow/Deny/NoOpinion decisions can be represented with SubjectAccessReviewStatus.Allowed and SubjectAccessReviewStatus.Denied alone. May only be set if spec.conditionalAuthorization is non-null. Requires the ConditionalAuthorization feature to be enabled."
           },
           "denied": {
-            "description": "denied is optional. True if the action would be denied, otherwise false If allowed is false, denied is false, and conditionalDecision is unset, then the authorizer has no opinion on whether to authorize the action. Mutually exclusive with allowed and conditionalDecision.",
+            "description": "denied is optional. True if the action would be denied, otherwise false If allowed is false, denied is false, and conditionalDecision is unset, then the authorizer has no opinion on whether to authorize the action. denied=true is mutually exclusive with allowed=true and conditionalDecision != nil.",
             "type": "boolean"
           },
           "evaluationError": {
@@ -700,6 +700,13 @@
       "io.k8s.api.authorization.v1.UnconditionalDecision": {
         "description": "UnconditionalDecision represents the data associated with an unconditional decision.",
         "properties": {
+          "auditAnnotations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "auditAnnotations is an unstructured key value map set by an authorizer (e.g. policy=temporary-break-glass), that is eventually added as additional context to the audit log for this request. The authorizerName in the union will be prepended to the annotation key, and joined through \":\", e.g. \"kubernetes.io/webhook:example.com/custom:policy=temporary-break-glass\".",
+            "type": "object"
+          },
           "evaluationError": {
             "description": "evaluationError is an indication that some error occurred during the authorization check. It is entirely possible to get an error and be able to continue determine authorization status in spite of it. For instance, RBAC can be missing a role, but enough roles are still present and bound to reason about the request.",
             "type": "string"
@@ -707,6 +714,14 @@
           "reason": {
             "description": "reason is optional. It indicates why a request was allowed or denied.",
             "type": "string"
+          },
+          "warnings": {
+            "description": "warnings is a list of warning messages to return to the requesting API client. Warning messages describe a problem the client making the API request should correct or be aware of. Limit warnings to 120 characters if possible. Warnings over 256 characters and large numbers of warnings may be truncated.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "x-kubernetes-list-type": "atomic"
           }
         },
         "type": "object"
