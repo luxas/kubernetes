@@ -157,11 +157,11 @@ func (SubjectAccessReviewSpec) SwaggerDoc() map[string]string {
 
 var map_SubjectAccessReviewStatus = map[string]string{
 	"":                    "SubjectAccessReviewStatus",
-	"allowed":             "allowed is required. True if the action would be allowed, false otherwise. Mutually exclusive with denied and conditionalDecision.",
-	"denied":              "denied is optional. True if the action would be denied, otherwise false If allowed is false, denied is false, and conditionalDecision is unset, then the authorizer has no opinion on whether to authorize the action. Mutually exclusive with allowed and conditionalDecision.",
+	"allowed":             "allowed is required to be present. True if the action would be allowed, false otherwise. allowed=true is mutually exclusive with denied=true and conditionalDecision != nil.",
+	"denied":              "denied is optional. True if the action would be denied, otherwise false If allowed is false, denied is false, and conditionalDecision is unset, then the authorizer has no opinion on whether to authorize the action. denied=true is mutually exclusive with allowed=true and conditionalDecision != nil.",
 	"reason":              "reason is optional.  It indicates why a request was allowed or denied.",
 	"evaluationError":     "evaluationError is an indication that some error occurred during the authorization check. It is entirely possible to get an error and be able to continue determine authorization status in spite of it. For instance, RBAC can be missing a role, but enough roles are still present and bound to reason about the request.",
-	"conditionalDecision": "conditionalDecision represents a conditional decision returned by the authorizer. Mutually exclusive with allowed and denied. The top-level decision type should be ConditionsAwareDecisionTypeConditionsMap or ConditionsAwareDecisionTypeUnion, as Allow/Deny/NoOpinion decisions can be represented with SubjectAccessReviewStatus.Allowed and SubjectAccessReviewStatus.Denied alone. May only be set if spec.conditionalAuthorization is non-null. Requires the ConditionalAuthorization feature to be enabled.",
+	"conditionalDecision": "conditionalDecision represents a conditional decision returned by the authorizer. Mutually exclusive with allowed=true and denied=true. The top-level decision type should be ConditionsAwareDecisionTypeConditionsMap or ConditionsAwareDecisionTypeUnion, as Allow/Deny/NoOpinion decisions can be represented with SubjectAccessReviewStatus.Allowed and SubjectAccessReviewStatus.Denied alone. May only be set if spec.conditionalAuthorization is non-null. Requires the ConditionalAuthorization feature to be enabled.",
 }
 
 func (SubjectAccessReviewStatus) SwaggerDoc() map[string]string {

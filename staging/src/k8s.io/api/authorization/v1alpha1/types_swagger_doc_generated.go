@@ -28,9 +28,9 @@ package v1alpha1
 
 // AUTO-GENERATED FUNCTIONS START HERE. DO NOT EDIT.
 var map_AuthorizationConditionsRequest = map[string]string{
-	"":                     "AuthorizationConditionsRequest describes the authorization conditions request.",
-	"decision":             "decision contains the conditional decision the authorizer authored at authorization time.",
-	"admissionControlData": "admissionControlData may contain additional information for evaluating the conditions.",
+	"":                 "AuthorizationConditionsRequest describes the authorization conditions request.",
+	"decision":         "decision contains the conditional decision the authorizer authored at authorization time.",
+	"admissionRequest": "admissionRequest may contain additional information for evaluating the conditions.",
 }
 
 func (AuthorizationConditionsRequest) SwaggerDoc() map[string]string {
@@ -39,6 +39,7 @@ func (AuthorizationConditionsRequest) SwaggerDoc() map[string]string {
 
 var map_AuthorizationConditionsResponse = map[string]string{
 	"":         "AuthorizationConditionsResponse describes an authorization conditions response.",
+	"uid":      "uid is an identifier for the individual request/response. This must be copied over from the corresponding AuthorizationConditionsRequest. It is possible that the same request content (except uid) is sent to the authorizer multiple times.",
 	"decision": "decision contains the authorizer's decision after seeing the data.",
 }
 
@@ -55,82 +56,6 @@ var map_AuthorizationConditionsReview = map[string]string{
 
 func (AuthorizationConditionsReview) SwaggerDoc() map[string]string {
 	return map_AuthorizationConditionsReview
-}
-
-var map_AuthorizationConditionsTargetAdmissionControl = map[string]string{
-	"":                   "AuthorizationConditionsTargetAdmissionControl contains the data available during admission control, against which authorization decisions can be written. It follows the same structure as AdmissionReview.",
-	"requestKind":        "requestKind is the fully-qualified type of the original API request (for example, v1.Pod or autoscaling.v1.Scale). If this is specified and differs from the value in \"kind\", an equivalent match and conversion was performed.\n\nFor example, if deployments can be modified via apps/v1 and apps/v1beta1, and a webhook registered a rule of `apiGroups:[\"apps\"], apiVersions:[\"v1\"], resources: [\"deployments\"]` and `matchPolicy: Equivalent`, an API request to apps/v1beta1 deployments would be converted and sent to the webhook with `kind: {group:\"apps\", version:\"v1\", kind:\"Deployment\"}` (matching the rule the webhook registered for), and `requestKind: {group:\"apps\", version:\"v1beta1\", kind:\"Deployment\"}` (indicating the kind of the original API request).\n\nSee documentation for the \"matchPolicy\" field in the webhook configuration type for more details.",
-	"requestResource":    "requestResource is the fully-qualified resource of the original API request (for example, v1.pods). If this is specified and differs from the value in \"resource\", an equivalent match and conversion was performed.\n\nFor example, if deployments can be modified via apps/v1 and apps/v1beta1, and a webhook registered a rule of `apiGroups:[\"apps\"], apiVersions:[\"v1\"], resources: [\"deployments\"]` and `matchPolicy: Equivalent`, an API request to apps/v1beta1 deployments would be converted and sent to the webhook with `resource: {group:\"apps\", version:\"v1\", resource:\"deployments\"}` (matching the resource the webhook registered for), and `requestResource: {group:\"apps\", version:\"v1beta1\", resource:\"deployments\"}` (indicating the resource of the original API request).\n\nSee documentation for the \"matchPolicy\" field in the webhook configuration type.",
-	"requestSubResource": "requestSubResource is the name of the subresource of the original API request, if any (for example, \"status\" or \"scale\") If this is specified and differs from the value in \"subResource\", an equivalent match and conversion was performed. See documentation for the \"matchPolicy\" field in the webhook configuration type.",
-	"name":               "name is the name of the object as presented in the request. On a CREATE operation, the client may omit name and rely on the server to generate the name. If that is the case, this field will contain an empty string.",
-	"namespace":          "namespace is the namespace associated with the request (if any).",
-	"operation":          "operation is the operation being performed. This may be different than the operation requested. e.g. a patch can result in either a CREATE or UPDATE Operation.",
-	"userInfo":           "userInfo is information about the requesting user",
-	"object":             "object is the object from the incoming request.",
-	"oldObject":          "oldObject is the existing object. Only populated for DELETE and UPDATE requests.",
-	"dryRun":             "dryRun indicates that modifications will definitely not be persisted for this request. Defaults to false.",
-	"options":            "options is the operation option structure of the operation being performed. e.g. `meta.k8s.io/v1.DeleteOptions` or `meta.k8s.io/v1.CreateOptions`. This may be different than the options the caller provided. e.g. for a patch request the performed Operation might be a CREATE, in which case the Options will a `meta.k8s.io/v1.CreateOptions` even though the caller provided `meta.k8s.io/v1.PatchOptions`.",
-}
-
-func (AuthorizationConditionsTargetAdmissionControl) SwaggerDoc() map[string]string {
-	return map_AuthorizationConditionsTargetAdmissionControl
-}
-
-var map_Condition = map[string]string{
-	"":            "Condition represents a single authorization condition to be evaluated against data available later in the request chain, e.g. objects available in admission.",
-	"id":          "id uniquely identifies this condition within the scope of the authorizer that authored it. Validated as a Kubernetes label key. Any domain of form *.k8s.io or *.kubernetes.io is reserved for Kubernetes use.",
-	"condition":   "condition returns a string encoding of the condition to be evaluated. It is a pure, deterministic function from ConditionsData to a boolean (or error). Might or might not be human-readable. Optional, if the ID alone is enough for the authorizer to know how to evaluate the condition.",
-	"type":        "type describes the type of the condition, if there are multiple possibilities. Should be formatted as a Kubernetes label key. Any domain of form *.k8s.io or *.kubernetes.io is reserved for Kubernetes use. Optional. Can be omitted if the authorizer already knows how to evaluate the condition.",
-	"description": "description is an optional human-friendly description that can be shown as an error message or for debugging. Optional.",
-}
-
-func (Condition) SwaggerDoc() map[string]string {
-	return map_Condition
-}
-
-var map_ConditionsAwareDecision = map[string]string{
-	"":              "ConditionsAwareDecision represents one authorizer's decision. It is an enum type, with variants described in ConditionsAwareDecisionType, plus a reason and error.",
-	"type":          "type describes the type of the decision, and acts as an enum discriminator.",
-	"deny":          "deny represents an unconditional Deny decision. Must be non-null when type == \"Deny\", otherwise this field must be unset.",
-	"noOpinion":     "noOpinion represents an unconditional NoOpinion decision. Must be non-null when type == \"NoOpinion\", otherwise this field must be unset.",
-	"allow":         "allow represents an unconditional Allow decision. Must be non-null when type == \"Allow\", otherwise this field must be unset.",
-	"conditionsMap": "conditionsMap represents a conditional decision, modelled as a map of conditions. Must be non-null when type == \"ConditionsMap\", otherwise this field must be unset.",
-	"union":         "union forms an ordered tree of decisions, where the union decision is represented by an internal node, and all other decision types are leaf nodes. During evaluation, the leaf decisions are evaluated in depth-first order, until an Allow or Deny decision is found. The order of the decisions must match exactly the order of the authorizers in the union authorizer. At least one of the leaves must be of type ConditionsMap, as otherwise the union could be trivially reduced to just a single Allow/Deny/NoOpinion.\n\nMust have at least one element when type == \"Union\", otherwise this field must be unset.",
-}
-
-func (ConditionsAwareDecision) SwaggerDoc() map[string]string {
-	return map_ConditionsAwareDecision
-}
-
-var map_ConditionsMap = map[string]string{
-	"":                    "ConditionsMap represents a map of conditions, keyed by ID across all conditions, across all effects. The ConditionsMap must have at least one Allow condition or at least one Deny condition. It cannot contain more than 128 conditions. The conditions are evaluated against data available later, to determine whether the authorizer that authored the conditions allows or denies the request. If all conditions in the map evaluate to false, the final decision must be NoOpinion.",
-	"denyConditions":      "denyConditions contains the conditions with Deny effect. If any such condition evaluates to true or error, the ConditionsMap as a whole must evaluate to Deny.",
-	"noOpinionConditions": "noOpinionConditions contains the conditions with NoOpinion effect. If any such condition evaluates to true or error, the ConditionsMap as a whole must evaluate to NoOpinion.",
-	"allowConditions":     "allowConditions contains the conditions with Allow effect. If any such condition evaluates to true, the ConditionsMap as a whole must evaluate to Allow.",
-}
-
-func (ConditionsMap) SwaggerDoc() map[string]string {
-	return map_ConditionsMap
-}
-
-var map_NamedConditionsAwareDecision = map[string]string{
-	"":               "NamedConditionsAwareDecision is a named ConditionsAwareDecision, returned by a unioned authorizer.",
-	"authorizerName": "authorizerName details the name of the authorizer that authored the condition, such that the right Decision can be paired with the right authorizer when evaluating the conditions, even across API server replicas. The name must be stable over time. This name must be unique within a given union authorizer, not necessarily globally.",
-	"decision":       "decision carries the inner decision returned from the authorizer.",
-}
-
-func (NamedConditionsAwareDecision) SwaggerDoc() map[string]string {
-	return map_NamedConditionsAwareDecision
-}
-
-var map_UnconditionalDecision = map[string]string{
-	"":                "UnconditionalDecision represents the data associated with an unconditional decision.",
-	"reason":          "reason is optional. It indicates why a request was allowed or denied.",
-	"evaluationError": "evaluationError is an indication that some error occurred during the authorization check. It is entirely possible to get an error and be able to continue determine authorization status in spite of it. For instance, RBAC can be missing a role, but enough roles are still present and bound to reason about the request.",
-}
-
-func (UnconditionalDecision) SwaggerDoc() map[string]string {
-	return map_UnconditionalDecision
 }
 
 // AUTO-GENERATED FUNCTIONS END HERE

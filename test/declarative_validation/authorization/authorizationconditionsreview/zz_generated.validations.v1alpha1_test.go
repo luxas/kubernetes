@@ -98,6 +98,7 @@ func init() {
 				{ErrorType: "FieldValueDuplicate"},
 			},
 			"request.decision.union[*].authorizerName": {
+				{ErrorType: "FieldValueInvalid", Origin: "format=k8s-label-key"},
 				{ErrorType: "FieldValueRequired"},
 			},
 			"response.decision.conditionsMap.allowConditions": {
@@ -165,6 +166,7 @@ func init() {
 				{ErrorType: "FieldValueDuplicate"},
 			},
 			"response.decision.union[*].authorizerName": {
+				{ErrorType: "FieldValueInvalid", Origin: "format=k8s-label-key"},
 				{ErrorType: "FieldValueRequired"},
 			},
 		},

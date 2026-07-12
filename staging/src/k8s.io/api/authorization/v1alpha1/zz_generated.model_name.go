@@ -35,33 +35,3 @@ func (in AuthorizationConditionsResponse) OpenAPIModelName() string {
 func (in AuthorizationConditionsReview) OpenAPIModelName() string {
 	return "io.k8s.api.authorization.v1alpha1.AuthorizationConditionsReview"
 }
-
-// OpenAPIModelName returns the OpenAPI model name for this type.
-func (in AuthorizationConditionsTargetAdmissionControl) OpenAPIModelName() string {
-	return "io.k8s.api.authorization.v1alpha1.AuthorizationConditionsTargetAdmissionControl"
-}
-
-// OpenAPIModelName returns the OpenAPI model name for this type.
-func (in Condition) OpenAPIModelName() string {
-	return "io.k8s.api.authorization.v1alpha1.Condition"
-}
-
-// OpenAPIModelName returns the OpenAPI model name for this type.
-func (in ConditionsAwareDecision) OpenAPIModelName() string {
-	return "io.k8s.api.authorization.v1alpha1.ConditionsAwareDecision"
-}
-
-// OpenAPIModelName returns the OpenAPI model name for this type.
-func (in ConditionsMap) OpenAPIModelName() string {
-	return "io.k8s.api.authorization.v1alpha1.ConditionsMap"
-}
-
-// OpenAPIModelName returns the OpenAPI model name for this type.
-func (in NamedConditionsAwareDecision) OpenAPIModelName() string {
-	return "io.k8s.api.authorization.v1alpha1.NamedConditionsAwareDecision"
-}
-
-// OpenAPIModelName returns the OpenAPI model name for this type.
-func (in UnconditionalDecision) OpenAPIModelName() string {
-	return "io.k8s.api.authorization.v1alpha1.UnconditionalDecision"
-}

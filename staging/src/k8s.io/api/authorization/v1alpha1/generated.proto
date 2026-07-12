@@ -22,7 +22,7 @@ syntax = "proto2";
 package k8s.io.api.authorization.v1alpha1;
 
 import "k8s.io/api/admission/v1/generated.proto";
-import "k8s.io/api/authentication/v1/generated.proto";
+import "k8s.io/api/authorization/v1/generated.proto";
 import "k8s.io/apimachinery/pkg/apis/meta/v1/generated.proto";
 import "k8s.io/apimachinery/pkg/runtime/generated.proto";
 import "k8s.io/apimachinery/pkg/runtime/schema/generated.proto";
@@ -31,23 +31,32 @@ import "k8s.io/apimachinery/pkg/runtime/schema/generated.proto";
 option go_package = "k8s.io/api/authorization/v1alpha1";
 
 // AuthorizationConditionsRequest describes the authorization conditions request.
+// +k8s:conversion-gen=false
 message AuthorizationConditionsRequest {
   // decision contains the conditional decision the authorizer authored at authorization time.
   // +required
-  optional ConditionsAwareDecision decision = 1;
+  optional .k8s.io.api.authorization.v1.ConditionsAwareDecision decision = 1;
 
-  // admissionControlData may contain additional information for evaluating the conditions.
+  // admissionRequest may contain additional information for evaluating the conditions.
   // +k8s:unionMember
   // +k8s:optional
   // +optional
-  optional AuthorizationConditionsTargetAdmissionControl admissionControlData = 2;
+  optional .k8s.io.api.admission.v1.AdmissionRequest admissionRequest = 2;
 }
 
 // AuthorizationConditionsResponse describes an authorization conditions response.
+// +k8s:conversion-gen=false
 message AuthorizationConditionsResponse {
+  // uid is an identifier for the individual request/response.
+  // This must be copied over from the corresponding AuthorizationConditionsRequest.
+  // It is possible that the same request content (except uid) is sent to the
+  // authorizer multiple times.
+  // +optional
+  optional string uid = 1;
+
   // decision contains the authorizer's decision after seeing the data.
   // +required
-  optional ConditionsAwareDecision decision = 1;
+  optional .k8s.io.api.authorization.v1.ConditionsAwareDecision decision = 2;
 }
 
 // AuthorizationConditionsReview describes a request to evaluate authorization conditions.
@@ -56,6 +65,7 @@ message AuthorizationConditionsReview {
   // In AuthorizationConditionsReview, it must be an empty struct.
   // More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
   // +optional
+  // +k8s:opaqueType
   optional .k8s.io.apimachinery.pkg.apis.meta.v1.ObjectMeta metadata = 1;
 
   // request describes the attributes for the authorization conditions request.
@@ -67,235 +77,5 @@ message AuthorizationConditionsReview {
   // +k8s:optional
   // +optional
   optional AuthorizationConditionsResponse response = 3;
-}
-
-// AuthorizationConditionsTargetAdmissionControl contains the data available during admission control,
-// against which authorization decisions can be written. It follows the same structure as AdmissionReview.
-message AuthorizationConditionsTargetAdmissionControl {
-  // requestKind is the fully-qualified type of the original API request (for example, v1.Pod or autoscaling.v1.Scale).
-  // If this is specified and differs from the value in "kind", an equivalent match and conversion was performed.
-  //
-  // For example, if deployments can be modified via apps/v1 and apps/v1beta1, and a webhook registered a rule of
-  // `apiGroups:["apps"], apiVersions:["v1"], resources: ["deployments"]` and `matchPolicy: Equivalent`,
-  // an API request to apps/v1beta1 deployments would be converted and sent to the webhook
-  // with `kind: {group:"apps", version:"v1", kind:"Deployment"}` (matching the rule the webhook registered for),
-  // and `requestKind: {group:"apps", version:"v1beta1", kind:"Deployment"}` (indicating the kind of the original API request).
-  //
-  // See documentation for the "matchPolicy" field in the webhook configuration type for more details.
-  // +optional
-  optional .k8s.io.apimachinery.pkg.apis.meta.v1.GroupVersionKind requestKind = 14;
-
-  // requestResource is the fully-qualified resource of the original API request (for example, v1.pods).
-  // If this is specified and differs from the value in "resource", an equivalent match and conversion was performed.
-  //
-  // For example, if deployments can be modified via apps/v1 and apps/v1beta1, and a webhook registered a rule of
-  // `apiGroups:["apps"], apiVersions:["v1"], resources: ["deployments"]` and `matchPolicy: Equivalent`,
-  // an API request to apps/v1beta1 deployments would be converted and sent to the webhook
-  // with `resource: {group:"apps", version:"v1", resource:"deployments"}` (matching the resource the webhook registered for),
-  // and `requestResource: {group:"apps", version:"v1beta1", resource:"deployments"}` (indicating the resource of the original API request).
-  //
-  // See documentation for the "matchPolicy" field in the webhook configuration type.
-  // +optional
-  optional .k8s.io.apimachinery.pkg.apis.meta.v1.GroupVersionResource requestResource = 15;
-
-  // requestSubResource is the name of the subresource of the original API request, if any (for example, "status" or "scale")
-  // If this is specified and differs from the value in "subResource", an equivalent match and conversion was performed.
-  // See documentation for the "matchPolicy" field in the webhook configuration type.
-  // +optional
-  optional string requestSubResource = 16;
-
-  // name is the name of the object as presented in the request. On a CREATE operation, the client may omit name and
-  // rely on the server to generate the name. If that is the case, this field will contain an empty string.
-  // +optional
-  optional string name = 5;
-
-  // namespace is the namespace associated with the request (if any).
-  // +optional
-  optional string namespace = 6;
-
-  // operation is the operation being performed. This may be different than the operation
-  // requested. e.g. a patch can result in either a CREATE or UPDATE Operation.
-  optional string operation = 7;
-
-  // userInfo is information about the requesting user
-  optional .k8s.io.api.authentication.v1.UserInfo userInfo = 9;
-
-  // object is the object from the incoming request.
-  // +optional
-  optional .k8s.io.apimachinery.pkg.runtime.RawExtension object = 10;
-
-  // oldObject is the existing object. Only populated for DELETE and UPDATE requests.
-  // +optional
-  optional .k8s.io.apimachinery.pkg.runtime.RawExtension oldObject = 11;
-
-  // dryRun indicates that modifications will definitely not be persisted for this request.
-  // Defaults to false.
-  // +optional
-  optional bool dryRun = 12;
-
-  // options is the operation option structure of the operation being performed.
-  // e.g. `meta.k8s.io/v1.DeleteOptions` or `meta.k8s.io/v1.CreateOptions`. This may be
-  // different than the options the caller provided. e.g. for a patch request the performed
-  // Operation might be a CREATE, in which case the Options will a
-  // `meta.k8s.io/v1.CreateOptions` even though the caller provided `meta.k8s.io/v1.PatchOptions`.
-  // +optional
-  optional .k8s.io.apimachinery.pkg.runtime.RawExtension options = 13;
-}
-
-// Condition represents a single authorization condition to be evaluated against
-// data available later in the request chain, e.g. objects available in admission.
-message Condition {
-  // id uniquely identifies this condition within the scope of the authorizer
-  // that authored it. Validated as a Kubernetes label key.
-  // Any domain of form *.k8s.io or *.kubernetes.io is reserved for Kubernetes use.
-  // +k8s:required
-  // +required
-  optional string id = 1;
-
-  // condition returns a string encoding of the condition to be evaluated.
-  // It is a pure, deterministic function from ConditionsData to a boolean (or error).
-  // Might or might not be human-readable.
-  // Optional, if the ID alone is enough for the authorizer to know how to evaluate the condition.
-  // +k8s:optional
-  // +optional
-  optional string condition = 2;
-
-  // type describes the type of the condition, if there are multiple possibilities.
-  // Should be formatted as a Kubernetes label key.
-  // Any domain of form *.k8s.io or *.kubernetes.io is reserved for Kubernetes use.
-  // Optional. Can be omitted if the authorizer already knows how to evaluate the condition.
-  // +k8s:optional
-  // +optional
-  optional string type = 3;
-
-  // description is an optional human-friendly description that can be shown
-  // as an error message or for debugging. Optional.
-  // +k8s:optional
-  // +optional
-  optional string description = 4;
-}
-
-// ConditionsAwareDecision represents one authorizer's decision. It is an enum type,
-// with variants described in ConditionsAwareDecisionType, plus a reason and error.
-message ConditionsAwareDecision {
-  // type describes the type of the decision, and acts as an enum discriminator.
-  // +k8s:beta=+k8s:unionDiscriminator
-  // +k8s:required
-  // +required
-  optional string type = 1;
-
-  // deny represents an unconditional Deny decision.
-  // Must be non-null when type == "Deny", otherwise this field must be unset.
-  // +k8s:unionMember
-  // +k8s:optional
-  // +optional
-  optional UnconditionalDecision deny = 2;
-
-  // noOpinion represents an unconditional NoOpinion decision.
-  // Must be non-null when type == "NoOpinion", otherwise this field must be unset.
-  // +k8s:unionMember
-  // +k8s:optional
-  // +optional
-  optional UnconditionalDecision noOpinion = 3;
-
-  // allow represents an unconditional Allow decision.
-  // Must be non-null when type == "Allow", otherwise this field must be unset.
-  // +k8s:unionMember
-  // +k8s:optional
-  // +optional
-  optional UnconditionalDecision allow = 4;
-
-  // conditionsMap represents a conditional decision, modelled as a map of conditions.
-  // Must be non-null when type == "ConditionsMap", otherwise this field must be unset.
-  // +k8s:unionMember
-  // +k8s:optional
-  // +optional
-  optional ConditionsMap conditionsMap = 5;
-
-  // union forms an ordered tree of decisions, where the union decision is represented by
-  // an internal node, and all other decision types are leaf nodes. During evaluation, the
-  // leaf decisions are evaluated in depth-first order, until an Allow or Deny decision is found.
-  // The order of the decisions must match exactly the order of the authorizers in the union authorizer.
-  // At least one of the leaves must be of type ConditionsMap, as otherwise the union could be trivially
-  // reduced to just a single Allow/Deny/NoOpinion.
-  //
-  // Must have at least one element when type == "Union", otherwise this field must be unset.
-  //
-  // +k8s:unionMember
-  // +k8s:optional
-  // +optional
-  // +k8s:listType=map
-  // +k8s:listMapKey=authorizerName
-  // +listType=map
-  // +listMapKey=authorizerName
-  repeated NamedConditionsAwareDecision union = 6;
-}
-
-// ConditionsMap represents a map of conditions, keyed by ID across all conditions, across
-// all effects. The ConditionsMap must have at least one Allow condition or at least one
-// Deny condition. It cannot contain more than 128 conditions. The conditions are evaluated
-// against data available later, to determine whether the authorizer that authored the conditions
-// allows or denies the request.
-// If all conditions in the map evaluate to false, the final decision must be NoOpinion.
-message ConditionsMap {
-  // denyConditions contains the conditions with Deny effect. If any such condition evaluates to
-  // true or error, the ConditionsMap as a whole must evaluate to Deny.
-  // +listType=map
-  // +listMapKey=id
-  // +k8s:listType=map
-  // +k8s:listMapKey=id
-  // +k8s:optional
-  // +optional
-  repeated Condition denyConditions = 1;
-
-  // noOpinionConditions contains the conditions with NoOpinion effect. If any such condition evaluates to
-  // true or error, the ConditionsMap as a whole must evaluate to NoOpinion.
-  // +listType=map
-  // +listMapKey=id
-  // +k8s:listType=map
-  // +k8s:listMapKey=id
-  // +k8s:optional
-  // +optional
-  repeated Condition noOpinionConditions = 2;
-
-  // allowConditions contains the conditions with Allow effect. If any such condition evaluates to
-  // true, the ConditionsMap as a whole must evaluate to Allow.
-  // +listType=map
-  // +listMapKey=id
-  // +k8s:listType=map
-  // +k8s:listMapKey=id
-  // +k8s:optional
-  // +optional
-  repeated Condition allowConditions = 3;
-}
-
-// NamedConditionsAwareDecision is a named ConditionsAwareDecision, returned by a unioned authorizer.
-message NamedConditionsAwareDecision {
-  // authorizerName details the name of the authorizer that authored the condition, such that
-  // the right Decision can be paired with the right authorizer when evaluating the conditions,
-  // even across API server replicas. The name must be stable over time.
-  // This name must be unique within a given union authorizer, not necessarily globally.
-  // +required
-  // +k8s:required
-  optional string authorizerName = 1;
-
-  // decision carries the inner decision returned from the authorizer.
-  // +required
-  optional ConditionsAwareDecision decision = 2;
-}
-
-// UnconditionalDecision represents the data associated with an unconditional decision.
-message UnconditionalDecision {
-  // reason is optional. It indicates why a request was allowed or denied.
-  // +k8s:optional
-  // +optional
-  optional string reason = 1;
-
-  // evaluationError is an indication that some error occurred during the authorization check.
-  // It is entirely possible to get an error and be able to continue determine authorization status in spite of it.
-  // For instance, RBAC can be missing a role, but enough roles are still present and bound to reason about the request.
-  // +k8s:optional
-  // +optional
-  optional string evaluationError = 2;
 }
 

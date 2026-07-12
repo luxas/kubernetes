@@ -346,7 +346,7 @@ func Validate_ConditionsAwareDecision(
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+				if equality.Semantic.DeepEqual(obj, oldObj) {
 					return nil
 				}
 			}
@@ -376,7 +376,7 @@ func Validate_ConditionsAwareDecision(
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+				if equality.Semantic.DeepEqual(obj, oldObj) {
 					return nil
 				}
 			}
@@ -406,7 +406,7 @@ func Validate_ConditionsAwareDecision(
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+				if equality.Semantic.DeepEqual(obj, oldObj) {
 					return nil
 				}
 			}
@@ -1241,6 +1241,62 @@ func Validate_UnconditionalDecision(
 				return &oldObj.EvaluationError
 			})
 		errs = append(errs, fn(fldPath.Child("evaluationError"), &obj.EvaluationError, oldVal, oldObj != nil)...)
+	}
+
+	{ // field authorizationv1.UnconditionalDecision.AuditAnnotations
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj map[string]string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if equality.Semantic.DeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalMap(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *authorizationv1.UnconditionalDecision) map[string]string {
+				return oldObj.AuditAnnotations
+			})
+		errs = append(errs, fn(fldPath.Child("auditAnnotations"), obj.AuditAnnotations, oldVal, oldObj != nil)...)
+	}
+
+	{ // field authorizationv1.UnconditionalDecision.Warnings
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj []string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if equality.Semantic.DeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *authorizationv1.UnconditionalDecision) []string {
+				return oldObj.Warnings
+			})
+		errs = append(errs, fn(fldPath.Child("warnings"), obj.Warnings, oldVal, oldObj != nil)...)
 	}
 
 	return errs
