@@ -156,15 +156,15 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 				setRequestDecision(authorization.ConditionsAwareDecision{
 					Type: authorization.ConditionsAwareDecisionTypeUnion,
 					Union: []authorization.NamedConditionsAwareDecision{
-						{AuthorizerName: "example.com/dup", Decision: validNoOpinionDecision()},
-						{AuthorizerName: "example.com/dup", Decision: validNoOpinionDecision()},
+						{AuthorizerName: "dup.example.com", Decision: validNoOpinionDecision()},
+						{AuthorizerName: "dup.example.com", Decision: validNoOpinionDecision()},
 					},
 				}),
 				setResponseDecision(authorization.ConditionsAwareDecision{
 					Type: authorization.ConditionsAwareDecisionTypeUnion,
 					Union: []authorization.NamedConditionsAwareDecision{
-						{AuthorizerName: "example.com/dup", Decision: validNoOpinionDecision()},
-						{AuthorizerName: "example.com/dup", Decision: validNoOpinionDecision()},
+						{AuthorizerName: "dup.example.com", Decision: validNoOpinionDecision()},
+						{AuthorizerName: "dup.example.com", Decision: validNoOpinionDecision()},
 					},
 				}),
 			),
@@ -172,6 +172,27 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 				requestUnionErr,
 				field.Duplicate(field.NewPath("request", "decision", "union").Index(1), nil),
 				field.Duplicate(field.NewPath("response", "decision", "union").Index(1), nil),
+			},
+		},
+		"decision.union[*].authorizerName invalid subdomain (request+response)": {
+			obj: mkACR(
+				setRequestDecision(authorization.ConditionsAwareDecision{
+					Type: authorization.ConditionsAwareDecisionTypeUnion,
+					Union: []authorization.NamedConditionsAwareDecision{
+						{AuthorizerName: "not a valid label", Decision: validNoOpinionDecision()},
+					},
+				}),
+				setResponseDecision(authorization.ConditionsAwareDecision{
+					Type: authorization.ConditionsAwareDecisionTypeUnion,
+					Union: []authorization.NamedConditionsAwareDecision{
+						{AuthorizerName: "not a valid label", Decision: validNoOpinionDecision()},
+					},
+				}),
+			),
+			expectedErrs: field.ErrorList{
+				requestUnionErr,
+				field.Invalid(field.NewPath("request", "decision", "union").Index(0).Child("authorizerName"), "", "").WithOrigin("format=k8s-long-name"),
+				field.Invalid(field.NewPath("response", "decision", "union").Index(0).Child("authorizerName"), "", "").WithOrigin("format=k8s-long-name"),
 			},
 		},
 		"decision.conditionsMap[deny|noOpinion|allow]Conditions too many (request+response)": {

@@ -159,15 +159,15 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 			obj: mkSelfSAR(setConditionalDecision(&authorization.ConditionsAwareDecision{
 				Type: authorization.ConditionsAwareDecisionTypeUnion,
 				Union: []authorization.NamedConditionsAwareDecision{
-					{AuthorizerName: "example.com/dup", Decision: validNoOpinionDecision()},
-					{AuthorizerName: "example.com/dup", Decision: validNoOpinionDecision()},
+					{AuthorizerName: "dup.example.com", Decision: validNoOpinionDecision()},
+					{AuthorizerName: "dup.example.com", Decision: validNoOpinionDecision()},
 				},
 			})),
 			expectedErrs: field.ErrorList{
 				field.Duplicate(field.NewPath("status", "conditionalDecision", "union").Index(1), nil),
 			},
 		},
-		"status.conditionalDecision.union[*].authorizerName invalid label key": {
+		"status.conditionalDecision.union[*].authorizerName invalid subdomain": {
 			enableConditionalAuthorization: true,
 			obj: mkSelfSAR(setConditionalDecision(&authorization.ConditionsAwareDecision{
 				Type: authorization.ConditionsAwareDecisionTypeUnion,
@@ -176,7 +176,7 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 				},
 			})),
 			expectedErrs: field.ErrorList{
-				field.Invalid(field.NewPath("status", "conditionalDecision", "union").Index(0).Child("authorizerName"), "", "").WithOrigin("format=k8s-label-key"),
+				field.Invalid(field.NewPath("status", "conditionalDecision", "union").Index(0).Child("authorizerName"), "", "").WithOrigin("format=k8s-long-name"),
 			},
 		},
 		"status.conditionalDecision.conditionsMap[deny|noOpinion|allow]Conditions too many": {

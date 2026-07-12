@@ -25,7 +25,6 @@ import (
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/sets"
 	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
-	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 type namedConditionsAwareDecision struct {
@@ -68,8 +67,8 @@ func (unionMap *ConditionsAwareDecisionUnion) Add(authorizerName string, d Condi
 		// Note: We don't short-circuit here, as we want to see all decisions "until the end", such that we can fail closed stronger if needed.
 		unionMap.errs = append(unionMap.errs, fmt.Errorf("duplicate authorizerName %q", authorizerName))
 	}
-	if errs := utilvalidation.IsDomainPrefixedKey(field.NewPath("authorizerName"), authorizerName); len(errs) > 0 {
-		unionMap.errs = append(unionMap.errs, fmt.Errorf("invalid authorizerName: %w", errs.ToAggregate()))
+	if errs := utilvalidation.IsDNS1123Subdomain(authorizerName); len(errs) > 0 {
+		unionMap.errs = append(unionMap.errs, fmt.Errorf("invalid authorizerName: %v", errs))
 	}
 	// Once we've seen an unconditional Allow or Deny somewhere in the chain, we can stop accepting
 	// other decisions, as they won't ever apply.

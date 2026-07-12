@@ -577,7 +577,7 @@ type NamedConditionsAwareDecision struct {
 	// This name must be unique within a given union authorizer, not necessarily globally.
 	// +required
 	// +k8s:required
-	// +k8s:format=k8s-label-key
+	// +k8s:format=k8s-long-name
 	AuthorizerName string `json:"authorizerName" protobuf:"bytes,1,opt,name=authorizerName"`
 
 	// decision carries the inner decision returned from the authorizer.

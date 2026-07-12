@@ -35,30 +35,30 @@ func TestConditionsAwareDecisionUnionAdd(t *testing.T) {
 
 	t.Run("duplicate conditional authorizers fails closed", func(t *testing.T) {
 		var u authorizer.ConditionsAwareDecisionUnion
-		u.Add("example.com/nop", noOp)
-		u.Add("example.com/dup", condMapAllow)
-		u.Add("example.com/dup", condMapAllow)
+		u.Add("nop.example.com", noOp)
+		u.Add("dup.example.com", condMapAllow)
+		u.Add("dup.example.com", condMapAllow)
 
 		d := u.ToDecision()
 		if !d.IsNoOpinion() {
 			t.Errorf("expected NoOpinion (no Deny leaf), got %s", d.String())
 		}
-		if d.Error().Error() != `duplicate authorizerName "example.com/dup"` {
+		if d.Error().Error() != `duplicate authorizerName "dup.example.com"` {
 			t.Errorf("expected aggregated duplicate error, got %v", d.Error())
 		}
 	})
 
 	t.Run("duplicate when outcome could be deny fails closed", func(t *testing.T) {
 		var u authorizer.ConditionsAwareDecisionUnion
-		u.Add("example.com/dup", condMapAllow)
-		u.Add("example.com/dup", condMapDeny)
-		u.Add("example.com/a", allow)
+		u.Add("dup.example.com", condMapAllow)
+		u.Add("dup.example.com", condMapDeny)
+		u.Add("a.example.com", allow)
 
 		d := u.ToDecision()
 		if !d.IsDeny() {
 			t.Errorf("expected Deny (deny leaf present), got %s", d.String())
 		}
-		if d.Error().Error() != `duplicate authorizerName "example.com/dup"` {
+		if d.Error().Error() != `duplicate authorizerName "dup.example.com"` {
 			t.Errorf("expected aggregated duplicate error, got %v", d.Error())
 		}
 	})
@@ -66,38 +66,40 @@ func TestConditionsAwareDecisionUnionAdd(t *testing.T) {
 	t.Run("empty authorizerName fails validation but subsequent Adds still happen (no short-circuit)", func(t *testing.T) {
 		var u authorizer.ConditionsAwareDecisionUnion
 		u.Add("", condMapAllow)
-		u.Add("example.com/ok", condMapAllow)
+		u.Add("ok.example.com", condMapAllow)
 
 		d := u.ToDecision()
 		if d.Error() == nil {
 			t.Fatalf("expected error, got none")
 		}
-		// Both the non-empty check and the domain-prefixed-key check flag the empty name.
-		if got := d.Error().Error(); got != `[authorizerName must be non-empty, invalid authorizerName: authorizerName: Required value]` {
+		// Both the non-empty check and the DNS-1123-subdomain check flag the empty name.
+		// IsDNS1123Subdomain reports the empty string as failing the subdomain regex.
+		if got := d.Error().Error(); got != `[authorizerName must be non-empty, invalid authorizerName: [a lowercase RFC 1123 subdomain must consist of lower case alphanumeric characters, '-' or '.', and must start and end with an alphanumeric character (e.g. 'example.com', regex used for validation is '[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*')]]` {
 			t.Errorf("expected empty-name error, got %v", d.Error())
 		}
 	})
 
-	t.Run("non-domain-prefixed authorizerName is rejected", func(t *testing.T) {
+	t.Run("non-DNS-1123-subdomain authorizerName is rejected", func(t *testing.T) {
 		var u authorizer.ConditionsAwareDecisionUnion
-		u.Add("not-a-domain-prefixed-key", condMapAllow)
+		// Underscores are not valid in a DNS 1123 subdomain.
+		u.Add("not_a_subdomain", condMapAllow)
 
 		d := u.ToDecision()
 		if d.Error() == nil {
 			t.Fatalf("expected error, got none")
 		}
-		if got := d.Error().Error(); got != `invalid authorizerName: authorizerName: Invalid value: "not-a-domain-prefixed-key": must be a domain-prefixed key (such as "acme.io/foo")` {
-			t.Errorf("expected domain-prefix error, got %v", d.Error())
+		if got := d.Error().Error(); got != `invalid authorizerName: [a lowercase RFC 1123 subdomain must consist of lower case alphanumeric characters, '-' or '.', and must start and end with an alphanumeric character (e.g. 'example.com', regex used for validation is '[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*')]` {
+			t.Errorf("expected subdomain error, got %v", d.Error())
 		}
 	})
 
 	t.Run("Allow leaf short-circuits subsequent Adds", func(t *testing.T) {
 		var u authorizer.ConditionsAwareDecisionUnion
-		u.Add("example.com/0", noOp)
-		u.Add("example.com/1", allow)
+		u.Add("0.example.com", noOp)
+		u.Add("1.example.com", allow)
 		// These additions must be silently dropped by the ContainsUnconditionalAllowOrDeny short-circuit.
-		u.Add("example.com/2", deny)
-		u.Add("example.com/3", condMapAllow)
+		u.Add("2.example.com", deny)
+		u.Add("3.example.com", condMapAllow)
 
 		d := u.ToDecision()
 		if !d.IsAllow() {
@@ -120,7 +122,7 @@ func TestConditionsAwareDecisionUnionAdd(t *testing.T) {
 		u.Add("", noOp)
 		u.Add("", deny)
 		u.Add("", allow)
-		u.Add("example.com/3", condMapAllow)
+		u.Add("3.example.com", condMapAllow)
 
 		d := u.ToDecision()
 		if !d.IsDeny() {
@@ -130,9 +132,9 @@ func TestConditionsAwareDecisionUnionAdd(t *testing.T) {
 
 	t.Run("ConditionsMap leaves do not short-circuit Add", func(t *testing.T) {
 		var u authorizer.ConditionsAwareDecisionUnion
-		u.Add("example.com/0", condMapAllow)
-		u.Add("example.com/1", condMapAllow) // distinct authorizerName, still appended
-		u.Add("example.com/2", noOp)
+		u.Add("0.example.com", condMapAllow)
+		u.Add("1.example.com", condMapAllow) // distinct authorizerName, still appended
+		u.Add("2.example.com", noOp)
 
 		d := u.ToDecision()
 		if !d.IsUnion() {
@@ -143,7 +145,7 @@ func TestConditionsAwareDecisionUnionAdd(t *testing.T) {
 		for name := range d.UnionedDecisions() {
 			names = append(names, name)
 		}
-		want := []string{"example.com/0", "example.com/1", "example.com/2"}
+		want := []string{"0.example.com", "1.example.com", "2.example.com"}
 		if !reflect.DeepEqual(names, want) {
 			t.Errorf("UnionedDecisions names = %v, want %v", names, want)
 		}
@@ -165,8 +167,8 @@ func TestConditionsAwareDecisionUnion_AddAfterToDecisionDoesNotMutate(t *testing
 	)
 
 	var u authorizer.ConditionsAwareDecisionUnion
-	u.Add("example.com/first", cmAllow1)
-	u.Add("example.com/second", cmAllow2)
+	u.Add("first.example.com", cmAllow1)
+	u.Add("second.example.com", cmAllow2)
 	d := u.ToDecision()
 	if !d.IsUnion() {
 		t.Fatalf("expected Union decision, got %s", d.String())
@@ -180,7 +182,7 @@ func TestConditionsAwareDecisionUnion_AddAfterToDecisionDoesNotMutate(t *testing
 		return names
 	}
 
-	namesBefore := []string{"example.com/first", "example.com/second"}
+	namesBefore := []string{"first.example.com", "second.example.com"}
 	possibleBefore := d.PossibleDecisions()
 
 	// Add a further sub-decision to the builder, introducing a new possible outcome
@@ -189,7 +191,7 @@ func TestConditionsAwareDecisionUnion_AddAfterToDecisionDoesNotMutate(t *testing
 	cmDeny := authorizer.ConditionsAwareDecisionConditionsMap(
 		[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/deny-1"}}, nil, nil,
 	)
-	u.Add("example.com/third", cmDeny)
+	u.Add("third.example.com", cmDeny)
 
 	if got := collectNames(d); !slices.Equal(got, namesBefore) {
 		t.Errorf("UnionedDecisions names changed after builder Add: got %v, want %v (builder mutation must not leak)", got, namesBefore)

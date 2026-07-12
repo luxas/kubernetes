@@ -704,20 +704,20 @@ func TestConditionsAwareDecisionToSARStatus(t *testing.T) {
 		{
 			name: "union serializes recursively, preserving authorizer names",
 			decision: unionOf(
-				namedSub{name: "example.com/cond-deny", d: makeCondDenyDecision()},
-				namedSub{name: "example.com/noop", d: authorizer.ConditionsAwareDecisionNoOpinion("no-opinion-reason", fmt.Errorf("no-opinion-err"))},
-				namedSub{name: "example.com/inner-union", d: unionOf(
-					namedSub{name: "example.com/inner-noop", d: authorizer.ConditionsAwareDecisionNoOpinion("", nil)},
-					namedSub{name: "example.com/cond-allow", d: makeCondAllowDecision()},
+				namedSub{name: "cond-deny.example.com", d: makeCondDenyDecision()},
+				namedSub{name: "noop.example.com", d: authorizer.ConditionsAwareDecisionNoOpinion("no-opinion-reason", fmt.Errorf("no-opinion-err"))},
+				namedSub{name: "inner-union.example.com", d: unionOf(
+					namedSub{name: "inner-noop.example.com", d: authorizer.ConditionsAwareDecisionNoOpinion("", nil)},
+					namedSub{name: "cond-allow.example.com", d: makeCondAllowDecision()},
 				)},
-				namedSub{name: "example.com/deny", d: authorizer.ConditionsAwareDecisionDeny("", nil)},
+				namedSub{name: "deny.example.com", d: authorizer.ConditionsAwareDecisionDeny("", nil)},
 			),
 			want: authorizationapi.SubjectAccessReviewStatus{
 				ConditionalDecision: &authorizationapi.ConditionsAwareDecision{
 					Type: authorizationapi.ConditionsAwareDecisionTypeUnion,
 					Union: []authorizationapi.NamedConditionsAwareDecision{
 						{
-							AuthorizerName: "example.com/cond-deny",
+							AuthorizerName: "cond-deny.example.com",
 							Decision: authorizationapi.ConditionsAwareDecision{
 								Type: authorizationapi.ConditionsAwareDecisionTypeConditionsMap,
 								ConditionsMap: &authorizationapi.ConditionsMap{
@@ -735,7 +735,7 @@ func TestConditionsAwareDecisionToSARStatus(t *testing.T) {
 							},
 						},
 						{
-							AuthorizerName: "example.com/noop",
+							AuthorizerName: "noop.example.com",
 							Decision: authorizationapi.ConditionsAwareDecision{
 								Type: authorizationapi.ConditionsAwareDecisionTypeNoOpinion,
 								NoOpinion: &authorizationapi.UnconditionalDecision{
@@ -745,19 +745,19 @@ func TestConditionsAwareDecisionToSARStatus(t *testing.T) {
 							},
 						},
 						{
-							AuthorizerName: "example.com/inner-union",
+							AuthorizerName: "inner-union.example.com",
 							Decision: authorizationapi.ConditionsAwareDecision{
 								Type: authorizationapi.ConditionsAwareDecisionTypeUnion,
 								Union: []authorizationapi.NamedConditionsAwareDecision{
 									{
-										AuthorizerName: "example.com/inner-noop",
+										AuthorizerName: "inner-noop.example.com",
 										Decision: authorizationapi.ConditionsAwareDecision{
 											Type:      authorizationapi.ConditionsAwareDecisionTypeNoOpinion,
 											NoOpinion: &authorizationapi.UnconditionalDecision{},
 										},
 									},
 									{
-										AuthorizerName: "example.com/cond-allow",
+										AuthorizerName: "cond-allow.example.com",
 										Decision: authorizationapi.ConditionsAwareDecision{
 											Type: authorizationapi.ConditionsAwareDecisionTypeConditionsMap,
 											ConditionsMap: &authorizationapi.ConditionsMap{
@@ -778,7 +778,7 @@ func TestConditionsAwareDecisionToSARStatus(t *testing.T) {
 							},
 						},
 						{
-							AuthorizerName: "example.com/deny",
+							AuthorizerName: "deny.example.com",
 							Decision: authorizationapi.ConditionsAwareDecision{
 								Type: authorizationapi.ConditionsAwareDecisionTypeDeny,
 								Deny: &authorizationapi.UnconditionalDecision{},

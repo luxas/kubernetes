@@ -1649,7 +1649,7 @@ authorizers:
 			Type: authorizationv1.ConditionsAwareDecisionTypeUnion,
 			Union: []authorizationv1.NamedConditionsAwareDecision{
 				{
-					AuthorizerName: "kubernetes.io/system-privileged-group",
+					AuthorizerName: "system-privileged-group.authorizer.kubernetes.io",
 					Decision: authorizationv1.ConditionsAwareDecision{
 						Type:      authorizationv1.ConditionsAwareDecisionTypeNoOpinion,
 						NoOpinion: &authorizationv1.UnconditionalDecision{},

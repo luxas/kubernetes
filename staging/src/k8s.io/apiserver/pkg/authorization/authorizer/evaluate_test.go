@@ -138,7 +138,7 @@ func TestPartiallyEvaluateConditionsAwareDecision(t *testing.T) {
 			builtinConditionsEvaluator: func(_ context.Context, condition authorizer.Condition, _ authorizer.ConditionsData) authorizer.ConditionEvaluationResult {
 				return authorizer.ConditionEvaluationResultBoolean(condition.GetCondition() == "c")
 			},
-			want: snapDecision{Kind: "Allow", Reason: `example.com/1: {condition "example.com/c" allowed the request}`},
+			want: snapDecision{Kind: "Allow", Reason: `1.example.com: {condition "example.com/c" allowed the request}`},
 		},
 		{
 			name: "builtin evaluation of union succeeds => Deny",
@@ -155,7 +155,7 @@ func TestPartiallyEvaluateConditionsAwareDecision(t *testing.T) {
 			builtinConditionsEvaluator: func(_ context.Context, condition authorizer.Condition, _ authorizer.ConditionsData) authorizer.ConditionEvaluationResult {
 				return authorizer.ConditionEvaluationResultBoolean(condition.GetCondition() == "d")
 			},
-			want: snapDecision{Kind: "Deny", Reason: `example.com/1: {condition "example.com/d" denied the request}`},
+			want: snapDecision{Kind: "Deny", Reason: `1.example.com: {condition "example.com/d" denied the request}`},
 		},
 		{
 			// First CM has an opaque allow condition that cannot be simplified, so the union
@@ -254,7 +254,7 @@ func TestPartiallyEvaluateConditionsAwareDecision(t *testing.T) {
 			},
 			want: snapDecision{
 				Kind:   "Deny",
-				Reason: `example.com/3: {something later denies}`,
+				Reason: `3.example.com: {something later denies}`,
 			},
 		},
 		{
@@ -277,7 +277,7 @@ func TestPartiallyEvaluateConditionsAwareDecision(t *testing.T) {
 			},
 			want: snapDecision{
 				Kind:   "Allow",
-				Reason: `example.com/3: {something later allows}`,
+				Reason: `3.example.com: {something later allows}`,
 			},
 		},
 		{
@@ -302,7 +302,7 @@ func TestPartiallyEvaluateConditionsAwareDecision(t *testing.T) {
 				),
 				authorizer.ConditionsAwareDecisionDeny("something later denies", nil),
 			),
-			want: snapDecision{Kind: "Deny", Reason: `example.com/0: {condition "example.com/foo" denied the request}`},
+			want: snapDecision{Kind: "Deny", Reason: `0.example.com: {condition "example.com/foo" denied the request}`},
 		},
 		{
 			name: "evaluateConditionFn can be nil, and refinement can still happen",
