@@ -250,7 +250,7 @@ func TestRecordAuthorizationMetricsMetrics(t *testing.T) {
 				makeDecision: func() authorizer.ConditionsAwareDecision {
 					return authorizer.ConditionsAwareDecisionConditionsMap(
 						nil, nil,
-						[]authorizer.Condition{authorizer.GenericCondition{ID: "cond", Condition: "maybe", Type: "foo-type"}},
+						[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/cond", Condition: "maybe", Type: "example.com/foo-type"}},
 					)
 				},
 			},
@@ -267,7 +267,7 @@ func TestRecordAuthorizationMetricsMetrics(t *testing.T) {
 				makeDecision: func() authorizer.ConditionsAwareDecision {
 					return authorizer.ConditionsAwareDecisionConditionsMap(
 						nil, nil,
-						[]authorizer.Condition{authorizer.GenericCondition{ID: "cond", Condition: "maybe", Type: "foo-type"}},
+						[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/cond", Condition: "maybe", Type: "example.com/foo-type"}},
 					)
 				},
 			},
@@ -284,7 +284,7 @@ func TestRecordAuthorizationMetricsMetrics(t *testing.T) {
 				makeDecision: func() authorizer.ConditionsAwareDecision {
 					return authorizer.ConditionsAwareDecisionConditionsMap(
 						nil, nil,
-						[]authorizer.Condition{authorizer.GenericCondition{ID: "cond", Condition: "maybe", Type: "foo-type"}},
+						[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/cond", Condition: "maybe", Type: "example.com/foo-type"}},
 					)
 				},
 			},
@@ -301,7 +301,7 @@ func TestRecordAuthorizationMetricsMetrics(t *testing.T) {
 			authorizer: &conditionsAwareFakeAuthorizer{
 				makeDecision: func() authorizer.ConditionsAwareDecision {
 					return authorizer.ConditionsAwareDecisionConditionsMap(
-						[]authorizer.Condition{authorizer.GenericCondition{ID: "cond", Condition: "maybe-not", Type: "foo-type"}},
+						[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/cond", Condition: "maybe-not", Type: "example.com/foo-type"}},
 						nil, nil,
 					)
 				},

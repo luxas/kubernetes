@@ -179,7 +179,7 @@ func (s *DelegatingAuthorizationOptions) toAuthorizer(client kubernetes.Interfac
 
 	if len(s.AlwaysAllowGroups) > 0 {
 		authorizers = append(authorizers, union.NamedAuthorizer{
-			AuthorizerName: "always-allow-paths.authorizer.kubernetes.io",
+			AuthorizerName: "always-allow-groups.authorizer.kubernetes.io",
 			Authorizer:     authorizerfactory.NewPrivilegedGroups(s.AlwaysAllowGroups...),
 		})
 	}

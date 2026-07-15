@@ -341,7 +341,7 @@ func TestConditionsEnforcerEndToEnd(t *testing.T) {
 	makeCondMapAllowDecision := func() authorizer.ConditionsAwareDecision {
 		return authorizer.ConditionsAwareDecisionConditionsMap(
 			nil, nil,
-			[]authorizer.Condition{authorizer.GenericCondition{ID: "c1", Condition: "object.metadata.name == 'test-pod'", Type: "cel"}},
+			[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/c1", Condition: "object.metadata.name == 'test-pod'", Type: "example.com/cel"}},
 		)
 	}
 

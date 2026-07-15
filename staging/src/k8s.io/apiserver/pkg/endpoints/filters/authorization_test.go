@@ -355,13 +355,13 @@ func TestWithAuthorization(t *testing.T) {
 	makeCondMapAllowDecision := func() authorizer.ConditionsAwareDecision {
 		return authorizer.ConditionsAwareDecisionConditionsMap(
 			nil, nil,
-			[]authorizer.Condition{authorizer.GenericCondition{ID: "c1", Condition: "object.metadata.name == 'foo'", Type: "cel"}},
+			[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/c1", Condition: "object.metadata.name == 'foo'", Type: "example.com/cel"}},
 		)
 	}
 
 	makeCondMapDenyOnlyDecision := func() authorizer.ConditionsAwareDecision {
 		return authorizer.ConditionsAwareDecisionConditionsMap(
-			[]authorizer.Condition{authorizer.GenericCondition{ID: "c1", Condition: "object.metadata.name == 'bar'", Type: "cel"}},
+			[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/c1", Condition: "object.metadata.name == 'bar'", Type: "example.com/cel"}},
 			nil, nil,
 		)
 	}
