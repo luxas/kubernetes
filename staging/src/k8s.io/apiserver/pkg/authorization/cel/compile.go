@@ -28,6 +28,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/version"
 	apiservercel "k8s.io/apiserver/pkg/cel"
 	"k8s.io/apiserver/pkg/cel/environment"
+	genericfeatures "k8s.io/apiserver/pkg/features"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 )
 
 const (
@@ -205,21 +207,24 @@ func mustBuildEnv(baseEnv *environment.EnvSet) *environment.EnvSet {
 func buildRequestType(field func(name string, declType *apiservercel.DeclType, required bool) *apiservercel.DeclField, fields func(fields ...*apiservercel.DeclField) map[string]*apiservercel.DeclField) *apiservercel.DeclType {
 	resourceAttributesType := buildResourceAttributesType(field, fields)
 	nonResourceAttributesType := buildNonResourceAttributesType(field, fields)
-	conditionalAuthorizationType := buildConditionalAuthorizationType(field, fields)
-	return apiservercel.NewObjectType("kubernetes.SubjectAccessReviewSpec", fields(
+	fieldList := []*apiservercel.DeclField{
 		field("resourceAttributes", resourceAttributesType, false),
 		field("nonResourceAttributes", nonResourceAttributesType, false),
 		field("user", apiservercel.StringType, false),
 		field("groups", apiservercel.NewListType(apiservercel.StringType, -1), false),
 		field("extra", apiservercel.NewMapType(apiservercel.StringType, apiservercel.NewListType(apiservercel.StringType, -1), -1), false),
 		field("uid", apiservercel.StringType, false),
-		field("conditionalAuthorization", conditionalAuthorizationType, false),
-	))
+	}
+	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
+		authorizationOptionsType := buildAuthorizationOptionsType(field, fields)
+		fieldList = append(fieldList, field("authorizationOptions", authorizationOptionsType, false))
+	}
+	return apiservercel.NewObjectType("kubernetes.SubjectAccessReviewSpec", fields(fieldList...))
 }
 
-func buildConditionalAuthorizationType(field func(name string, declType *apiservercel.DeclType, required bool) *apiservercel.DeclField, fields func(fields ...*apiservercel.DeclField) map[string]*apiservercel.DeclField) *apiservercel.DeclType {
-	return apiservercel.NewObjectType("kubernetes.ConditionalAuthorizationOptions", fields(
-		field("enabled", apiservercel.BoolType, false),
+func buildAuthorizationOptionsType(field func(name string, declType *apiservercel.DeclType, required bool) *apiservercel.DeclField, fields func(fields ...*apiservercel.DeclField) map[string]*apiservercel.DeclField) *apiservercel.DeclType {
+	return apiservercel.NewObjectType("kubernetes.AuthorizationOptions", fields(
+		field("handledDecisionTypes", apiservercel.NewListType(apiservercel.StringType, -1), true),
 	))
 }
 
@@ -336,9 +341,16 @@ func convertObjectToUnstructured(obj *authorizationv1.SubjectAccessReviewSpec, i
 			"path": obj.NonResourceAttributes.Path,
 		}
 	}
-	if obj.ConditionalAuthorization != nil {
-		ret["conditionalAuthorization"] = map[string]interface{}{
-			"enabled": obj.ConditionalAuthorization.Enabled,
+	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
+		if obj.AuthorizationOptions != nil {
+			// handledDecisionTypes is represented as a []string in CEL, cast it to that form
+			handledDecisionTypes := make([]string, len(obj.AuthorizationOptions.HandledDecisionTypes))
+			for i, dt := range obj.AuthorizationOptions.HandledDecisionTypes {
+				handledDecisionTypes[i] = string(dt)
+			}
+			ret["authorizationOptions"] = map[string]interface{}{
+				"handledDecisionTypes": handledDecisionTypes,
+			}
 		}
 	}
 	return ret

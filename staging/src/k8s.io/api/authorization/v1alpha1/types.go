@@ -50,7 +50,6 @@ type AuthorizationConditionsReview struct {
 }
 
 // AuthorizationConditionsRequest describes the authorization conditions request.
-// +k8s:conversion-gen=false
 type AuthorizationConditionsRequest struct {
 	// decision contains the conditional decision the authorizer authored at authorization time.
 	// +required
@@ -64,7 +63,6 @@ type AuthorizationConditionsRequest struct {
 }
 
 // AuthorizationConditionsResponse describes an authorization conditions response.
-// +k8s:conversion-gen=false
 type AuthorizationConditionsResponse struct {
 	// uid is an identifier for the individual request/response.
 	// This must be copied over from the corresponding AuthorizationConditionsRequest.

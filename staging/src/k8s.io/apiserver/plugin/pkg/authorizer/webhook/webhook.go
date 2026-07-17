@@ -49,7 +49,6 @@ import (
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	authorizationcel "k8s.io/apiserver/pkg/authorization/cel"
 	"k8s.io/apiserver/pkg/util/webhook"
-	"k8s.io/apiserver/pkg/warning"
 	"k8s.io/apiserver/plugin/pkg/authorizer/webhook/metrics"
 	"k8s.io/client-go/kubernetes/scheme"
 	authorizationv1client "k8s.io/client-go/kubernetes/typed/authorization/v1"
@@ -290,6 +289,16 @@ func shouldFailWithDeny(decision authorizationv1.ConditionsAwareDecision) bool {
 	}
 }
 
+func conditionsAwareDecisionTypes() []authorizationv1.ConditionsAwareDecisionType {
+	return []authorizationv1.ConditionsAwareDecisionType{
+		authorizationv1.ConditionsAwareDecisionTypeAllow,
+		authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
+		authorizationv1.ConditionsAwareDecisionTypeDeny,
+		authorizationv1.ConditionsAwareDecisionTypeNoOpinion,
+		authorizationv1.ConditionsAwareDecisionTypeUnion,
+	}
+}
+
 func (w *WebhookAuthorizer) ConditionsAwareAuthorize(ctx context.Context, attr authorizer.Attributes) authorizer.ConditionsAwareDecision {
 	r := &authorizationv1.SubjectAccessReview{}
 	if user := attr.GetUser(); user != nil {
@@ -300,8 +309,8 @@ func (w *WebhookAuthorizer) ConditionsAwareAuthorize(ctx context.Context, attr a
 			Extra:  convertToSARExtra(user.GetExtra()),
 		}
 	}
-	r.Spec.ConditionalAuthorization = &authorizationv1.ConditionalAuthorizationOptions{
-		Enabled: true,
+	r.Spec.AuthorizationOptions = &authorizationv1.AuthorizationOptions{
+		HandledDecisionTypes: conditionsAwareDecisionTypes(),
 	}
 
 	if attr.IsResourceRequest() {
@@ -525,37 +534,19 @@ func (w *WebhookAuthorizer) EvaluateConditions(ctx context.Context, decision aut
 		if !decision.PossibleDecisions().Has(authorizer.DecisionDeny) {
 			return decision.FailureDecision(), "failed closed", fmt.Errorf("webhook authorizer tried to return Deny from EvaluateConditions, even though that was not a possible outcome")
 		}
-		w.addAnnotationsAndWarnings(ctx, result.Response.Decision.Deny, data)
 		return authorizer.DecisionDeny, deserializeV1Reason(result.Response.Decision.Deny), deserializeV1EvaluationError(result.Response.Decision.Deny)
 	case authorizationv1.ConditionsAwareDecisionTypeNoOpinion:
 		if !decision.PossibleDecisions().Has(authorizer.DecisionNoOpinion) {
 			return decision.FailureDecision(), "failed closed", fmt.Errorf("webhook authorizer tried to return NoOpinion from EvaluateConditions, even though that was not a possible outcome")
 		}
-		w.addAnnotationsAndWarnings(ctx, result.Response.Decision.NoOpinion, data)
 		return authorizer.DecisionNoOpinion, deserializeV1Reason(result.Response.Decision.NoOpinion), deserializeV1EvaluationError(result.Response.Decision.NoOpinion)
 	case authorizationv1.ConditionsAwareDecisionTypeAllow:
 		if !decision.PossibleDecisions().Has(authorizer.DecisionAllow) {
 			return decision.FailureDecision(), "failed closed", fmt.Errorf("webhook authorizer tried to return Allow from EvaluateConditions, even though that was not a possible outcome")
 		}
-		w.addAnnotationsAndWarnings(ctx, result.Response.Decision.Allow, data)
 		return authorizer.DecisionAllow, deserializeV1Reason(result.Response.Decision.Allow), deserializeV1EvaluationError(result.Response.Decision.Allow)
 	default:
 		return decision.FailureDecision(), "failed closed", fmt.Errorf("unrecognized decision type %q", result.Response.Decision.Type)
-	}
-}
-
-func (w *WebhookAuthorizer) addAnnotationsAndWarnings(ctx context.Context, ud *authorizationv1.UnconditionalDecision, data authorizer.ConditionsData) {
-	if ud == nil {
-		return
-	}
-	for k, v := range ud.AuditAnnotations {
-		key := w.name + "/" + k
-		if err := data.AddAnnotation(key, v); err != nil {
-			klog.Warningf("Failed to set audit annotation %s to %s for webhook authorizer %s: %v", key, v, w.name, err)
-		}
-	}
-	for _, w := range ud.Warnings {
-		warning.AddWarning(ctx, "", w)
 	}
 }
 
@@ -981,13 +972,17 @@ type subjectAccessReviewV1beta1ClientGW struct {
 
 func (t *subjectAccessReviewV1beta1ClientGW) Create(ctx context.Context, subjectAccessReview *authorizationv1.SubjectAccessReview, _ metav1.CreateOptions) (*authorizationv1.SubjectAccessReview, int, error) {
 	var statusCode int
-	v1beta1Review := &authorizationv1beta1.SubjectAccessReview{Spec: v1SpecToV1beta1Spec(&subjectAccessReview.Spec)}
+	v1beta1Spec, err := v1SpecToV1beta1Spec(&subjectAccessReview.Spec)
+	if err != nil {
+		return subjectAccessReview, http.StatusBadRequest, err
+	}
+	v1beta1Review := &authorizationv1beta1.SubjectAccessReview{Spec: v1beta1Spec}
 	v1beta1Result := &authorizationv1beta1.SubjectAccessReview{}
 
 	restResult := t.client.Post().Body(v1beta1Review).Do(ctx)
 
 	restResult.StatusCode(&statusCode)
-	err := restResult.Into(v1beta1Result)
+	err = restResult.Into(v1beta1Result)
 	if err == nil {
 		subjectAccessReview.Status = v1beta1StatusToV1Status(&v1beta1Result.Status)
 	}
@@ -1010,24 +1005,41 @@ func shouldCache(attr authorizer.Attributes) bool {
 
 func v1beta1StatusToV1Status(in *authorizationv1beta1.SubjectAccessReviewStatus) authorizationv1.SubjectAccessReviewStatus {
 	return authorizationv1.SubjectAccessReviewStatus{
-		Allowed:             in.Allowed,
-		Denied:              in.Denied,
-		Reason:              in.Reason,
-		EvaluationError:     in.EvaluationError,
-		ConditionalDecision: in.ConditionalDecision,
+		Allowed:         in.Allowed,
+		Denied:          in.Denied,
+		Reason:          in.Reason,
+		EvaluationError: in.EvaluationError,
+		// ConditionalDecision does not exist in v1beta1 in, thus left as nil
 	}
 }
 
-func v1SpecToV1beta1Spec(in *authorizationv1.SubjectAccessReviewSpec) authorizationv1beta1.SubjectAccessReviewSpec {
-	return authorizationv1beta1.SubjectAccessReviewSpec{
-		ResourceAttributes:       v1ResourceAttributesToV1beta1ResourceAttributes(in.ResourceAttributes),
-		NonResourceAttributes:    v1NonResourceAttributesToV1beta1NonResourceAttributes(in.NonResourceAttributes),
-		User:                     in.User,
-		Groups:                   in.Groups,
-		Extra:                    v1ExtraToV1beta1Extra(in.Extra),
-		UID:                      in.UID,
-		ConditionalAuthorization: in.ConditionalAuthorization,
+// unconditionalDecisionTypesSorted represents the default value of HandledDecisionTypes when AuthorizationOptions == nil
+// TODO(luxas): Make this a helper in the v1 k8s.io/apiserver authorizationutil
+var unconditionalDecisionTypesSorted = []authorizationv1.ConditionsAwareDecisionType{
+	authorizationv1.ConditionsAwareDecisionTypeAllow,
+	authorizationv1.ConditionsAwareDecisionTypeDeny,
+	authorizationv1.ConditionsAwareDecisionTypeNoOpinion,
+}
+
+func v1SpecToV1beta1Spec(in *authorizationv1.SubjectAccessReviewSpec) (authorizationv1beta1.SubjectAccessReviewSpec, error) {
+	// if in.AuthorizationOptions are set, the only allowed value is [Allow, Deny, NoOpinion], which is how callers should interpret
+	// in.AuthorizationOptions == nil. Anything else cannot be expressed in v1beta1, and thus error.
+	if in.AuthorizationOptions != nil {
+		sortedDecisionTypes := slices.Sorted(slices.Values(in.AuthorizationOptions.HandledDecisionTypes))
+		if !slices.Equal(sortedDecisionTypes, unconditionalDecisionTypesSorted) {
+			return authorizationv1beta1.SubjectAccessReviewSpec{}, fmt.Errorf("cannot send SubjectAccessReview with non-default AuthorizationOptions to a v1beta1 client. Got handledDecisionTypes %v, supported %v", in.AuthorizationOptions.HandledDecisionTypes, unconditionalDecisionTypesSorted)
+		}
 	}
+
+	return authorizationv1beta1.SubjectAccessReviewSpec{
+		ResourceAttributes:    v1ResourceAttributesToV1beta1ResourceAttributes(in.ResourceAttributes),
+		NonResourceAttributes: v1NonResourceAttributesToV1beta1NonResourceAttributes(in.NonResourceAttributes),
+		User:                  in.User,
+		Groups:                in.Groups,
+		Extra:                 v1ExtraToV1beta1Extra(in.Extra),
+		UID:                   in.UID,
+		// AuthorizationOptions are unrepresentable in v1beta1, treated as {HandledDecisionTypes: [Allow, Deny, NoOpinion]} in terms of the new API.
+	}, nil
 }
 
 func v1ResourceAttributesToV1beta1ResourceAttributes(in *authorizationv1.ResourceAttributes) *authorizationv1beta1.ResourceAttributes {

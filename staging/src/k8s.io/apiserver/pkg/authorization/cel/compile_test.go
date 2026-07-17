@@ -25,6 +25,9 @@ import (
 	v1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	apiservercel "k8s.io/apiserver/pkg/cel"
+	genericfeatures "k8s.io/apiserver/pkg/features"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
 )
 
 func TestCompileCELExpression(t *testing.T) {
@@ -94,6 +97,7 @@ func TestCompileCELExpression(t *testing.T) {
 }
 
 func TestBuildRequestType(t *testing.T) {
+	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ConditionalAuthorization, true)
 	f := func(name string, declType *apiservercel.DeclType, required bool) *apiservercel.DeclField {
 		return apiservercel.NewDeclField(name, declType, required, nil, nil)
 	}
@@ -201,13 +205,15 @@ func nativeTypeToCELType(t *testing.T, nativeType reflect.Type, field func(name 
 			return nil
 		}
 		return apiservercel.NewListType(requirementType, -1)
-	case reflect.TypeFor[*v1.ConditionalAuthorizationOptions]():
-		conditionalAuthorizationDeclType := buildConditionalAuthorizationType(field, fields)
-		if err := compareFieldsForType(t, reflect.TypeFor[v1.ConditionalAuthorizationOptions](), conditionalAuthorizationDeclType, field, fields); err != nil {
+	case reflect.TypeFor[*v1.AuthorizationOptions]():
+		authorizationOptionsDeclType := buildAuthorizationOptionsType(field, fields)
+		if err := compareFieldsForType(t, reflect.TypeFor[v1.AuthorizationOptions](), authorizationOptionsDeclType, field, fields); err != nil {
 			t.Error(err)
 			return nil
 		}
-		return conditionalAuthorizationDeclType
+		return authorizationOptionsDeclType
+	case reflect.TypeFor[[]v1.ConditionsAwareDecisionType]():
+		return apiservercel.NewListType(apiservercel.StringType, -1)
 	default:
 		t.Fatalf("unsupported type %v", nativeType)
 	}

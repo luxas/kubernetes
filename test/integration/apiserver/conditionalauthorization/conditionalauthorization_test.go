@@ -348,7 +348,7 @@ authorizers:
 					ConditionsMap: &authorizationv1.ConditionsMap{
 						AllowConditions: []authorizationv1.Condition{
 							{
-								ID: "example.com/always-allow",
+								ID:          "example.com/always-allow",
 								Condition:   "true",
 								Type:        conditionsType,
 								Description: "always allow condition",
@@ -377,7 +377,7 @@ authorizers:
 					ConditionsMap: &authorizationv1.ConditionsMap{
 						DenyConditions: []authorizationv1.Condition{
 							{
-								ID: "example.com/always-deny",
+								ID:          "example.com/always-deny",
 								Condition:   "true",
 								Type:        conditionsType,
 								Description: "always deny condition",
@@ -385,7 +385,7 @@ authorizers:
 						},
 						AllowConditions: []authorizationv1.Condition{
 							{
-								ID: "example.com/always-allow",
+								ID:          "example.com/always-allow",
 								Condition:   "true",
 								Type:        conditionsType,
 								Description: "base allow condition",
@@ -411,7 +411,7 @@ authorizers:
 					ConditionsMap: &authorizationv1.ConditionsMap{
 						NoOpinionConditions: []authorizationv1.Condition{
 							{
-								ID: "example.com/no-opinion",
+								ID:          "example.com/no-opinion",
 								Condition:   "true",
 								Type:        conditionsType,
 								Description: "no opinion condition",
@@ -449,7 +449,7 @@ authorizers:
 					ConditionsMap: &authorizationv1.ConditionsMap{
 						AllowConditions: []authorizationv1.Condition{
 							{
-								ID: "example.com/allow-safe-prefix",
+								ID:          "example.com/allow-safe-prefix",
 								Condition:   `object.metadata.name.startsWith("safe-")`,
 								Type:        conditionsType,
 								Description: "only allow configmaps with safe- prefix",
@@ -476,7 +476,7 @@ authorizers:
 					ConditionsMap: &authorizationv1.ConditionsMap{
 						AllowConditions: []authorizationv1.Condition{
 							{
-								ID: "example.com/allow-safe-prefix",
+								ID:          "example.com/allow-safe-prefix",
 								Condition:   `object.metadata.name.startsWith("safe-")`,
 								Type:        conditionsType,
 								Description: "only allow configmaps with safe- prefix",
@@ -512,7 +512,7 @@ authorizers:
 						},
 						AllowConditions: []authorizationv1.Condition{
 							{
-								ID: "example.com/allow-all",
+								ID:          "example.com/allow-all",
 								Condition:   "true",
 								Type:        conditionsType,
 								Description: "base allow",
@@ -600,7 +600,7 @@ authorizers:
 					ConditionsMap: &authorizationv1.ConditionsMap{
 						DenyConditions: []authorizationv1.Condition{
 							{
-								ID: "example.com/deny-updates",
+								ID:          "example.com/deny-updates",
 								Condition:   `request.operation == "UPDATE"`,
 								Type:        conditionsType,
 								Description: "deny update operations",
@@ -608,7 +608,7 @@ authorizers:
 						},
 						AllowConditions: []authorizationv1.Condition{
 							{
-								ID: "example.com/allow-creates",
+								ID:          "example.com/allow-creates",
 								Condition:   `request.operation == "CREATE"`,
 								Type:        conditionsType,
 								Description: "allow create operations",
@@ -643,7 +643,7 @@ authorizers:
 					ConditionsMap: &authorizationv1.ConditionsMap{
 						DenyConditions: []authorizationv1.Condition{
 							{
-								ID: "example.com/deny-all",
+								ID:          "example.com/deny-all",
 								Condition:   "true",
 								Type:        conditionsType,
 								Description: "deny everything",
@@ -651,7 +651,7 @@ authorizers:
 						},
 						NoOpinionConditions: []authorizationv1.Condition{
 							{
-								ID: "example.com/noop-all",
+								ID:          "example.com/noop-all",
 								Condition:   "true",
 								Type:        conditionsType,
 								Description: "no opinion on everything",
@@ -659,7 +659,7 @@ authorizers:
 						},
 						AllowConditions: []authorizationv1.Condition{
 							{
-								ID: "example.com/allow-all",
+								ID:          "example.com/allow-all",
 								Condition:   "true",
 								Type:        conditionsType,
 								Description: "allow everything",
@@ -695,7 +695,7 @@ authorizers:
 						},
 						AllowConditions: []authorizationv1.Condition{
 							{
-								ID: "example.com/allow-all",
+								ID:          "example.com/allow-all",
 								Condition:   "true",
 								Type:        conditionsType,
 								Description: "allow everything",
@@ -1637,7 +1637,7 @@ authorizers:
 			ConditionsMap: &authorizationv1.ConditionsMap{
 				AllowConditions: []authorizationv1.Condition{
 					{
-						ID: "example.com/allow-safe-prefix",
+						ID:          "example.com/allow-safe-prefix",
 						Condition:   `object.metadata.name.startsWith("safe-")`,
 						Type:        "example.com/opaque-cel-condition-type",
 						Description: "only allow configmaps with safe- prefix",
@@ -1690,8 +1690,14 @@ authorizers:
 						Namespace: "test-ns",
 					},
 					User: "sar-test-user",
-					ConditionalAuthorization: &authorizationv1.ConditionalAuthorizationOptions{
-						Enabled: true,
+					AuthorizationOptions: &authorizationv1.AuthorizationOptions{
+						HandledDecisionTypes: []authorizationv1.ConditionsAwareDecisionType{
+							authorizationv1.ConditionsAwareDecisionTypeAllow,
+							authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
+							authorizationv1.ConditionsAwareDecisionTypeDeny,
+							authorizationv1.ConditionsAwareDecisionTypeNoOpinion,
+							authorizationv1.ConditionsAwareDecisionTypeUnion,
+						},
 					},
 				},
 			}
@@ -1761,8 +1767,14 @@ authorizers:
 						Resource:  "configmaps",
 						Namespace: "test-ns",
 					},
-					ConditionalAuthorization: &authorizationv1.ConditionalAuthorizationOptions{
-						Enabled: true,
+					AuthorizationOptions: &authorizationv1.AuthorizationOptions{
+						HandledDecisionTypes: []authorizationv1.ConditionsAwareDecisionType{
+							authorizationv1.ConditionsAwareDecisionTypeAllow,
+							authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
+							authorizationv1.ConditionsAwareDecisionTypeDeny,
+							authorizationv1.ConditionsAwareDecisionTypeNoOpinion,
+							authorizationv1.ConditionsAwareDecisionTypeUnion,
+						},
 					},
 				},
 			}
@@ -1828,8 +1840,14 @@ authorizers:
 						Namespace: "test-ns",
 					},
 					User: "local-sar-test-user",
-					ConditionalAuthorization: &authorizationv1.ConditionalAuthorizationOptions{
-						Enabled: true,
+					AuthorizationOptions: &authorizationv1.AuthorizationOptions{
+						HandledDecisionTypes: []authorizationv1.ConditionsAwareDecisionType{
+							authorizationv1.ConditionsAwareDecisionTypeAllow,
+							authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
+							authorizationv1.ConditionsAwareDecisionTypeDeny,
+							authorizationv1.ConditionsAwareDecisionTypeNoOpinion,
+							authorizationv1.ConditionsAwareDecisionTypeUnion,
+						},
 					},
 				},
 			}
@@ -1900,8 +1918,14 @@ authorizers:
 						Namespace: "test-ns",
 					},
 					User: "sar-unconditional-allow-user",
-					ConditionalAuthorization: &authorizationv1.ConditionalAuthorizationOptions{
-						Enabled: true,
+					AuthorizationOptions: &authorizationv1.AuthorizationOptions{
+						HandledDecisionTypes: []authorizationv1.ConditionsAwareDecisionType{
+							authorizationv1.ConditionsAwareDecisionTypeAllow,
+							authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
+							authorizationv1.ConditionsAwareDecisionTypeDeny,
+							authorizationv1.ConditionsAwareDecisionTypeNoOpinion,
+							authorizationv1.ConditionsAwareDecisionTypeUnion,
+						},
 					},
 				},
 			}
@@ -1940,8 +1964,14 @@ authorizers:
 						Namespace: "test-ns",
 					},
 					User: "sar-unconditional-deny-user",
-					ConditionalAuthorization: &authorizationv1.ConditionalAuthorizationOptions{
-						Enabled: true,
+					AuthorizationOptions: &authorizationv1.AuthorizationOptions{
+						HandledDecisionTypes: []authorizationv1.ConditionsAwareDecisionType{
+							authorizationv1.ConditionsAwareDecisionTypeAllow,
+							authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
+							authorizationv1.ConditionsAwareDecisionTypeDeny,
+							authorizationv1.ConditionsAwareDecisionTypeNoOpinion,
+							authorizationv1.ConditionsAwareDecisionTypeUnion,
+						},
 					},
 				},
 			}
@@ -1969,7 +1999,7 @@ authorizers:
 						ConditionsMap: &authorizationv1.ConditionsMap{
 							DenyConditions: []authorizationv1.Condition{
 								{
-									ID: "example.com/deny-sensitive-label",
+									ID:        "example.com/deny-sensitive-label",
 									Condition: `has(object.metadata.labels) && has(object.metadata.labels.sensitive)`,
 									Type:      "example.com/opaque-cel-condition-type",
 								},
@@ -2311,7 +2341,7 @@ func hpaCPUUtilizationSARHandler(sar *authorizationv1.SubjectAccessReview, condi
 		ConditionsMap: &authorizationv1.ConditionsMap{
 			AllowConditions: []authorizationv1.Condition{
 				{
-					ID: "example.com/limit-cpu-utilization",
+					ID:          "example.com/limit-cpu-utilization",
 					Condition:   condition,
 					Type:        conditionsType,
 					Description: "only allow HPAs with CPU utilization at most 80%",
@@ -2359,7 +2389,7 @@ func crdReplicasSARHandler(sar *authorizationv1.SubjectAccessReview, conditionsT
 		ConditionsMap: &authorizationv1.ConditionsMap{
 			AllowConditions: []authorizationv1.Condition{
 				{
-					ID: "example.com/limit-replicas",
+					ID:          "example.com/limit-replicas",
 					Condition:   condition,
 					Type:        conditionsType,
 					Description: "only allow if replicas <= 10",

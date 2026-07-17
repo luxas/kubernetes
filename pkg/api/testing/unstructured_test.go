@@ -36,6 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
+	"k8s.io/kubernetes/pkg/apis/authorization"
 	api "k8s.io/kubernetes/pkg/apis/core"
 )
 
@@ -137,7 +138,11 @@ func TestRoundTrip(t *testing.T) {
 }
 
 func TestRoundtripToUnstructured(t *testing.T) {
-	skipped := sets.New[schema.GroupVersionKind]()
+	skipped := sets.New(
+		schema.GroupVersionKind{Group: authorization.GroupName, Version: "v1beta1", Kind: "SubjectAccessReview"},
+		schema.GroupVersionKind{Group: authorization.GroupName, Version: "v1beta1", Kind: "LocalSubjectAccessReview"},
+		schema.GroupVersionKind{Group: authorization.GroupName, Version: "v1beta1", Kind: "SelfSubjectAccessReview"},
+	)
 	for gvk := range legacyscheme.Scheme.AllKnownTypes() {
 		if nonRoundTrippableTypes.Has(gvk.Kind) {
 			skipped.Insert(gvk)

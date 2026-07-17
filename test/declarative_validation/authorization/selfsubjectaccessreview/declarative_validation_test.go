@@ -53,7 +53,12 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 	testCases := map[string]struct {
 		obj                            authorization.SelfSubjectAccessReview
 		enableConditionalAuthorization bool
-		expectedErrs                   field.ErrorList
+		// v1Only marks a case that exercises fields only present in v1
+		// (authorizationOptions on the spec, conditionalDecision on the
+		// status). v1beta1 dropped those fields, so the case is skipped
+		// when apiVersion != "v1".
+		v1Only       bool
+		expectedErrs field.ErrorList
 	}{
 		"valid": {
 			obj: mkSelfSAR(),
@@ -68,26 +73,49 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 				field.Invalid(field.NewPath("spec"), "", "").WithOrigin("union").MarkAlpha(),
 			},
 		},
-		"spec.conditionalAuthorization forbidden when feature gate disabled": {
-			obj: mkSelfSAR(setConditionalAuthorization(&authorization.ConditionalAuthorizationOptions{Enabled: true})),
+		"spec.authorizationOptions forbidden when feature gate disabled": {
+			v1Only: true,
+			obj: mkSelfSAR(setConditionalAuthorization(&authorization.AuthorizationOptions{
+				HandledDecisionTypes: []authorization.ConditionsAwareDecisionType{
+					authorization.ConditionsAwareDecisionTypeAllow,
+					authorization.ConditionsAwareDecisionTypeDeny,
+					authorization.ConditionsAwareDecisionTypeNoOpinion,
+				},
+			})),
 			expectedErrs: field.ErrorList{
-				field.Forbidden(field.NewPath("spec", "conditionalAuthorization"), ""),
+				field.Forbidden(field.NewPath("spec", "authorizationOptions"), ""),
 			},
 		},
-		"spec.conditionalAuthorization.enabled required when feature gate enabled and enabled=false": {
+		"spec.authorizationOptions.handledDecisionTypes required when feature gate enabled and empty": {
+			v1Only:                         true,
 			enableConditionalAuthorization: true,
-			obj:                            mkSelfSAR(setConditionalAuthorization(&authorization.ConditionalAuthorizationOptions{Enabled: false})),
+			obj:                            mkSelfSAR(setConditionalAuthorization(&authorization.AuthorizationOptions{})),
 			expectedErrs: field.ErrorList{
-				field.Required(field.NewPath("spec", "conditionalAuthorization", "enabled"), ""),
+				field.Required(field.NewPath("spec", "authorizationOptions", "handledDecisionTypes"), ""),
+			},
+		},
+		"spec.authorizationOptions.handledDecisionTypes duplicate": {
+			v1Only:                         true,
+			enableConditionalAuthorization: true,
+			obj: mkSelfSAR(setConditionalAuthorization(&authorization.AuthorizationOptions{
+				HandledDecisionTypes: []authorization.ConditionsAwareDecisionType{
+					authorization.ConditionsAwareDecisionTypeAllow,
+					authorization.ConditionsAwareDecisionTypeAllow,
+				},
+			})),
+			expectedErrs: field.ErrorList{
+				field.Duplicate(field.NewPath("spec", "authorizationOptions", "handledDecisionTypes").Index(1), authorization.ConditionsAwareDecisionTypeAllow),
 			},
 		},
 		"status.conditionalDecision forbidden when feature gate disabled": {
-			obj: mkSelfSAR(setConditionalDecision(&authorization.ConditionsAwareDecision{})),
+			v1Only: true,
+			obj:    mkSelfSAR(setConditionalDecision(&authorization.ConditionsAwareDecision{})),
 			expectedErrs: field.ErrorList{
 				field.Forbidden(field.NewPath("status", "conditionalDecision"), ""),
 			},
 		},
 		"status.conditionalDecision.type required": {
+			v1Only:                         true,
 			enableConditionalAuthorization: true,
 			obj:                            mkSelfSAR(setConditionalDecision(&authorization.ConditionsAwareDecision{})),
 			expectedErrs: field.ErrorList{
@@ -95,6 +123,7 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 			},
 		},
 		"status.conditionalDecision.type not supported": {
+			v1Only:                         true,
 			enableConditionalAuthorization: true,
 			obj:                            mkSelfSAR(setConditionalDecision(&authorization.ConditionsAwareDecision{Type: "BogusType"})),
 			expectedErrs: field.ErrorList{
@@ -102,6 +131,7 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 			},
 		},
 		"status.conditionalDecision.conditionsMap[deny|noOpinion|allow]Conditions[*].id required": {
+			v1Only:                         true,
 			enableConditionalAuthorization: true,
 			obj: mkSelfSAR(setConditionalDecision(&authorization.ConditionsAwareDecision{
 				Type: authorization.ConditionsAwareDecisionTypeConditionsMap,
@@ -118,6 +148,7 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 			},
 		},
 		"status.conditionalDecision.conditionsMap[deny|noOpinion|allow]Conditions[*] duplicate": {
+			v1Only:                         true,
 			enableConditionalAuthorization: true,
 			obj: mkSelfSAR(setConditionalDecision(&authorization.ConditionsAwareDecision{
 				Type: authorization.ConditionsAwareDecisionTypeConditionsMap,
@@ -143,6 +174,7 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 			},
 		},
 		"status.conditionalDecision.union[*].authorizerName required": {
+			v1Only:                         true,
 			enableConditionalAuthorization: true,
 			obj: mkSelfSAR(setConditionalDecision(&authorization.ConditionsAwareDecision{
 				Type: authorization.ConditionsAwareDecisionTypeUnion,
@@ -155,6 +187,7 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 			},
 		},
 		"status.conditionalDecision.union[*] duplicate": {
+			v1Only:                         true,
 			enableConditionalAuthorization: true,
 			obj: mkSelfSAR(setConditionalDecision(&authorization.ConditionsAwareDecision{
 				Type: authorization.ConditionsAwareDecisionTypeUnion,
@@ -168,6 +201,7 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 			},
 		},
 		"status.conditionalDecision.union[*].authorizerName invalid subdomain": {
+			v1Only:                         true,
 			enableConditionalAuthorization: true,
 			obj: mkSelfSAR(setConditionalDecision(&authorization.ConditionsAwareDecision{
 				Type: authorization.ConditionsAwareDecisionTypeUnion,
@@ -180,6 +214,7 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 			},
 		},
 		"status.conditionalDecision.conditionsMap[deny|noOpinion|allow]Conditions too many": {
+			v1Only:                         true,
 			enableConditionalAuthorization: true,
 			obj: mkSelfSAR(setConditionalDecision(&authorization.ConditionsAwareDecision{
 				Type: authorization.ConditionsAwareDecisionTypeConditionsMap,
@@ -196,6 +231,7 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 			},
 		},
 		"status.conditionalDecision.conditionsMap[deny|noOpinion|allow]Conditions[*].id invalid label key": {
+			v1Only:                         true,
 			enableConditionalAuthorization: true,
 			obj: mkSelfSAR(setConditionalDecision(&authorization.ConditionsAwareDecision{
 				Type: authorization.ConditionsAwareDecisionTypeConditionsMap,
@@ -212,6 +248,7 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 			},
 		},
 		"status.conditionalDecision.conditionsMap[deny|noOpinion|allow]Conditions[*].type invalid label key": {
+			v1Only:                         true,
 			enableConditionalAuthorization: true,
 			obj: mkSelfSAR(setConditionalDecision(&authorization.ConditionsAwareDecision{
 				Type: authorization.ConditionsAwareDecisionTypeConditionsMap,
@@ -228,6 +265,7 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 			},
 		},
 		"status.conditionalDecision.conditionsMap[deny|noOpinion|allow]Conditions[*].condition too long": {
+			v1Only:                         true,
 			enableConditionalAuthorization: true,
 			obj: mkSelfSAR(setConditionalDecision(&authorization.ConditionsAwareDecision{
 				Type: authorization.ConditionsAwareDecisionTypeConditionsMap,
@@ -244,6 +282,7 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 			},
 		},
 		"status.conditionalDecision.conditionsMap[deny|noOpinion|allow]Conditions[*].description too long": {
+			v1Only:                         true,
 			enableConditionalAuthorization: true,
 			obj: mkSelfSAR(setConditionalDecision(&authorization.ConditionsAwareDecision{
 				Type: authorization.ConditionsAwareDecisionTypeConditionsMap,
@@ -263,11 +302,19 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 
 	for k, tc := range testCases {
 		t.Run(k, func(t *testing.T) {
+			if tc.v1Only && apiVersion != "v1" {
+				t.Skipf("case exercises authorization.k8s.io/v1-only fields; skipping for apiVersion=%q", apiVersion)
+			}
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ConditionalAuthorization, tc.enableConditionalAuthorization)
+			// v1Only cases carry internal fields that authorization.k8s.io/v1beta1 refuses to
+			// round-trip (it dropped the conditional-authorization fields). Ignore conversion
+			// errors so the cross-version sweep skips v1beta1 instead of failing; the
+			// per-version equivalence check itself already excludes v1beta1 via
+			// skippedEquivalenceGroupVersions.
 			apitesting.VerifyValidationEquivalenceFunc(t, ctx, &tc.obj, func(ctx context.Context, obj runtime.Object) field.ErrorList {
 				sar := obj.(*authorization.SelfSubjectAccessReview)
 				return authorizationvalidation.ValidateSelfSubjectAccessReviewCreate(ctx, legacyscheme.Scheme, sar)
-			}, tc.expectedErrs)
+			}, tc.expectedErrs, apitesting.WithIgnoreObjectConversionErrors())
 		})
 	}
 }
@@ -301,9 +348,9 @@ func setNonResourceAttributes() func(*authorization.SelfSubjectAccessReview) {
 	}
 }
 
-func setConditionalAuthorization(opts *authorization.ConditionalAuthorizationOptions) func(*authorization.SelfSubjectAccessReview) {
+func setConditionalAuthorization(opts *authorization.AuthorizationOptions) func(*authorization.SelfSubjectAccessReview) {
 	return func(sar *authorization.SelfSubjectAccessReview) {
-		sar.Spec.ConditionalAuthorization = opts
+		sar.Spec.AuthorizationOptions = opts
 	}
 }
 

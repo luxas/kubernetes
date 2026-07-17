@@ -178,16 +178,6 @@ type SubjectAccessReviewSpec struct {
 	// uid information about the requesting user.
 	// +optional
 	UID string `json:"uid,omitempty" protobuf:"bytes,6,opt,name=uid"`
-
-	// conditionalAuthorization contains options for requesting conditional authorization.
-	// If the field is unset, conditional authorization is not supported, and only Allow/Deny/NoOpinion is returned.
-	// If the field is set, conditional authorization is supported, any of Allow/Deny/NoOpinion/ConditionsMap/Union decisions may be returned.
-	// Requires the ConditionalAuthorization feature to be enabled.
-	// +optional
-	// +k8s:optional
-	// +featureGate=ConditionalAuthorization
-	// +k8s:ifDisabled("ConditionalAuthorization")=+k8s:forbidden
-	ConditionalAuthorization *authorizationv1.ConditionalAuthorizationOptions `json:"conditionalAuthorization,omitempty" protobuf:"bytes,7,opt,name=conditionalAuthorization"`
 }
 
 // ExtraValue masks the value so protobuf can generate
@@ -212,16 +202,6 @@ type SelfSubjectAccessReviewSpec struct {
 	// +k8s:alpha(since: "1.37")=+k8s:optional
 	// +k8s:alpha(since: "1.37")=+k8s:unionMember
 	NonResourceAttributes *NonResourceAttributes `json:"nonResourceAttributes,omitempty" protobuf:"bytes,2,opt,name=nonResourceAttributes"`
-
-	// conditionalAuthorization contains options for requesting conditional authorization.
-	// If the field is unset, conditional authorization is not supported, and only Allow/Deny/NoOpinion is returned.
-	// If the field is set, conditional authorization is supported, any of Allow/Deny/NoOpinion/ConditionsMap/Union decisions may be returned.
-	// Requires the ConditionalAuthorization feature to be enabled.
-	// +optional
-	// +k8s:optional
-	// +featureGate=ConditionalAuthorization
-	// +k8s:ifDisabled("ConditionalAuthorization")=+k8s:forbidden
-	ConditionalAuthorization *authorizationv1.ConditionalAuthorizationOptions `json:"conditionalAuthorization,omitempty" protobuf:"bytes,3,opt,name=conditionalAuthorization"`
 }
 
 // SubjectAccessReviewStatus
@@ -243,19 +223,6 @@ type SubjectAccessReviewStatus struct {
 	// For instance, RBAC can be missing a role, but enough roles are still present and bound to reason about the request.
 	// +optional
 	EvaluationError string `json:"evaluationError,omitempty" protobuf:"bytes,3,opt,name=evaluationError"`
-
-	// conditionalDecision represents a conditional decision returned by the authorizer.
-	// Mutually exclusive with allowed=true and denied=true.
-	// The top-level decision type should be ConditionsAwareDecisionTypeConditionsMap or
-	// ConditionsAwareDecisionTypeUnion, as Allow/Deny/NoOpinion decisions can be represented
-	// with SubjectAccessReviewStatus.Allowed and SubjectAccessReviewStatus.Denied alone.
-	// May only be set if spec.conditionalAuthorization is non-null.
-	// Requires the ConditionalAuthorization feature to be enabled.
-	// +optional
-	// +k8s:optional
-	// +featureGate=ConditionalAuthorization
-	// +k8s:ifDisabled("ConditionalAuthorization")=+k8s:forbidden
-	ConditionalDecision *authorizationv1.ConditionsAwareDecision `json:"conditionalDecision,omitempty" protobuf:"bytes,5,opt,name=conditionalDecision"`
 }
 
 // +genclient

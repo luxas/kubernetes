@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -84,10 +85,12 @@ func (f *fakeAuthorizationConditionsReviewer) Create(_ context.Context, acr *aut
 // depend on any particular field value.
 type fakeConditionsData struct{}
 
-func (fakeConditionsData) GetName() string                          { return "obj" }
-func (fakeConditionsData) GetNamespace() string                     { return "default" }
-func (fakeConditionsData) GetResource() schema.GroupVersionResource { return schema.GroupVersionResource{} }
-func (fakeConditionsData) GetSubresource() string                   { return "" }
+func (fakeConditionsData) GetName() string      { return "obj" }
+func (fakeConditionsData) GetNamespace() string { return "default" }
+func (fakeConditionsData) GetResource() schema.GroupVersionResource {
+	return schema.GroupVersionResource{}
+}
+func (fakeConditionsData) GetSubresource() string { return "" }
 func (fakeConditionsData) GetOperation() authorizer.AdmissionOperation {
 	return authorizer.AdmissionOperation("CREATE")
 }
@@ -290,10 +293,8 @@ func TestConditionsAwareAuthorize(t *testing.T) {
 			}
 			if sarReviewer.received == nil {
 				t.Error("expected SAR to be called")
-			} else if sarReviewer.received.Spec.ConditionalAuthorization == nil {
-				t.Error("expected ConditionalAuthorization to be set in the outgoing SAR")
-			} else if !sarReviewer.received.Spec.ConditionalAuthorization.Enabled {
-				t.Error("expected ConditionalAuthorization.Enabled=true in the outgoing SAR")
+			} else if conditionalAuthEnabled(sarReviewer.received.Spec.AuthorizationOptions) {
+				t.Error("expected ConditionalAuthorization to be enabled in the outgoing SAR")
 			}
 		})
 	}
@@ -838,6 +839,12 @@ func TestEvaluateConditions(t *testing.T) {
 	}
 }
 
+func conditionalAuthEnabled(ao *authorizationv1.AuthorizationOptions) bool {
+	return ao != nil &&
+		slices.Contains(ao.HandledDecisionTypes, authorizationv1.ConditionsAwareDecisionTypeConditionsMap) &&
+		slices.Contains(ao.HandledDecisionTypes, authorizationv1.ConditionsAwareDecisionTypeUnion)
+}
+
 // TestConditionsAwareAuthorize_EndToEnd tests a full round-trip using an HTTP
 // test server to simulate the webhook, verifying that ConditionsAwareAuthorize
 // correctly sends ConditionalAuthorization in the spec and deserializes the
@@ -869,7 +876,7 @@ func TestConditionsAwareAuthorize_EndToEnd(t *testing.T) {
 			return
 		}
 
-		receivedConditionalAuth = sar.Spec.ConditionalAuthorization != nil && sar.Spec.ConditionalAuthorization.Enabled
+		receivedConditionalAuth = conditionalAuthEnabled(sar.Spec.AuthorizationOptions)
 
 		resp := authorizationv1.SubjectAccessReview{
 			TypeMeta: metav1.TypeMeta{

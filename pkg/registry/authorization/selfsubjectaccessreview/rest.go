@@ -23,6 +23,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	genericfeatures "k8s.io/apiserver/pkg/features"
@@ -68,11 +69,14 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		return nil, apierrors.NewBadRequest(fmt.Sprintf("not a SelfSubjectAccessReview: %#v", obj))
 	}
 
+	// Clear status so it's not taken into account during input validation.
+	selfSAR.Status = authorizationapi.SubjectAccessReviewStatus{}
+
 	// Clear the options for opting into conditions-awareness when the feature gate is off.
 	// This means that we fallback to the conditions-unaware Authorize when the feature gate is
 	// off, even though both the client and authorizer might have supported conditions.
 	if !utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
-		selfSAR.Spec.ConditionalAuthorization = nil
+		selfSAR.Spec.AuthorizationOptions = nil
 	}
 
 	if errs := authorizationvalidation.ValidateSelfSubjectAccessReviewCreate(ctx, r.scheme, selfSAR); len(errs) > 0 {
@@ -96,11 +100,21 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		authorizationAttributes = authorizationutil.NonResourceAttributesFrom(userToCheck, *selfSAR.Spec.NonResourceAttributes)
 	}
 
-	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) && authorizationutil.SupportsConditions(selfSAR.Spec.ConditionalAuthorization) {
+	// Find out what decision types the client and server support, and below match against their intersection.
+	serverHandledDecisionTypes := authorizationutil.ServerHandledDecisionTypes(utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization))
+	clientHandledDecisionTypes := authorizationutil.ClientHandledDecisionTypes(selfSAR.Spec.AuthorizationOptions)
+	bothHandledDecisionTypes := serverHandledDecisionTypes.Intersection(clientHandledDecisionTypes)
+
+	// Exact matches are performed against bothHandledDecisionTypes. If none of them match, the client provided an unsupported set,
+	// for example [Allow], which we shall reject as a bad request, as this is HandledDecisionTypes is not covered by validation above.
+	// The extra utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) check here is technically redundant,
+	// but should help the reader see that the conditional path only triggers when the feature gate is on.
+	if authorizationutil.SupportsConditionalAuthorization(bothHandledDecisionTypes) && utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
 		// conditions-aware flow, feature gate is on and client supports conditions
 		conditionsAwareDecision := r.authorizer.ConditionsAwareAuthorize(ctx, authorizationAttributes)
 		selfSAR.Status = authorizationutil.ConditionsAwareDecisionToSARStatus(ctx, authorizationAttributes, conditionsAwareDecision)
-	} else {
+
+	} else if authorizationutil.SupportsUnconditionalAuthorization(bothHandledDecisionTypes) {
 		// conditions-unaware flow, feature gate is off or client does not support conditions
 		decision, reason, evaluationErr := r.authorizer.Authorize(ctx, authorizationAttributes)
 
@@ -110,6 +124,9 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 			Reason:          reason,
 			EvaluationError: authorizationutil.BuildEvaluationError(evaluationErr, authorizationAttributes),
 		}
+	} else {
+		// bothHandledDecisionTypes was neither [Allow, ConditionsMap, Deny, NoOpinion, Union] or [Allow, Deny, NoOpinion], reject it.
+		return nil, apierrors.NewBadRequest(fmt.Sprintf("unsupported client-handled decision types: %v", sets.List(clientHandledDecisionTypes)))
 	}
 
 	return selfSAR, nil

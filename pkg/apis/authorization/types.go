@@ -178,13 +178,11 @@ type SubjectAccessReviewSpec struct {
 	// UID information about the requesting user.
 	UID string
 
-	// conditionalAuthorization contains options for requesting conditional authorization.
-	// If the field is unset, conditional authorization is not supported, and only Allow/Deny/NoOpinion is returned.
-	// If the field is set, conditional authorization is supported, any of Allow/Deny/NoOpinion/ConditionsMap/Union decisions may be returned.
+	// AuthorizationOptions contains options for specifying the client's authorization abilities.
 	// Requires the ConditionalAuthorization feature to be enabled.
 	// +optional
 	// +featureGate=ConditionalAuthorization
-	ConditionalAuthorization *ConditionalAuthorizationOptions
+	AuthorizationOptions *AuthorizationOptions
 }
 
 // ExtraValue masks the value so protobuf can generate
@@ -199,13 +197,11 @@ type SelfSubjectAccessReviewSpec struct {
 	// NonResourceAttributes describes information for a non-resource access request
 	NonResourceAttributes *NonResourceAttributes
 
-	// conditionalAuthorization contains options for requesting conditional authorization.
-	// If the field is unset, conditional authorization is not supported, and only Allow/Deny/NoOpinion is returned.
-	// If the field is set, conditional authorization is supported, any of Allow/Deny/NoOpinion/ConditionsMap/Union decisions may be returned.
+	// AuthorizationOptions contains options for specifying the client's authorization abilities.
 	// Requires the ConditionalAuthorization feature to be enabled.
 	// +optional
 	// +featureGate=ConditionalAuthorization
-	ConditionalAuthorization *ConditionalAuthorizationOptions
+	AuthorizationOptions *AuthorizationOptions
 }
 
 // SubjectAccessReviewStatus represents the current state of a SubjectAccessReview.
@@ -308,11 +304,24 @@ type NonResourceRule struct {
 	NonResourceURLs []string
 }
 
-// ConditionalAuthorizationOptions contains options for requesting conditional authorization.
-type ConditionalAuthorizationOptions struct {
-	// Enabled specifies whether the client supports conditions or not.
+// AuthorizationOptions contains options for specifying the client's authorization abilities.
+type AuthorizationOptions struct {
+	// HandledDecisionTypes specifies what decision types the client can handle in the context it is in.
+	// Currently valid values are:
+	// - [Allow, Deny, NoOpinion] (for conditions-unaware clients) or
+	// - [Allow, Deny, NoOpinion, ConditionsMap, Union] (for conditions-aware clients)
+	// If the authorizer would like to return conditions, but the client does not opt in to handle those here,
+	//. the authorizer must fail closed to a safe unconditional decision (Deny if any Deny conditions were present,
+	// otherwise NoOpinion).
+	// Order does not matter in this slice; set semantics should be used.
+	// The server should intersect this set with its own supported decision types, and call the authorizer either in
+	// conditions-aware or -unaware mode based on that intersection.
+	// Note that this intersection is done outside of the normal validation phase, the server should make sure the
+	// set intersection is correct after normal validation (hence the k8s:opaqueType) tag is used to not fail validation
+	// on server-unsupported ConditionsAwareDecisionTypes in version skew scenarios.
+	// +listType=set
 	// +required
-	Enabled bool
+	HandledDecisionTypes []ConditionsAwareDecisionType
 }
 
 // Condition represents a single authorization condition to be evaluated against
@@ -467,24 +476,6 @@ type UnconditionalDecision struct {
 	// For instance, RBAC can be missing a role, but enough roles are still present and bound to reason about the request.
 	// +optional
 	EvaluationError string
-
-	// auditAnnotations is an unstructured key value map set by an authorizer (e.g. policy=temporary-break-glass), that is
-	// eventually added as additional context to the audit log for this request.
-	// The authorizerName in the union will be prepended to the annotation key, and joined through ":", e.g.
-	// "kubernetes.io/webhook:example.com/custom:policy=temporary-break-glass".
-	// +k8s:optional
-	// +optional
-	AuditAnnotations map[string]string
-
-	// warnings is a list of warning messages to return to the requesting API client.
-	// Warning messages describe a problem the client making the API request should correct or be aware of.
-	// Limit warnings to 120 characters if possible.
-	// Warnings over 256 characters and large numbers of warnings may be truncated.
-	// +k8s:optional
-	// +optional
-	// +k8s:listType=atomic
-	// +listType=atomic
-	Warnings []string
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

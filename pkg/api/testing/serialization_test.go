@@ -43,6 +43,7 @@ import (
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	"k8s.io/kubernetes/pkg/apis/apps"
 	k8s_apps_v1 "k8s.io/kubernetes/pkg/apis/apps/v1"
+	"k8s.io/kubernetes/pkg/apis/authorization"
 	api "k8s.io/kubernetes/pkg/apis/core"
 	k8s_api_v1 "k8s.io/kubernetes/pkg/apis/core/v1"
 	"sigs.k8s.io/yaml"
@@ -216,7 +217,11 @@ func TestCommonKindsRegistered(t *testing.T) {
 func TestRoundTripTypes(t *testing.T) {
 	seed := rand.Int63()
 	fuzzer := fuzzer.FuzzerFor(FuzzerFuncs, rand.NewSource(seed), legacyscheme.Codecs)
-	nonRoundTrippableTypes := map[schema.GroupVersionKind]bool{}
+	nonRoundTrippableTypes := map[schema.GroupVersionKind]bool{
+		{Group: authorization.GroupName, Version: "v1beta1", Kind: "LocalSubjectAccessReview"}: true,
+		{Group: authorization.GroupName, Version: "v1beta1", Kind: "SelfSubjectAccessReview"}:  true,
+		{Group: authorization.GroupName, Version: "v1beta1", Kind: "SubjectAccessReview"}:      true,
+	}
 
 	roundtrip.RoundTripTypes(t, legacyscheme.Scheme, legacyscheme.Codecs, fuzzer, nonRoundTrippableTypes)
 }

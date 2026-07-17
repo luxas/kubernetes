@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	authorizationapi "k8s.io/kubernetes/pkg/apis/authorization"
@@ -259,12 +260,68 @@ func ConditionsAwareDecisionToSARStatus(ctx context.Context, attrs authorizer.At
 	}
 }
 
-// SupportsConditions indicates whether the ConditionalAuthorizationOptions are such that
-// the client has opted into authorization conditions-awareness.
-func SupportsConditions(options *authorizationapi.ConditionalAuthorizationOptions) bool {
-	return options != nil && options.Enabled
+// ServerHandledDecisionTypes a set of the server-handled ConditionsAwareDecisionTypes, based on the ConditionalAuthorization feature gate
+func ServerHandledDecisionTypes(conditionalAuthorizationFeatureGateValue bool) sets.Set[authorizationapi.ConditionsAwareDecisionType] {
+	if conditionalAuthorizationFeatureGateValue {
+		return sets.New(
+			// unconditional
+			authorizationapi.ConditionsAwareDecisionTypeAllow,
+			authorizationapi.ConditionsAwareDecisionTypeDeny,
+			authorizationapi.ConditionsAwareDecisionTypeNoOpinion,
+			// conditional
+			authorizationapi.ConditionsAwareDecisionTypeConditionsMap,
+			authorizationapi.ConditionsAwareDecisionTypeUnion,
+		)
+	} else {
+		return sets.New(
+			authorizationapi.ConditionsAwareDecisionTypeAllow,
+			authorizationapi.ConditionsAwareDecisionTypeDeny,
+			authorizationapi.ConditionsAwareDecisionTypeNoOpinion,
+		)
+	}
 }
 
+// ClientHandledDecisionTypes returns what ConditionsAwareDecisionType the client supports, based on its specified AuthorizationOptions.
+func ClientHandledDecisionTypes(options *authorizationapi.AuthorizationOptions) sets.Set[authorizationapi.ConditionsAwareDecisionType] {
+	if options != nil {
+		return sets.New(options.HandledDecisionTypes...)
+	}
+
+	return sets.New(
+		authorizationapi.ConditionsAwareDecisionTypeAllow,
+		authorizationapi.ConditionsAwareDecisionTypeDeny,
+		authorizationapi.ConditionsAwareDecisionTypeNoOpinion,
+	)
+}
+
+// SupportsConditionalAuthorization returns true whether bothHandledDecisionTypes is exactly [Allow, ConditionsMap, Deny, NoOpinion, Union].
+// Due to the exact match, the passed set should be the intersection between the client and the server's capabilities.
+// TODO(luxas): Move this to the external k8s.io/apiserver v1 util
+func SupportsConditionalAuthorization(bothHandledDecisionTypes sets.Set[authorizationapi.ConditionsAwareDecisionType]) bool {
+	return bothHandledDecisionTypes.Equal(sets.New(
+		// unconditional
+		authorizationapi.ConditionsAwareDecisionTypeAllow,
+		authorizationapi.ConditionsAwareDecisionTypeDeny,
+		authorizationapi.ConditionsAwareDecisionTypeNoOpinion,
+		// conditional
+		authorizationapi.ConditionsAwareDecisionTypeConditionsMap,
+		authorizationapi.ConditionsAwareDecisionTypeUnion,
+	))
+}
+
+// SupportsUnconditionalAuthorization returns true whether bothHandledDecisionTypes is exactly [Allow, Deny, NoOpinion].
+// Due to the exact match, the passed set should be the intersection between the client and the server's capabilities.
+// TODO(luxas): Move this to the external k8s.io/apiserver v1 util
+func SupportsUnconditionalAuthorization(bothHandledDecisionTypes sets.Set[authorizationapi.ConditionsAwareDecisionType]) bool {
+	return bothHandledDecisionTypes.Equal(sets.New(
+		// unconditional
+		authorizationapi.ConditionsAwareDecisionTypeAllow,
+		authorizationapi.ConditionsAwareDecisionTypeDeny,
+		authorizationapi.ConditionsAwareDecisionTypeNoOpinion,
+	))
+}
+
+// TODO(luxas): Move this to the external k8s.io/apiserver v1 util
 func serializeConditionsAwareDecision(decision authorizer.ConditionsAwareDecision) authorizationapi.ConditionsAwareDecision {
 	var errString string
 	if decision.Error() != nil {
