@@ -33,31 +33,13 @@
   errorType: FieldValueInvalid
   origin: union
   reason: DiscriminatedUnion emits errors at child paths, not the parent struct path.
-- apiVersion: authorization.k8s.io/v1beta1
-  kind: SubjectAccessReview
-  path: status.conditionalDecision
-  errorType: FieldValueInvalid
-  origin: union
-  reason: DiscriminatedUnion emits errors at child paths, not the parent struct path.
 - apiVersion: authorization.k8s.io/v1
   kind: SelfSubjectAccessReview
   path: status.conditionalDecision
   errorType: FieldValueInvalid
   origin: union
   reason: DiscriminatedUnion emits errors at child paths, not the parent struct path.
-- apiVersion: authorization.k8s.io/v1beta1
-  kind: SelfSubjectAccessReview
-  path: status.conditionalDecision
-  errorType: FieldValueInvalid
-  origin: union
-  reason: DiscriminatedUnion emits errors at child paths, not the parent struct path.
 - apiVersion: authorization.k8s.io/v1
-  kind: LocalSubjectAccessReview
-  path: status.conditionalDecision
-  errorType: FieldValueInvalid
-  origin: union
-  reason: DiscriminatedUnion emits errors at child paths, not the parent struct path.
-- apiVersion: authorization.k8s.io/v1beta1
   kind: LocalSubjectAccessReview
   path: status.conditionalDecision
   errorType: FieldValueInvalid

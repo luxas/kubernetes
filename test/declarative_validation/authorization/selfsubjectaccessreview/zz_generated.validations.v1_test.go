@@ -33,11 +33,14 @@ func init() {
 			"spec": {
 				{ErrorType: "FieldValueInvalid", Origin: "union"},
 			},
-			"spec.conditionalAuthorization": {
+			"spec.authorizationOptions": {
 				{ErrorType: "FieldValueForbidden"},
 			},
-			"spec.conditionalAuthorization.enabled": {
+			"spec.authorizationOptions.handledDecisionTypes": {
 				{ErrorType: "FieldValueRequired"},
+			},
+			"spec.authorizationOptions.handledDecisionTypes[*]": {
+				{ErrorType: "FieldValueDuplicate"},
 			},
 			"status.conditionalDecision": {
 				{ErrorType: "FieldValueForbidden"},

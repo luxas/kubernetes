@@ -22,13 +22,13 @@ limitations under the License.
 package v1
 
 // OpenAPIModelName returns the OpenAPI model name for this type.
-func (in Condition) OpenAPIModelName() string {
-	return "io.k8s.api.authorization.v1.Condition"
+func (in AuthorizationOptions) OpenAPIModelName() string {
+	return "io.k8s.api.authorization.v1.AuthorizationOptions"
 }
 
 // OpenAPIModelName returns the OpenAPI model name for this type.
-func (in ConditionalAuthorizationOptions) OpenAPIModelName() string {
-	return "io.k8s.api.authorization.v1.ConditionalAuthorizationOptions"
+func (in Condition) OpenAPIModelName() string {
+	return "io.k8s.api.authorization.v1.Condition"
 }
 
 // OpenAPIModelName returns the OpenAPI model name for this type.

@@ -99,10 +99,9 @@ func (SelfSubjectAccessReview) SwaggerDoc() map[string]string {
 }
 
 var map_SelfSubjectAccessReviewSpec = map[string]string{
-	"":                         "SelfSubjectAccessReviewSpec is a description of the access request.  Exactly one of resourceAttributes and nonResourceAttributes must be set",
-	"resourceAttributes":       "resourceAttributes describes information for a resource access request",
-	"nonResourceAttributes":    "nonResourceAttributes describes information for a non-resource access request",
-	"conditionalAuthorization": "conditionalAuthorization contains options for requesting conditional authorization. If the field is unset, conditional authorization is not supported, and only Allow/Deny/NoOpinion is returned. If the field is set, conditional authorization is supported, any of Allow/Deny/NoOpinion/ConditionsMap/Union decisions may be returned. Requires the ConditionalAuthorization feature to be enabled.",
+	"":                      "SelfSubjectAccessReviewSpec is a description of the access request.  Exactly one of resourceAttributes and nonResourceAttributes must be set",
+	"resourceAttributes":    "resourceAttributes describes information for a resource access request",
+	"nonResourceAttributes": "nonResourceAttributes describes information for a non-resource access request",
 }
 
 func (SelfSubjectAccessReviewSpec) SwaggerDoc() map[string]string {
@@ -141,14 +140,13 @@ func (SubjectAccessReview) SwaggerDoc() map[string]string {
 }
 
 var map_SubjectAccessReviewSpec = map[string]string{
-	"":                         "SubjectAccessReviewSpec is a description of the access request.  Exactly one of resourceAttributes and nonResourceAttributes must be set",
-	"resourceAttributes":       "resourceAttributes describes information for a resource access request",
-	"nonResourceAttributes":    "nonResourceAttributes describes information for a non-resource access request",
-	"user":                     "user is the user you're testing for. If you specify \"User\" but not \"Group\", then is it interpreted as \"What if User were not a member of any groups",
-	"group":                    "group is the groups you're testing for.",
-	"extra":                    "extra corresponds to the user.Info.GetExtra() method from the authenticator.  Since that is input to the authorizer it needs a reflection here.",
-	"uid":                      "uid information about the requesting user.",
-	"conditionalAuthorization": "conditionalAuthorization contains options for requesting conditional authorization. If the field is unset, conditional authorization is not supported, and only Allow/Deny/NoOpinion is returned. If the field is set, conditional authorization is supported, any of Allow/Deny/NoOpinion/ConditionsMap/Union decisions may be returned. Requires the ConditionalAuthorization feature to be enabled.",
+	"":                      "SubjectAccessReviewSpec is a description of the access request.  Exactly one of resourceAttributes and nonResourceAttributes must be set",
+	"resourceAttributes":    "resourceAttributes describes information for a resource access request",
+	"nonResourceAttributes": "nonResourceAttributes describes information for a non-resource access request",
+	"user":                  "user is the user you're testing for. If you specify \"User\" but not \"Group\", then is it interpreted as \"What if User were not a member of any groups",
+	"group":                 "group is the groups you're testing for.",
+	"extra":                 "extra corresponds to the user.Info.GetExtra() method from the authenticator.  Since that is input to the authorizer it needs a reflection here.",
+	"uid":                   "uid information about the requesting user.",
 }
 
 func (SubjectAccessReviewSpec) SwaggerDoc() map[string]string {
@@ -156,12 +154,11 @@ func (SubjectAccessReviewSpec) SwaggerDoc() map[string]string {
 }
 
 var map_SubjectAccessReviewStatus = map[string]string{
-	"":                    "SubjectAccessReviewStatus",
-	"allowed":             "allowed is required to be present. True if the action would be allowed, false otherwise. allowed=true is mutually exclusive with denied=true and conditionalDecision != nil.",
-	"denied":              "denied is optional. True if the action would be denied, otherwise false If allowed is false, denied is false, and conditionalDecision is unset, then the authorizer has no opinion on whether to authorize the action. denied=true is mutually exclusive with allowed=true and conditionalDecision != nil.",
-	"reason":              "reason is optional.  It indicates why a request was allowed or denied.",
-	"evaluationError":     "evaluationError is an indication that some error occurred during the authorization check. It is entirely possible to get an error and be able to continue determine authorization status in spite of it. For instance, RBAC can be missing a role, but enough roles are still present and bound to reason about the request.",
-	"conditionalDecision": "conditionalDecision represents a conditional decision returned by the authorizer. Mutually exclusive with allowed=true and denied=true. The top-level decision type should be ConditionsAwareDecisionTypeConditionsMap or ConditionsAwareDecisionTypeUnion, as Allow/Deny/NoOpinion decisions can be represented with SubjectAccessReviewStatus.Allowed and SubjectAccessReviewStatus.Denied alone. May only be set if spec.conditionalAuthorization is non-null. Requires the ConditionalAuthorization feature to be enabled.",
+	"":                "SubjectAccessReviewStatus",
+	"allowed":         "allowed is required to be present. True if the action would be allowed, false otherwise. allowed=true is mutually exclusive with denied=true and conditionalDecision != nil.",
+	"denied":          "denied is optional. True if the action would be denied, otherwise false If allowed is false, denied is false, and conditionalDecision is unset, then the authorizer has no opinion on whether to authorize the action. denied=true is mutually exclusive with allowed=true and conditionalDecision != nil.",
+	"reason":          "reason is optional.  It indicates why a request was allowed or denied.",
+	"evaluationError": "evaluationError is an indication that some error occurred during the authorization check. It is entirely possible to get an error and be able to continue determine authorization status in spite of it. For instance, RBAC can be missing a role, but enough roles are still present and bound to reason about the request.",
 }
 
 func (SubjectAccessReviewStatus) SwaggerDoc() map[string]string {

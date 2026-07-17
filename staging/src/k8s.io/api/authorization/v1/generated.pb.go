@@ -32,9 +32,9 @@ import (
 	strings "strings"
 )
 
-func (m *Condition) Reset() { *m = Condition{} }
+func (m *AuthorizationOptions) Reset() { *m = AuthorizationOptions{} }
 
-func (m *ConditionalAuthorizationOptions) Reset() { *m = ConditionalAuthorizationOptions{} }
+func (m *Condition) Reset() { *m = Condition{} }
 
 func (m *ConditionsAwareDecision) Reset() { *m = ConditionsAwareDecision{} }
 
@@ -76,6 +76,38 @@ func (m *SubjectRulesReviewStatus) Reset() { *m = SubjectRulesReviewStatus{} }
 
 func (m *UnconditionalDecision) Reset() { *m = UnconditionalDecision{} }
 
+func (m *AuthorizationOptions) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *AuthorizationOptions) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *AuthorizationOptions) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if len(m.HandledDecisionTypes) > 0 {
+		for iNdEx := len(m.HandledDecisionTypes) - 1; iNdEx >= 0; iNdEx-- {
+			i -= len(m.HandledDecisionTypes[iNdEx])
+			copy(dAtA[i:], m.HandledDecisionTypes[iNdEx])
+			i = encodeVarintGenerated(dAtA, i, uint64(len(m.HandledDecisionTypes[iNdEx])))
+			i--
+			dAtA[i] = 0xa
+		}
+	}
+	return len(dAtA) - i, nil
+}
+
 func (m *Condition) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
@@ -116,37 +148,6 @@ func (m *Condition) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i = encodeVarintGenerated(dAtA, i, uint64(len(m.ID)))
 	i--
 	dAtA[i] = 0xa
-	return len(dAtA) - i, nil
-}
-
-func (m *ConditionalAuthorizationOptions) Marshal() (dAtA []byte, err error) {
-	size := m.Size()
-	dAtA = make([]byte, size)
-	n, err := m.MarshalToSizedBuffer(dAtA[:size])
-	if err != nil {
-		return nil, err
-	}
-	return dAtA[:n], nil
-}
-
-func (m *ConditionalAuthorizationOptions) MarshalTo(dAtA []byte) (int, error) {
-	size := m.Size()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *ConditionalAuthorizationOptions) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
-	_ = i
-	var l int
-	_ = l
-	i--
-	if m.Enabled {
-		dAtA[i] = 1
-	} else {
-		dAtA[i] = 0
-	}
-	i--
-	dAtA[i] = 0x8
 	return len(dAtA) - i, nil
 }
 
@@ -800,9 +801,9 @@ func (m *SelfSubjectAccessReviewSpec) MarshalToSizedBuffer(dAtA []byte) (int, er
 	_ = i
 	var l int
 	_ = l
-	if m.ConditionalAuthorization != nil {
+	if m.AuthorizationOptions != nil {
 		{
-			size, err := m.ConditionalAuthorization.MarshalToSizedBuffer(dAtA[:i])
+			size, err := m.AuthorizationOptions.MarshalToSizedBuffer(dAtA[:i])
 			if err != nil {
 				return 0, err
 			}
@@ -993,9 +994,9 @@ func (m *SubjectAccessReviewSpec) MarshalToSizedBuffer(dAtA []byte) (int, error)
 	_ = i
 	var l int
 	_ = l
-	if m.ConditionalAuthorization != nil {
+	if m.AuthorizationOptions != nil {
 		{
-			size, err := m.ConditionalAuthorization.MarshalToSizedBuffer(dAtA[:i])
+			size, err := m.AuthorizationOptions.MarshalToSizedBuffer(dAtA[:i])
 			if err != nil {
 				return 0, err
 			}
@@ -1225,39 +1226,6 @@ func (m *UnconditionalDecision) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
-	if len(m.Warnings) > 0 {
-		for iNdEx := len(m.Warnings) - 1; iNdEx >= 0; iNdEx-- {
-			i -= len(m.Warnings[iNdEx])
-			copy(dAtA[i:], m.Warnings[iNdEx])
-			i = encodeVarintGenerated(dAtA, i, uint64(len(m.Warnings[iNdEx])))
-			i--
-			dAtA[i] = 0x22
-		}
-	}
-	if len(m.AuditAnnotations) > 0 {
-		keysForAuditAnnotations := make([]string, 0, len(m.AuditAnnotations))
-		for k := range m.AuditAnnotations {
-			keysForAuditAnnotations = append(keysForAuditAnnotations, string(k))
-		}
-		sort.Strings(keysForAuditAnnotations)
-		for iNdEx := len(keysForAuditAnnotations) - 1; iNdEx >= 0; iNdEx-- {
-			v := m.AuditAnnotations[string(keysForAuditAnnotations[iNdEx])]
-			baseI := i
-			i -= len(v)
-			copy(dAtA[i:], v)
-			i = encodeVarintGenerated(dAtA, i, uint64(len(v)))
-			i--
-			dAtA[i] = 0x12
-			i -= len(keysForAuditAnnotations[iNdEx])
-			copy(dAtA[i:], keysForAuditAnnotations[iNdEx])
-			i = encodeVarintGenerated(dAtA, i, uint64(len(keysForAuditAnnotations[iNdEx])))
-			i--
-			dAtA[i] = 0xa
-			i = encodeVarintGenerated(dAtA, i, uint64(baseI-i))
-			i--
-			dAtA[i] = 0x1a
-		}
-	}
 	i -= len(m.EvaluationError)
 	copy(dAtA[i:], m.EvaluationError)
 	i = encodeVarintGenerated(dAtA, i, uint64(len(m.EvaluationError)))
@@ -1282,6 +1250,21 @@ func encodeVarintGenerated(dAtA []byte, offset int, v uint64) int {
 	dAtA[offset] = uint8(v)
 	return base
 }
+func (m *AuthorizationOptions) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if len(m.HandledDecisionTypes) > 0 {
+		for _, s := range m.HandledDecisionTypes {
+			l = len(s)
+			n += 1 + l + sovGenerated(uint64(l))
+		}
+	}
+	return n
+}
+
 func (m *Condition) Size() (n int) {
 	if m == nil {
 		return 0
@@ -1296,16 +1279,6 @@ func (m *Condition) Size() (n int) {
 	n += 1 + l + sovGenerated(uint64(l))
 	l = len(m.Description)
 	n += 1 + l + sovGenerated(uint64(l))
-	return n
-}
-
-func (m *ConditionalAuthorizationOptions) Size() (n int) {
-	if m == nil {
-		return 0
-	}
-	var l int
-	_ = l
-	n += 2
 	return n
 }
 
@@ -1573,8 +1546,8 @@ func (m *SelfSubjectAccessReviewSpec) Size() (n int) {
 		l = m.NonResourceAttributes.Size()
 		n += 1 + l + sovGenerated(uint64(l))
 	}
-	if m.ConditionalAuthorization != nil {
-		l = m.ConditionalAuthorization.Size()
+	if m.AuthorizationOptions != nil {
+		l = m.AuthorizationOptions.Size()
 		n += 1 + l + sovGenerated(uint64(l))
 	}
 	return n
@@ -1654,8 +1627,8 @@ func (m *SubjectAccessReviewSpec) Size() (n int) {
 	}
 	l = len(m.UID)
 	n += 1 + l + sovGenerated(uint64(l))
-	if m.ConditionalAuthorization != nil {
-		l = m.ConditionalAuthorization.Size()
+	if m.AuthorizationOptions != nil {
+		l = m.AuthorizationOptions.Size()
 		n += 1 + l + sovGenerated(uint64(l))
 	}
 	return n
@@ -1714,20 +1687,6 @@ func (m *UnconditionalDecision) Size() (n int) {
 	n += 1 + l + sovGenerated(uint64(l))
 	l = len(m.EvaluationError)
 	n += 1 + l + sovGenerated(uint64(l))
-	if len(m.AuditAnnotations) > 0 {
-		for k, v := range m.AuditAnnotations {
-			_ = k
-			_ = v
-			mapEntrySize := 1 + len(k) + sovGenerated(uint64(len(k))) + 1 + len(v) + sovGenerated(uint64(len(v)))
-			n += mapEntrySize + 1 + sovGenerated(uint64(mapEntrySize))
-		}
-	}
-	if len(m.Warnings) > 0 {
-		for _, s := range m.Warnings {
-			l = len(s)
-			n += 1 + l + sovGenerated(uint64(l))
-		}
-	}
 	return n
 }
 
@@ -1736,6 +1695,16 @@ func sovGenerated(x uint64) (n int) {
 }
 func sozGenerated(x uint64) (n int) {
 	return sovGenerated(uint64((x << 1) ^ uint64((int64(x) >> 63))))
+}
+func (this *AuthorizationOptions) String() string {
+	if this == nil {
+		return "nil"
+	}
+	s := strings.Join([]string{`&AuthorizationOptions{`,
+		`HandledDecisionTypes:` + fmt.Sprintf("%v", this.HandledDecisionTypes) + `,`,
+		`}`,
+	}, "")
+	return s
 }
 func (this *Condition) String() string {
 	if this == nil {
@@ -1746,16 +1715,6 @@ func (this *Condition) String() string {
 		`Condition:` + fmt.Sprintf("%v", this.Condition) + `,`,
 		`Type:` + fmt.Sprintf("%v", this.Type) + `,`,
 		`Description:` + fmt.Sprintf("%v", this.Description) + `,`,
-		`}`,
-	}, "")
-	return s
-}
-func (this *ConditionalAuthorizationOptions) String() string {
-	if this == nil {
-		return "nil"
-	}
-	s := strings.Join([]string{`&ConditionalAuthorizationOptions{`,
-		`Enabled:` + fmt.Sprintf("%v", this.Enabled) + `,`,
 		`}`,
 	}, "")
 	return s
@@ -1934,7 +1893,7 @@ func (this *SelfSubjectAccessReviewSpec) String() string {
 	s := strings.Join([]string{`&SelfSubjectAccessReviewSpec{`,
 		`ResourceAttributes:` + strings.Replace(this.ResourceAttributes.String(), "ResourceAttributes", "ResourceAttributes", 1) + `,`,
 		`NonResourceAttributes:` + strings.Replace(this.NonResourceAttributes.String(), "NonResourceAttributes", "NonResourceAttributes", 1) + `,`,
-		`ConditionalAuthorization:` + strings.Replace(this.ConditionalAuthorization.String(), "ConditionalAuthorizationOptions", "ConditionalAuthorizationOptions", 1) + `,`,
+		`AuthorizationOptions:` + strings.Replace(this.AuthorizationOptions.String(), "AuthorizationOptions", "AuthorizationOptions", 1) + `,`,
 		`}`,
 	}, "")
 	return s
@@ -1994,7 +1953,7 @@ func (this *SubjectAccessReviewSpec) String() string {
 		`Groups:` + fmt.Sprintf("%v", this.Groups) + `,`,
 		`Extra:` + mapStringForExtra + `,`,
 		`UID:` + fmt.Sprintf("%v", this.UID) + `,`,
-		`ConditionalAuthorization:` + strings.Replace(this.ConditionalAuthorization.String(), "ConditionalAuthorizationOptions", "ConditionalAuthorizationOptions", 1) + `,`,
+		`AuthorizationOptions:` + strings.Replace(this.AuthorizationOptions.String(), "AuthorizationOptions", "AuthorizationOptions", 1) + `,`,
 		`}`,
 	}, "")
 	return s
@@ -2040,21 +1999,9 @@ func (this *UnconditionalDecision) String() string {
 	if this == nil {
 		return "nil"
 	}
-	keysForAuditAnnotations := make([]string, 0, len(this.AuditAnnotations))
-	for k := range this.AuditAnnotations {
-		keysForAuditAnnotations = append(keysForAuditAnnotations, k)
-	}
-	sort.Strings(keysForAuditAnnotations)
-	mapStringForAuditAnnotations := "map[string]string{"
-	for _, k := range keysForAuditAnnotations {
-		mapStringForAuditAnnotations += fmt.Sprintf("%v: %v,", k, this.AuditAnnotations[k])
-	}
-	mapStringForAuditAnnotations += "}"
 	s := strings.Join([]string{`&UnconditionalDecision{`,
 		`Reason:` + fmt.Sprintf("%v", this.Reason) + `,`,
 		`EvaluationError:` + fmt.Sprintf("%v", this.EvaluationError) + `,`,
-		`AuditAnnotations:` + mapStringForAuditAnnotations + `,`,
-		`Warnings:` + fmt.Sprintf("%v", this.Warnings) + `,`,
 		`}`,
 	}, "")
 	return s
@@ -2066,6 +2013,88 @@ func valueToStringGenerated(v interface{}) string {
 	}
 	pv := reflect.Indirect(rv).Interface()
 	return fmt.Sprintf("*%v", pv)
+}
+func (m *AuthorizationOptions) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowGenerated
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: AuthorizationOptions: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: AuthorizationOptions: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field HandledDecisionTypes", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGenerated
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthGenerated
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthGenerated
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.HandledDecisionTypes = append(m.HandledDecisionTypes, ConditionsAwareDecisionType(dAtA[iNdEx:postIndex]))
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipGenerated(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthGenerated
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
 }
 func (m *Condition) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
@@ -2224,76 +2253,6 @@ func (m *Condition) Unmarshal(dAtA []byte) error {
 			}
 			m.Description = string(dAtA[iNdEx:postIndex])
 			iNdEx = postIndex
-		default:
-			iNdEx = preIndex
-			skippy, err := skipGenerated(dAtA[iNdEx:])
-			if err != nil {
-				return err
-			}
-			if (skippy < 0) || (iNdEx+skippy) < 0 {
-				return ErrInvalidLengthGenerated
-			}
-			if (iNdEx + skippy) > l {
-				return io.ErrUnexpectedEOF
-			}
-			iNdEx += skippy
-		}
-	}
-
-	if iNdEx > l {
-		return io.ErrUnexpectedEOF
-	}
-	return nil
-}
-func (m *ConditionalAuthorizationOptions) Unmarshal(dAtA []byte) error {
-	l := len(dAtA)
-	iNdEx := 0
-	for iNdEx < l {
-		preIndex := iNdEx
-		var wire uint64
-		for shift := uint(0); ; shift += 7 {
-			if shift >= 64 {
-				return ErrIntOverflowGenerated
-			}
-			if iNdEx >= l {
-				return io.ErrUnexpectedEOF
-			}
-			b := dAtA[iNdEx]
-			iNdEx++
-			wire |= uint64(b&0x7F) << shift
-			if b < 0x80 {
-				break
-			}
-		}
-		fieldNum := int32(wire >> 3)
-		wireType := int(wire & 0x7)
-		if wireType == 4 {
-			return fmt.Errorf("proto: ConditionalAuthorizationOptions: wiretype end group for non-group")
-		}
-		if fieldNum <= 0 {
-			return fmt.Errorf("proto: ConditionalAuthorizationOptions: illegal tag %d (wire type %d)", fieldNum, wire)
-		}
-		switch fieldNum {
-		case 1:
-			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Enabled", wireType)
-			}
-			var v int
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowGenerated
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				v |= int(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			m.Enabled = bool(v != 0)
 		default:
 			iNdEx = preIndex
 			skippy, err := skipGenerated(dAtA[iNdEx:])
@@ -4309,7 +4268,7 @@ func (m *SelfSubjectAccessReviewSpec) Unmarshal(dAtA []byte) error {
 			iNdEx = postIndex
 		case 3:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field ConditionalAuthorization", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field AuthorizationOptions", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -4336,10 +4295,10 @@ func (m *SelfSubjectAccessReviewSpec) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if m.ConditionalAuthorization == nil {
-				m.ConditionalAuthorization = &ConditionalAuthorizationOptions{}
+			if m.AuthorizationOptions == nil {
+				m.AuthorizationOptions = &AuthorizationOptions{}
 			}
-			if err := m.ConditionalAuthorization.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.AuthorizationOptions.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -5072,7 +5031,7 @@ func (m *SubjectAccessReviewSpec) Unmarshal(dAtA []byte) error {
 			iNdEx = postIndex
 		case 7:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field ConditionalAuthorization", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field AuthorizationOptions", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -5099,10 +5058,10 @@ func (m *SubjectAccessReviewSpec) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if m.ConditionalAuthorization == nil {
-				m.ConditionalAuthorization = &ConditionalAuthorizationOptions{}
+			if m.AuthorizationOptions == nil {
+				m.AuthorizationOptions = &AuthorizationOptions{}
 			}
-			if err := m.ConditionalAuthorization.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.AuthorizationOptions.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -5579,165 +5538,6 @@ func (m *UnconditionalDecision) Unmarshal(dAtA []byte) error {
 				return io.ErrUnexpectedEOF
 			}
 			m.EvaluationError = string(dAtA[iNdEx:postIndex])
-			iNdEx = postIndex
-		case 3:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field AuditAnnotations", wireType)
-			}
-			var msglen int
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowGenerated
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				msglen |= int(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			if msglen < 0 {
-				return ErrInvalidLengthGenerated
-			}
-			postIndex := iNdEx + msglen
-			if postIndex < 0 {
-				return ErrInvalidLengthGenerated
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			if m.AuditAnnotations == nil {
-				m.AuditAnnotations = make(map[string]string)
-			}
-			var mapkey string
-			var mapvalue string
-			for iNdEx < postIndex {
-				entryPreIndex := iNdEx
-				var wire uint64
-				for shift := uint(0); ; shift += 7 {
-					if shift >= 64 {
-						return ErrIntOverflowGenerated
-					}
-					if iNdEx >= l {
-						return io.ErrUnexpectedEOF
-					}
-					b := dAtA[iNdEx]
-					iNdEx++
-					wire |= uint64(b&0x7F) << shift
-					if b < 0x80 {
-						break
-					}
-				}
-				fieldNum := int32(wire >> 3)
-				if fieldNum == 1 {
-					var stringLenmapkey uint64
-					for shift := uint(0); ; shift += 7 {
-						if shift >= 64 {
-							return ErrIntOverflowGenerated
-						}
-						if iNdEx >= l {
-							return io.ErrUnexpectedEOF
-						}
-						b := dAtA[iNdEx]
-						iNdEx++
-						stringLenmapkey |= uint64(b&0x7F) << shift
-						if b < 0x80 {
-							break
-						}
-					}
-					intStringLenmapkey := int(stringLenmapkey)
-					if intStringLenmapkey < 0 {
-						return ErrInvalidLengthGenerated
-					}
-					postStringIndexmapkey := iNdEx + intStringLenmapkey
-					if postStringIndexmapkey < 0 {
-						return ErrInvalidLengthGenerated
-					}
-					if postStringIndexmapkey > l {
-						return io.ErrUnexpectedEOF
-					}
-					mapkey = string(dAtA[iNdEx:postStringIndexmapkey])
-					iNdEx = postStringIndexmapkey
-				} else if fieldNum == 2 {
-					var stringLenmapvalue uint64
-					for shift := uint(0); ; shift += 7 {
-						if shift >= 64 {
-							return ErrIntOverflowGenerated
-						}
-						if iNdEx >= l {
-							return io.ErrUnexpectedEOF
-						}
-						b := dAtA[iNdEx]
-						iNdEx++
-						stringLenmapvalue |= uint64(b&0x7F) << shift
-						if b < 0x80 {
-							break
-						}
-					}
-					intStringLenmapvalue := int(stringLenmapvalue)
-					if intStringLenmapvalue < 0 {
-						return ErrInvalidLengthGenerated
-					}
-					postStringIndexmapvalue := iNdEx + intStringLenmapvalue
-					if postStringIndexmapvalue < 0 {
-						return ErrInvalidLengthGenerated
-					}
-					if postStringIndexmapvalue > l {
-						return io.ErrUnexpectedEOF
-					}
-					mapvalue = string(dAtA[iNdEx:postStringIndexmapvalue])
-					iNdEx = postStringIndexmapvalue
-				} else {
-					iNdEx = entryPreIndex
-					skippy, err := skipGenerated(dAtA[iNdEx:])
-					if err != nil {
-						return err
-					}
-					if (skippy < 0) || (iNdEx+skippy) < 0 {
-						return ErrInvalidLengthGenerated
-					}
-					if (iNdEx + skippy) > postIndex {
-						return io.ErrUnexpectedEOF
-					}
-					iNdEx += skippy
-				}
-			}
-			m.AuditAnnotations[mapkey] = mapvalue
-			iNdEx = postIndex
-		case 4:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Warnings", wireType)
-			}
-			var stringLen uint64
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowGenerated
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				stringLen |= uint64(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			intStringLen := int(stringLen)
-			if intStringLen < 0 {
-				return ErrInvalidLengthGenerated
-			}
-			postIndex := iNdEx + intStringLen
-			if postIndex < 0 {
-				return ErrInvalidLengthGenerated
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			m.Warnings = append(m.Warnings, string(dAtA[iNdEx:postIndex]))
 			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
