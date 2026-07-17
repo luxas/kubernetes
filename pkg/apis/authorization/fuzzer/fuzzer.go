@@ -22,24 +22,5 @@ import (
 
 // Funcs returns the fuzzer functions for the authorization api group.
 var Funcs = func(codecs runtimeserializer.CodecFactory) []interface{} {
-	return []interface{}{
-		/*// Sort field names consistently in the RawExtension JSON encoding
-		func(obj *authorizationapi.AuthorizationConditionsReview, c randfill.Continue) {
-			c.FillNoCustom(obj)
-			if obj.Request != nil && obj.Request.AdmissionRequest != nil {
-				fuzzer.NormalizeJSONRawExtension(&obj.Request.AdmissionRequest.Object)
-				fuzzer.NormalizeJSONRawExtension(&obj.Request.AdmissionRequest.OldObject)
-				fuzzer.NormalizeJSONRawExtension(&obj.Request.AdmissionRequest.Options)
-			}
-		},
-		// Sort field names consistently in the RawExtension JSON encoding
-		func(obj *authorizationv1alpha1.AuthorizationConditionsReview, c randfill.Continue) {
-			c.FillNoCustom(obj)
-			if obj.Request != nil && obj.Request.AdmissionRequest != nil {
-				fuzzer.NormalizeJSONRawExtension(&obj.Request.AdmissionRequest.Object)
-				fuzzer.NormalizeJSONRawExtension(&obj.Request.AdmissionRequest.OldObject)
-				fuzzer.NormalizeJSONRawExtension(&obj.Request.AdmissionRequest.Options)
-			}
-		},*/
-	}
+	return []interface{}{}
 }
