@@ -14,14 +14,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// +k8s:conversion-gen=k8s.io/kubernetes/pkg/apis/authorization
-// +k8s:conversion-gen-external-types=k8s.io/api/authorization/v1alpha1
-// +k8s:defaulter-gen=false
-// +k8s:validation-gen=false
+// +k8s:conversion-gen=false
+// +k8s:defaulter-gen=TypeMeta
+// +k8s:defaulter-gen-input=k8s.io/api/authorization/v1beta1
+// +k8s:validation-gen=TypesWithField=TypeMeta
+// +k8s:validation-gen-input=k8s.io/api/authorization/v1beta1
 
 // +groupName=authorization.k8s.io
 
-package v1alpha1
-
-// Validations and defaulting are defined in k8s.io/apiserver/pkg/apis/authorization/v1alpha1 and thus need to be imported below to make the init() fire
-import _ "k8s.io/apiserver/pkg/apis/authorization/v1alpha1"
+// Package v1beta1 registers the validation and defaulting functions into the k8s.io/api/authorization/v1beta1 SchemeBuilder.
+package v1beta1

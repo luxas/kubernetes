@@ -20,16 +20,17 @@ import (
 	"context"
 	"fmt"
 
+	authorizationv1 "k8s.io/api/authorization/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
+	authorizationvalidation "k8s.io/apiserver/pkg/apis/authorization/validation"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	genericfeatures "k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/registry/rest"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	authorizationapi "k8s.io/kubernetes/pkg/apis/authorization"
-	authorizationvalidation "k8s.io/kubernetes/pkg/apis/authorization/validation"
 	authorizationutil "k8s.io/kubernetes/pkg/registry/authorization/util"
 )
 
@@ -78,7 +79,12 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		subjectAccessReview.Spec.AuthorizationOptions = nil
 	}
 
-	if errs := authorizationvalidation.ValidateSubjectAccessReviewCreate(ctx, r.scheme, subjectAccessReview); len(errs) > 0 {
+	subjectAccessReviewV1 := &authorizationv1.SubjectAccessReview{}
+	if err := r.scheme.Convert(subjectAccessReview, subjectAccessReviewV1, nil); err != nil {
+		return nil, fmt.Errorf("unexpected, could not convert internal SubjectAccessReview to v1: %w", err)
+	}
+
+	if errs := authorizationvalidation.ValidateSubjectAccessReviewCreate(ctx, r.scheme, subjectAccessReviewV1); len(errs) > 0 {
 		return nil, apierrors.NewInvalid(authorizationapi.Kind(subjectAccessReview.Kind), "", errs)
 	}
 

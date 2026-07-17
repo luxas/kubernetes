@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"strings"
 
+	authorizationv1 "k8s.io/api/authorization/v1"
+	authorizationv1alpha1 "k8s.io/api/authorization/v1alpha1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/api/validate/content"
@@ -32,7 +34,6 @@ import (
 	genericfeatures "k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/registry/rest"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
-	authorizationapi "k8s.io/kubernetes/pkg/apis/authorization"
 )
 
 // sarValidationConfig returns the declarative validation config to use for
@@ -50,7 +51,7 @@ func sarValidationConfig() rest.DeclarativeValidationConfig {
 
 // ValidateSubjectAccessReviewSpec validates a SubjectAccessReviewSpec and returns an
 // ErrorList with any errors.
-func ValidateSubjectAccessReviewSpec(spec authorizationapi.SubjectAccessReviewSpec, fldPath *field.Path) field.ErrorList {
+func ValidateSubjectAccessReviewSpec(spec authorizationv1.SubjectAccessReviewSpec, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 	if spec.ResourceAttributes != nil && spec.NonResourceAttributes != nil {
 		allErrs = append(allErrs, field.Invalid(fldPath, spec.NonResourceAttributes, `exactly one of nonResourceAttributes or resourceAttributes must be specified`).WithOrigin("union").MarkCoveredByDeclarative())
@@ -68,7 +69,7 @@ func ValidateSubjectAccessReviewSpec(spec authorizationapi.SubjectAccessReviewSp
 
 // ValidateSelfSubjectAccessReviewSpec validates a SelfSubjectAccessReviewSpec and returns an
 // ErrorList with any errors.
-func ValidateSelfSubjectAccessReviewSpec(spec authorizationapi.SelfSubjectAccessReviewSpec, fldPath *field.Path) field.ErrorList {
+func ValidateSelfSubjectAccessReviewSpec(spec authorizationv1.SelfSubjectAccessReviewSpec, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 	if spec.ResourceAttributes != nil && spec.NonResourceAttributes != nil {
 		allErrs = append(allErrs, field.Invalid(fldPath, spec.NonResourceAttributes, `exactly one of nonResourceAttributes or resourceAttributes must be specified`).WithOrigin("union").MarkCoveredByDeclarative())
@@ -83,7 +84,7 @@ func ValidateSelfSubjectAccessReviewSpec(spec authorizationapi.SelfSubjectAccess
 
 // ValidateSubjectAccessReview validates a SubjectAccessReview and returns an
 // ErrorList with any errors.
-func ValidateSubjectAccessReview(sar *authorizationapi.SubjectAccessReview) field.ErrorList {
+func ValidateSubjectAccessReview(sar *authorizationv1.SubjectAccessReview) field.ErrorList {
 	allErrs := ValidateSubjectAccessReviewSpec(sar.Spec, field.NewPath("spec"))
 	allErrs = append(allErrs, ValidateConditionsAwareDecision(sar.Status.ConditionalDecision, field.NewPath("status", "conditionalDecision"))...)
 	objectMetaShallowCopy := sar.ObjectMeta
@@ -96,7 +97,7 @@ func ValidateSubjectAccessReview(sar *authorizationapi.SubjectAccessReview) fiel
 
 // ValidateSelfSubjectAccessReview validates a SelfSubjectAccessReview and returns an
 // ErrorList with any errors.
-func ValidateSelfSubjectAccessReview(sar *authorizationapi.SelfSubjectAccessReview) field.ErrorList {
+func ValidateSelfSubjectAccessReview(sar *authorizationv1.SelfSubjectAccessReview) field.ErrorList {
 	allErrs := ValidateSelfSubjectAccessReviewSpec(sar.Spec, field.NewPath("spec"))
 	allErrs = append(allErrs, ValidateConditionsAwareDecision(sar.Status.ConditionalDecision, field.NewPath("status", "conditionalDecision"))...)
 	objectMetaShallowCopy := sar.ObjectMeta
@@ -109,7 +110,7 @@ func ValidateSelfSubjectAccessReview(sar *authorizationapi.SelfSubjectAccessRevi
 
 // ValidateLocalSubjectAccessReview validates a LocalSubjectAccessReview and returns an
 // ErrorList with any errors.
-func ValidateLocalSubjectAccessReview(sar *authorizationapi.LocalSubjectAccessReview) field.ErrorList {
+func ValidateLocalSubjectAccessReview(sar *authorizationv1.LocalSubjectAccessReview) field.ErrorList {
 	allErrs := ValidateSubjectAccessReviewSpec(sar.Spec, field.NewPath("spec"))
 	allErrs = append(allErrs, ValidateConditionsAwareDecision(sar.Status.ConditionalDecision, field.NewPath("status", "conditionalDecision"))...)
 
@@ -130,7 +131,7 @@ func ValidateLocalSubjectAccessReview(sar *authorizationapi.LocalSubjectAccessRe
 	return allErrs
 }
 
-func validateResourceAttributes(resourceAttributes *authorizationapi.ResourceAttributes, fldPath *field.Path) field.ErrorList {
+func validateResourceAttributes(resourceAttributes *authorizationv1.ResourceAttributes, fldPath *field.Path) field.ErrorList {
 	if resourceAttributes == nil {
 		return nil
 	}
@@ -142,7 +143,7 @@ func validateResourceAttributes(resourceAttributes *authorizationapi.ResourceAtt
 	return allErrs
 }
 
-func validateFieldSelectorAttributes(selector *authorizationapi.FieldSelectorAttributes, fldPath *field.Path) field.ErrorList {
+func validateFieldSelectorAttributes(selector *authorizationv1.FieldSelectorAttributes, fldPath *field.Path) field.ErrorList {
 	if selector == nil {
 		return nil
 	}
@@ -164,7 +165,7 @@ func validateFieldSelectorAttributes(selector *authorizationapi.FieldSelectorAtt
 	return allErrs
 }
 
-func validateLabelSelectorAttributes(selector *authorizationapi.LabelSelectorAttributes, fldPath *field.Path) field.ErrorList {
+func validateLabelSelectorAttributes(selector *authorizationv1.LabelSelectorAttributes, fldPath *field.Path) field.ErrorList {
 	if selector == nil {
 		return nil
 	}
@@ -188,7 +189,7 @@ func validateLabelSelectorAttributes(selector *authorizationapi.LabelSelectorAtt
 
 // ValidateAuthorizationConditionsReview validates a AuthorizationConditionsReview and returns an
 // ErrorList with any errors.
-func ValidateAuthorizationConditionsReview(acr *authorizationapi.AuthorizationConditionsReview) field.ErrorList {
+func ValidateAuthorizationConditionsReview(acr *authorizationv1alpha1.AuthorizationConditionsReview) field.ErrorList {
 	allErrs := ValidateAuthorizationConditionsRequest(acr.Request, field.NewPath("request"))
 	allErrs = append(allErrs, ValidateAuthorizationConditionsResponse(acr.Response, field.NewPath("response"))...)
 	objectMetaShallowCopy := acr.ObjectMeta
@@ -201,7 +202,7 @@ func ValidateAuthorizationConditionsReview(acr *authorizationapi.AuthorizationCo
 
 // ValidateAuthorizationConditionsRequest validates a AuthorizationConditionsRequest and returns an
 // ErrorList with any errors.
-func ValidateAuthorizationConditionsRequest(req *authorizationapi.AuthorizationConditionsRequest, fldPath *field.Path) field.ErrorList {
+func ValidateAuthorizationConditionsRequest(req *authorizationv1alpha1.AuthorizationConditionsRequest, fldPath *field.Path) field.ErrorList {
 	allErrs := ValidateConditionsAwareDecision(&req.Decision, fldPath.Child("decision"))
 	// TODO(luxas): AdmissionReviewRequest validation here
 	return allErrs
@@ -209,7 +210,7 @@ func ValidateAuthorizationConditionsRequest(req *authorizationapi.AuthorizationC
 
 // ValidateAuthorizationConditionsResponse validates a AuthorizationConditionsResponse and returns an
 // ErrorList with any errors.
-func ValidateAuthorizationConditionsResponse(resp *authorizationapi.AuthorizationConditionsResponse, fldPath *field.Path) field.ErrorList {
+func ValidateAuthorizationConditionsResponse(resp *authorizationv1alpha1.AuthorizationConditionsResponse, fldPath *field.Path) field.ErrorList {
 	allErrs := ValidateConditionsAwareDecision(&resp.Decision, fldPath.Child("decision"))
 	return allErrs
 }
@@ -218,7 +219,7 @@ func ValidateAuthorizationConditionsResponse(resp *authorizationapi.Authorizatio
 // ErrorList with any errors. Only the fields not fully covered by Standard declarative
 // validation are enforced here; every emitted error mirrors a declarative Beta rule and
 // is marked CoveredByDeclarative so the equivalence check treats them as one.
-func ValidateConditionsAwareDecision(decision *authorizationapi.ConditionsAwareDecision, fldPath *field.Path) field.ErrorList {
+func ValidateConditionsAwareDecision(decision *authorizationv1.ConditionsAwareDecision, fldPath *field.Path) field.ErrorList {
 	if decision == nil {
 		return nil
 	}
@@ -232,7 +233,7 @@ func ValidateConditionsAwareDecision(decision *authorizationapi.ConditionsAwareD
 // ValidateConditionsMap validates a ConditionsMap by descending into each condition. It
 // only fires Beta-shadowed errors (via ValidateCondition); the Standard rules on the
 // slices themselves are already covered by declarative validation in every mode.
-func ValidateConditionsMap(conditionsMap *authorizationapi.ConditionsMap, fldPath *field.Path) field.ErrorList {
+func ValidateConditionsMap(conditionsMap *authorizationv1.ConditionsMap, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 
 	for i := range conditionsMap.DenyConditions {
@@ -255,7 +256,7 @@ func ValidateConditionsMap(conditionsMap *authorizationapi.ConditionsMap, fldPat
 // condition and description) so equivalence tests can rely on the errors appearing
 // when the DeclarativeValidationBeta gate is off. Each error is CoveredByDeclarative
 // so the composition layer folds it with its declarative counterpart.
-func ValidateCondition(condition *authorizationapi.Condition, fldPath *field.Path) field.ErrorList {
+func ValidateCondition(condition *authorizationv1.Condition, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 
 	// TODO(luxas): Preferably support IsDomainPrefixedKey directly in declarative validation instead of this manual validation.
@@ -292,7 +293,7 @@ func validateDomainPrefixSeparator(fldPath *field.Path, key string) field.ErrorL
 
 // ValidateSubjectAccessReviewCreate is the single composition of handwritten and declarative
 // SubjectAccessReview validation.
-func ValidateSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.Scheme, sar *authorizationapi.SubjectAccessReview) field.ErrorList {
+func ValidateSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.Scheme, sar *authorizationv1.SubjectAccessReview) field.ErrorList {
 	errs := ValidateSubjectAccessReview(sar)
 	dv := rest.DeclarativeValidation{Scheme: scheme}
 	return dv.ValidateDeclaratively(ctx, sar, nil, errs, operation.Create, sarValidationConfig())
@@ -300,7 +301,7 @@ func ValidateSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.Sche
 
 // ValidateSelfSubjectAccessReviewCreate is the single composition of handwritten and declarative
 // SelfSubjectAccessReview validation.
-func ValidateSelfSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.Scheme, sar *authorizationapi.SelfSubjectAccessReview) field.ErrorList {
+func ValidateSelfSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.Scheme, sar *authorizationv1.SelfSubjectAccessReview) field.ErrorList {
 	errs := ValidateSelfSubjectAccessReview(sar)
 	dv := rest.DeclarativeValidation{Scheme: scheme}
 	return dv.ValidateDeclaratively(ctx, sar, nil, errs, operation.Create, sarValidationConfig())
@@ -308,7 +309,7 @@ func ValidateSelfSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.
 
 // ValidateLocalSubjectAccessReviewCreate is the single composition of handwritten and declarative
 // LocalSubjectAccessReview validation.
-func ValidateLocalSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.Scheme, sar *authorizationapi.LocalSubjectAccessReview) field.ErrorList {
+func ValidateLocalSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.Scheme, sar *authorizationv1.LocalSubjectAccessReview) field.ErrorList {
 	errs := ValidateLocalSubjectAccessReview(sar)
 	dv := rest.DeclarativeValidation{Scheme: scheme}
 	return dv.ValidateDeclaratively(ctx, sar, nil, errs, operation.Create, sarValidationConfig())
@@ -316,7 +317,7 @@ func ValidateLocalSubjectAccessReviewCreate(ctx context.Context, scheme *runtime
 
 // ValidateAuthorizationConditionsReviewCreate is the single composition of handwritten and declarative
 // AuthorizationConditionsReview validation.
-func ValidateAuthorizationConditionsReviewCreate(ctx context.Context, scheme *runtime.Scheme, acr *authorizationapi.AuthorizationConditionsReview) field.ErrorList {
+func ValidateAuthorizationConditionsReviewCreate(ctx context.Context, scheme *runtime.Scheme, acr *authorizationv1alpha1.AuthorizationConditionsReview) field.ErrorList {
 	errs := ValidateAuthorizationConditionsReview(acr)
 	dv := rest.DeclarativeValidation{Scheme: scheme}
 	return dv.ValidateDeclaratively(ctx, acr, nil, errs, operation.Create, sarValidationConfig())

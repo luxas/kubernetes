@@ -20,36 +20,37 @@ import (
 	"strings"
 	"testing"
 
+	authorizationv1 "k8s.io/api/authorization/v1"
+	authorizationv1alpha1 "k8s.io/api/authorization/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
-	authorizationapi "k8s.io/kubernetes/pkg/apis/authorization"
 )
 
 func TestValidateSARSpec(t *testing.T) {
-	successCases := []authorizationapi.SubjectAccessReviewSpec{
-		{ResourceAttributes: &authorizationapi.ResourceAttributes{}, User: "me"},
-		{NonResourceAttributes: &authorizationapi.NonResourceAttributes{}, Groups: []string{"my-group"}},
+	successCases := []authorizationv1.SubjectAccessReviewSpec{
+		{ResourceAttributes: &authorizationv1.ResourceAttributes{}, User: "me"},
+		{NonResourceAttributes: &authorizationv1.NonResourceAttributes{}, Groups: []string{"my-group"}},
 		{ // field raw selector
 			User: "me",
-			ResourceAttributes: &authorizationapi.ResourceAttributes{
-				FieldSelector: &authorizationapi.FieldSelectorAttributes{
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				FieldSelector: &authorizationv1.FieldSelectorAttributes{
 					RawSelector: "***foo",
 				},
 			},
 		},
 		{ // label raw selector
 			User: "me",
-			ResourceAttributes: &authorizationapi.ResourceAttributes{
-				LabelSelector: &authorizationapi.LabelSelectorAttributes{
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				LabelSelector: &authorizationv1.LabelSelectorAttributes{
 					RawSelector: "***foo",
 				},
 			},
 		},
 		{ // unknown field operator
 			User: "me",
-			ResourceAttributes: &authorizationapi.ResourceAttributes{
-				FieldSelector: &authorizationapi.FieldSelectorAttributes{
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				FieldSelector: &authorizationv1.FieldSelectorAttributes{
 					Requirements: []metav1.FieldSelectorRequirement{
 						{
 							Key:      "k",
@@ -62,8 +63,8 @@ func TestValidateSARSpec(t *testing.T) {
 		},
 		{ // unknown label operator
 			User: "me",
-			ResourceAttributes: &authorizationapi.ResourceAttributes{
-				LabelSelector: &authorizationapi.LabelSelectorAttributes{
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				LabelSelector: &authorizationv1.LabelSelectorAttributes{
 					Requirements: []metav1.LabelSelectorRequirement{
 						{
 							Key:      "k",
@@ -83,32 +84,32 @@ func TestValidateSARSpec(t *testing.T) {
 
 	errorCases := []struct {
 		name string
-		obj  authorizationapi.SubjectAccessReviewSpec
+		obj  authorizationv1.SubjectAccessReviewSpec
 		msg  string
 	}{{
 		name: "neither request",
-		obj:  authorizationapi.SubjectAccessReviewSpec{User: "me"},
+		obj:  authorizationv1.SubjectAccessReviewSpec{User: "me"},
 		msg:  "exactly one of nonResourceAttributes or resourceAttributes must be specified",
 	}, {
 		name: "both requests",
-		obj: authorizationapi.SubjectAccessReviewSpec{
-			ResourceAttributes:    &authorizationapi.ResourceAttributes{},
-			NonResourceAttributes: &authorizationapi.NonResourceAttributes{},
+		obj: authorizationv1.SubjectAccessReviewSpec{
+			ResourceAttributes:    &authorizationv1.ResourceAttributes{},
+			NonResourceAttributes: &authorizationv1.NonResourceAttributes{},
 			User:                  "me",
 		},
 		msg: "exactly one of nonResourceAttributes or resourceAttributes must be specified",
 	}, {
 		name: "no subject",
-		obj: authorizationapi.SubjectAccessReviewSpec{
-			ResourceAttributes: &authorizationapi.ResourceAttributes{},
+		obj: authorizationv1.SubjectAccessReviewSpec{
+			ResourceAttributes: &authorizationv1.ResourceAttributes{},
 		},
 		msg: `spec.user: Invalid value: "": at least one of user or group must be specified`,
 	}, {
 		name: "resource attributes: field selector specify both",
-		obj: authorizationapi.SubjectAccessReviewSpec{
+		obj: authorizationv1.SubjectAccessReviewSpec{
 			User: "me",
-			ResourceAttributes: &authorizationapi.ResourceAttributes{
-				FieldSelector: &authorizationapi.FieldSelectorAttributes{
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				FieldSelector: &authorizationv1.FieldSelectorAttributes{
 					RawSelector: "foo",
 					Requirements: []metav1.FieldSelectorRequirement{
 						{},
@@ -119,19 +120,19 @@ func TestValidateSARSpec(t *testing.T) {
 		msg: `spec.resourceAttributes.fieldSelector.rawSelector: Invalid value: "foo": may not specified at the same time as requirements`,
 	}, {
 		name: "resource attributes: field selector specify neither",
-		obj: authorizationapi.SubjectAccessReviewSpec{
+		obj: authorizationv1.SubjectAccessReviewSpec{
 			User: "me",
-			ResourceAttributes: &authorizationapi.ResourceAttributes{
-				FieldSelector: &authorizationapi.FieldSelectorAttributes{},
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				FieldSelector: &authorizationv1.FieldSelectorAttributes{},
 			},
 		},
 		msg: `spec.resourceAttributes.fieldSelector.requirements: Required value: when spec.resourceAttributes.fieldSelector is specified, requirements or rawSelector is required`,
 	}, {
 		name: "resource attributes: field selector no key",
-		obj: authorizationapi.SubjectAccessReviewSpec{
+		obj: authorizationv1.SubjectAccessReviewSpec{
 			User: "me",
-			ResourceAttributes: &authorizationapi.ResourceAttributes{
-				FieldSelector: &authorizationapi.FieldSelectorAttributes{
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				FieldSelector: &authorizationv1.FieldSelectorAttributes{
 					Requirements: []metav1.FieldSelectorRequirement{
 						{
 							Key: "",
@@ -143,10 +144,10 @@ func TestValidateSARSpec(t *testing.T) {
 		msg: `spec.resourceAttributes.fieldSelector.requirements[0].key: Required value: must be specified`,
 	}, {
 		name: "resource attributes: field selector no value for in",
-		obj: authorizationapi.SubjectAccessReviewSpec{
+		obj: authorizationv1.SubjectAccessReviewSpec{
 			User: "me",
-			ResourceAttributes: &authorizationapi.ResourceAttributes{
-				FieldSelector: &authorizationapi.FieldSelectorAttributes{
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				FieldSelector: &authorizationv1.FieldSelectorAttributes{
 					Requirements: []metav1.FieldSelectorRequirement{
 						{
 							Key:      "k",
@@ -160,10 +161,10 @@ func TestValidateSARSpec(t *testing.T) {
 		msg: "spec.resourceAttributes.fieldSelector.requirements[0].values: Required value: must be specified when `operator` is 'In' or 'NotIn'",
 	}, {
 		name: "resource attributes: field selector no value for not in",
-		obj: authorizationapi.SubjectAccessReviewSpec{
+		obj: authorizationv1.SubjectAccessReviewSpec{
 			User: "me",
-			ResourceAttributes: &authorizationapi.ResourceAttributes{
-				FieldSelector: &authorizationapi.FieldSelectorAttributes{
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				FieldSelector: &authorizationv1.FieldSelectorAttributes{
 					Requirements: []metav1.FieldSelectorRequirement{
 						{
 							Key:      "k",
@@ -177,10 +178,10 @@ func TestValidateSARSpec(t *testing.T) {
 		msg: "spec.resourceAttributes.fieldSelector.requirements[0].values: Required value: must be specified when `operator` is 'In' or 'NotIn'",
 	}, {
 		name: "resource attributes: field selector values for exists",
-		obj: authorizationapi.SubjectAccessReviewSpec{
+		obj: authorizationv1.SubjectAccessReviewSpec{
 			User: "me",
-			ResourceAttributes: &authorizationapi.ResourceAttributes{
-				FieldSelector: &authorizationapi.FieldSelectorAttributes{
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				FieldSelector: &authorizationv1.FieldSelectorAttributes{
 					Requirements: []metav1.FieldSelectorRequirement{
 						{
 							Key:      "k",
@@ -194,10 +195,10 @@ func TestValidateSARSpec(t *testing.T) {
 		msg: "spec.resourceAttributes.fieldSelector.requirements[0].values: Forbidden: may not be specified when `operator` is 'Exists' or 'DoesNotExist'",
 	}, {
 		name: "resource attributes: field selector values for not exists",
-		obj: authorizationapi.SubjectAccessReviewSpec{
+		obj: authorizationv1.SubjectAccessReviewSpec{
 			User: "me",
-			ResourceAttributes: &authorizationapi.ResourceAttributes{
-				FieldSelector: &authorizationapi.FieldSelectorAttributes{
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				FieldSelector: &authorizationv1.FieldSelectorAttributes{
 					Requirements: []metav1.FieldSelectorRequirement{
 						{
 							Key:      "k",
@@ -211,10 +212,10 @@ func TestValidateSARSpec(t *testing.T) {
 		msg: "spec.resourceAttributes.fieldSelector.requirements[0].values: Forbidden: may not be specified when `operator` is 'Exists' or 'DoesNotExist'",
 	}, {
 		name: "resource attributes: label selector specify both",
-		obj: authorizationapi.SubjectAccessReviewSpec{
+		obj: authorizationv1.SubjectAccessReviewSpec{
 			User: "me",
-			ResourceAttributes: &authorizationapi.ResourceAttributes{
-				LabelSelector: &authorizationapi.LabelSelectorAttributes{
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				LabelSelector: &authorizationv1.LabelSelectorAttributes{
 					RawSelector: "foo",
 					Requirements: []metav1.LabelSelectorRequirement{
 						{},
@@ -225,19 +226,19 @@ func TestValidateSARSpec(t *testing.T) {
 		msg: `spec.resourceAttributes.labelSelector.rawSelector: Invalid value: "foo": may not specified at the same time as requirements`,
 	}, {
 		name: "resource attributes: label selector specify neither",
-		obj: authorizationapi.SubjectAccessReviewSpec{
+		obj: authorizationv1.SubjectAccessReviewSpec{
 			User: "me",
-			ResourceAttributes: &authorizationapi.ResourceAttributes{
-				LabelSelector: &authorizationapi.LabelSelectorAttributes{},
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				LabelSelector: &authorizationv1.LabelSelectorAttributes{},
 			},
 		},
 		msg: `spec.resourceAttributes.labelSelector.requirements: Required value: when spec.resourceAttributes.labelSelector is specified, requirements or rawSelector is required`,
 	}, {
 		name: "resource attributes: label selector no key",
-		obj: authorizationapi.SubjectAccessReviewSpec{
+		obj: authorizationv1.SubjectAccessReviewSpec{
 			User: "me",
-			ResourceAttributes: &authorizationapi.ResourceAttributes{
-				LabelSelector: &authorizationapi.LabelSelectorAttributes{
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				LabelSelector: &authorizationv1.LabelSelectorAttributes{
 					Requirements: []metav1.LabelSelectorRequirement{
 						{
 							Key: "",
@@ -249,10 +250,10 @@ func TestValidateSARSpec(t *testing.T) {
 		msg: `spec.resourceAttributes.labelSelector.requirements[0].key: Invalid value: "": name part must be non-empty`,
 	}, {
 		name: "resource attributes: label selector invalid label name",
-		obj: authorizationapi.SubjectAccessReviewSpec{
+		obj: authorizationv1.SubjectAccessReviewSpec{
 			User: "me",
-			ResourceAttributes: &authorizationapi.ResourceAttributes{
-				LabelSelector: &authorizationapi.LabelSelectorAttributes{
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				LabelSelector: &authorizationv1.LabelSelectorAttributes{
 					Requirements: []metav1.LabelSelectorRequirement{
 						{
 							Key: "()foo",
@@ -264,10 +265,10 @@ func TestValidateSARSpec(t *testing.T) {
 		msg: `spec.resourceAttributes.labelSelector.requirements[0].key: Invalid value: "()foo": name part must consist of alphanumeric characters, '-', '_' or '.', and must start and end with an alphanumeric character (e.g. 'MyName',  or 'my.name',  or '123-abc', regex used for validation is '([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9]')`,
 	}, {
 		name: "resource attributes: label selector no value for in",
-		obj: authorizationapi.SubjectAccessReviewSpec{
+		obj: authorizationv1.SubjectAccessReviewSpec{
 			User: "me",
-			ResourceAttributes: &authorizationapi.ResourceAttributes{
-				LabelSelector: &authorizationapi.LabelSelectorAttributes{
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				LabelSelector: &authorizationv1.LabelSelectorAttributes{
 					Requirements: []metav1.LabelSelectorRequirement{
 						{
 							Key:      "k",
@@ -281,10 +282,10 @@ func TestValidateSARSpec(t *testing.T) {
 		msg: "spec.resourceAttributes.labelSelector.requirements[0].values: Required value: must be specified when `operator` is 'In' or 'NotIn'",
 	}, {
 		name: "resource attributes: label selector no value for not in",
-		obj: authorizationapi.SubjectAccessReviewSpec{
+		obj: authorizationv1.SubjectAccessReviewSpec{
 			User: "me",
-			ResourceAttributes: &authorizationapi.ResourceAttributes{
-				LabelSelector: &authorizationapi.LabelSelectorAttributes{
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				LabelSelector: &authorizationv1.LabelSelectorAttributes{
 					Requirements: []metav1.LabelSelectorRequirement{
 						{
 							Key:      "k",
@@ -298,10 +299,10 @@ func TestValidateSARSpec(t *testing.T) {
 		msg: "spec.resourceAttributes.labelSelector.requirements[0].values: Required value: must be specified when `operator` is 'In' or 'NotIn'",
 	}, {
 		name: "resource attributes: label selector values for exists",
-		obj: authorizationapi.SubjectAccessReviewSpec{
+		obj: authorizationv1.SubjectAccessReviewSpec{
 			User: "me",
-			ResourceAttributes: &authorizationapi.ResourceAttributes{
-				LabelSelector: &authorizationapi.LabelSelectorAttributes{
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				LabelSelector: &authorizationv1.LabelSelectorAttributes{
 					Requirements: []metav1.LabelSelectorRequirement{
 						{
 							Key:      "k",
@@ -315,10 +316,10 @@ func TestValidateSARSpec(t *testing.T) {
 		msg: "spec.resourceAttributes.labelSelector.requirements[0].values: Forbidden: may not be specified when `operator` is 'Exists' or 'DoesNotExist'",
 	}, {
 		name: "resource attributes: label selector values for not exists",
-		obj: authorizationapi.SubjectAccessReviewSpec{
+		obj: authorizationv1.SubjectAccessReviewSpec{
 			User: "me",
-			ResourceAttributes: &authorizationapi.ResourceAttributes{
-				LabelSelector: &authorizationapi.LabelSelectorAttributes{
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				LabelSelector: &authorizationv1.LabelSelectorAttributes{
 					Requirements: []metav1.LabelSelectorRequirement{
 						{
 							Key:      "k",
@@ -341,13 +342,13 @@ func TestValidateSARSpec(t *testing.T) {
 				t.Errorf("%s: unexpected error: %q, expected: %q", c.name, errs[0], c.msg)
 			}
 
-			errs = ValidateSubjectAccessReview(&authorizationapi.SubjectAccessReview{Spec: c.obj})
+			errs = ValidateSubjectAccessReview(&authorizationv1.SubjectAccessReview{Spec: c.obj})
 			if len(errs) == 0 {
 				t.Errorf("%s: expected failure for %q", c.name, c.msg)
 			} else if !strings.Contains(errs[0].Error(), c.msg) {
 				t.Errorf("%s: unexpected error: %q, expected: %q", c.name, errs[0], c.msg)
 			}
-			errs = ValidateLocalSubjectAccessReview(&authorizationapi.LocalSubjectAccessReview{Spec: c.obj})
+			errs = ValidateLocalSubjectAccessReview(&authorizationv1.LocalSubjectAccessReview{Spec: c.obj})
 			if len(errs) == 0 {
 				t.Errorf("%s: expected failure for %q", c.name, c.msg)
 			} else if !strings.Contains(errs[0].Error(), c.msg) {
@@ -358,8 +359,8 @@ func TestValidateSARSpec(t *testing.T) {
 }
 
 func TestValidateSelfSAR(t *testing.T) {
-	successCases := []authorizationapi.SelfSubjectAccessReviewSpec{
-		{ResourceAttributes: &authorizationapi.ResourceAttributes{}},
+	successCases := []authorizationv1.SelfSubjectAccessReviewSpec{
+		{ResourceAttributes: &authorizationv1.ResourceAttributes{}},
 	}
 	for _, successCase := range successCases {
 		if errs := ValidateSelfSubjectAccessReviewSpec(successCase, field.NewPath("spec")); len(errs) != 0 {
@@ -369,25 +370,25 @@ func TestValidateSelfSAR(t *testing.T) {
 
 	errorCases := []struct {
 		name string
-		obj  authorizationapi.SelfSubjectAccessReviewSpec
+		obj  authorizationv1.SelfSubjectAccessReviewSpec
 		msg  string
 	}{{
 		name: "neither request",
-		obj:  authorizationapi.SelfSubjectAccessReviewSpec{},
+		obj:  authorizationv1.SelfSubjectAccessReviewSpec{},
 		msg:  "exactly one of nonResourceAttributes or resourceAttributes must be specified",
 	}, {
 		name: "both requests",
-		obj: authorizationapi.SelfSubjectAccessReviewSpec{
-			ResourceAttributes:    &authorizationapi.ResourceAttributes{},
-			NonResourceAttributes: &authorizationapi.NonResourceAttributes{},
+		obj: authorizationv1.SelfSubjectAccessReviewSpec{
+			ResourceAttributes:    &authorizationv1.ResourceAttributes{},
+			NonResourceAttributes: &authorizationv1.NonResourceAttributes{},
 		},
 		msg: "exactly one of nonResourceAttributes or resourceAttributes must be specified",
 	}, {
 		// here we only test one to be sure the function is called.  The more exhaustive suite is tested above.
 		name: "resource attributes: label selector specify both",
-		obj: authorizationapi.SelfSubjectAccessReviewSpec{
-			ResourceAttributes: &authorizationapi.ResourceAttributes{
-				LabelSelector: &authorizationapi.LabelSelectorAttributes{
+		obj: authorizationv1.SelfSubjectAccessReviewSpec{
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				LabelSelector: &authorizationv1.LabelSelectorAttributes{
 					RawSelector: "foo",
 					Requirements: []metav1.LabelSelectorRequirement{
 						{},
@@ -406,7 +407,7 @@ func TestValidateSelfSAR(t *testing.T) {
 			t.Errorf("%s: unexpected error: %q, expected: %q", c.name, errs[0], c.msg)
 		}
 
-		errs = ValidateSelfSubjectAccessReview(&authorizationapi.SelfSubjectAccessReview{Spec: c.obj})
+		errs = ValidateSelfSubjectAccessReview(&authorizationv1.SelfSubjectAccessReview{Spec: c.obj})
 		if len(errs) == 0 {
 			t.Errorf("%s: expected failure for %q", c.name, c.msg)
 		} else if !strings.Contains(errs[0].Error(), c.msg) {
@@ -416,9 +417,9 @@ func TestValidateSelfSAR(t *testing.T) {
 }
 
 func TestValidateLocalSAR(t *testing.T) {
-	successCases := []authorizationapi.LocalSubjectAccessReview{{
-		Spec: authorizationapi.SubjectAccessReviewSpec{
-			ResourceAttributes: &authorizationapi.ResourceAttributes{},
+	successCases := []authorizationv1.LocalSubjectAccessReview{{
+		Spec: authorizationv1.SubjectAccessReviewSpec{
+			ResourceAttributes: &authorizationv1.ResourceAttributes{},
 			User:               "user",
 		},
 	}}
@@ -430,34 +431,34 @@ func TestValidateLocalSAR(t *testing.T) {
 
 	errorCases := []struct {
 		name string
-		obj  *authorizationapi.LocalSubjectAccessReview
+		obj  *authorizationv1.LocalSubjectAccessReview
 		msg  string
 	}{{
 		name: "name",
-		obj: &authorizationapi.LocalSubjectAccessReview{
+		obj: &authorizationv1.LocalSubjectAccessReview{
 			ObjectMeta: metav1.ObjectMeta{Name: "a"},
-			Spec: authorizationapi.SubjectAccessReviewSpec{
-				ResourceAttributes: &authorizationapi.ResourceAttributes{},
+			Spec: authorizationv1.SubjectAccessReviewSpec{
+				ResourceAttributes: &authorizationv1.ResourceAttributes{},
 				User:               "user",
 			},
 		},
 		msg: "must be empty except for namespace",
 	}, {
 		name: "namespace conflict",
-		obj: &authorizationapi.LocalSubjectAccessReview{
+		obj: &authorizationv1.LocalSubjectAccessReview{
 			ObjectMeta: metav1.ObjectMeta{Namespace: "a"},
-			Spec: authorizationapi.SubjectAccessReviewSpec{
-				ResourceAttributes: &authorizationapi.ResourceAttributes{},
+			Spec: authorizationv1.SubjectAccessReviewSpec{
+				ResourceAttributes: &authorizationv1.ResourceAttributes{},
 				User:               "user",
 			},
 		},
 		msg: "must match metadata.namespace",
 	}, {
 		name: "nonresource",
-		obj: &authorizationapi.LocalSubjectAccessReview{
+		obj: &authorizationv1.LocalSubjectAccessReview{
 			ObjectMeta: metav1.ObjectMeta{Namespace: "a"},
-			Spec: authorizationapi.SubjectAccessReviewSpec{
-				NonResourceAttributes: &authorizationapi.NonResourceAttributes{},
+			Spec: authorizationv1.SubjectAccessReviewSpec{
+				NonResourceAttributes: &authorizationv1.NonResourceAttributes{},
 				User:                  "user",
 			},
 		},
@@ -465,11 +466,11 @@ func TestValidateLocalSAR(t *testing.T) {
 	}, {
 		// here we only test one to be sure the function is called.  The more exhaustive suite is tested above.
 		name: "resource attributes: label selector specify both",
-		obj: &authorizationapi.LocalSubjectAccessReview{
-			Spec: authorizationapi.SubjectAccessReviewSpec{
+		obj: &authorizationv1.LocalSubjectAccessReview{
+			Spec: authorizationv1.SubjectAccessReviewSpec{
 				User: "user",
-				ResourceAttributes: &authorizationapi.ResourceAttributes{
-					LabelSelector: &authorizationapi.LabelSelectorAttributes{
+				ResourceAttributes: &authorizationv1.ResourceAttributes{
+					LabelSelector: &authorizationv1.LabelSelectorAttributes{
 						RawSelector: "foo",
 						Requirements: []metav1.LabelSelectorRequirement{
 							{},
@@ -500,87 +501,87 @@ func TestValidateLocalSAR(t *testing.T) {
 // declarative validation (empty ID, invalid label-key format) are intentionally
 // not fired by the handwritten path and are therefore not asserted here.
 func TestValidateAuthorizationConditionsReview(t *testing.T) {
-	emptyDecision := authorizationapi.ConditionsAwareDecision{}
-	validConditionsMap := &authorizationapi.ConditionsMap{
-		DenyConditions:      []authorizationapi.Condition{{ID: "example.com/deny-1", Type: "example.com/type-1"}},
-		NoOpinionConditions: []authorizationapi.Condition{{ID: "example.com/no-op-1"}},
-		AllowConditions:     []authorizationapi.Condition{{ID: "example.com/allow-1", Type: "example.io/allow-type"}},
+	emptyDecision := authorizationv1.ConditionsAwareDecision{}
+	validConditionsMap := &authorizationv1.ConditionsMap{
+		DenyConditions:      []authorizationv1.Condition{{ID: "example.com/deny-1", Type: "example.com/type-1"}},
+		NoOpinionConditions: []authorizationv1.Condition{{ID: "example.com/no-op-1"}},
+		AllowConditions:     []authorizationv1.Condition{{ID: "example.com/allow-1", Type: "example.io/allow-type"}},
 	}
 
 	successCases := []struct {
 		name string
-		obj  authorizationapi.AuthorizationConditionsReview
+		obj  authorizationv1alpha1.AuthorizationConditionsReview
 	}{{
 		name: "empty request and response decisions",
-		obj: authorizationapi.AuthorizationConditionsReview{
-			Request:  &authorizationapi.AuthorizationConditionsRequest{Decision: emptyDecision},
-			Response: &authorizationapi.AuthorizationConditionsResponse{Decision: emptyDecision},
+		obj: authorizationv1alpha1.AuthorizationConditionsReview{
+			Request:  &authorizationv1alpha1.AuthorizationConditionsRequest{Decision: emptyDecision},
+			Response: &authorizationv1alpha1.AuthorizationConditionsResponse{Decision: emptyDecision},
 		},
 	}, {
 		name: "conditions with valid domain-prefixed keys in all buckets",
-		obj: authorizationapi.AuthorizationConditionsReview{
-			Request: &authorizationapi.AuthorizationConditionsRequest{
-				Decision: authorizationapi.ConditionsAwareDecision{ConditionsMap: validConditionsMap},
+		obj: authorizationv1alpha1.AuthorizationConditionsReview{
+			Request: &authorizationv1alpha1.AuthorizationConditionsRequest{
+				Decision: authorizationv1.ConditionsAwareDecision{ConditionsMap: validConditionsMap},
 			},
-			Response: &authorizationapi.AuthorizationConditionsResponse{
-				Decision: authorizationapi.ConditionsAwareDecision{ConditionsMap: validConditionsMap},
+			Response: &authorizationv1alpha1.AuthorizationConditionsResponse{
+				Decision: authorizationv1.ConditionsAwareDecision{ConditionsMap: validConditionsMap},
 			},
 		},
 	}, {
 		name: "condition type unset is allowed",
-		obj: authorizationapi.AuthorizationConditionsReview{
-			Request: &authorizationapi.AuthorizationConditionsRequest{
-				Decision: authorizationapi.ConditionsAwareDecision{
-					ConditionsMap: &authorizationapi.ConditionsMap{
-						AllowConditions: []authorizationapi.Condition{{ID: "example.com/allow"}},
+		obj: authorizationv1alpha1.AuthorizationConditionsReview{
+			Request: &authorizationv1alpha1.AuthorizationConditionsRequest{
+				Decision: authorizationv1.ConditionsAwareDecision{
+					ConditionsMap: &authorizationv1.ConditionsMap{
+						AllowConditions: []authorizationv1.Condition{{ID: "example.com/allow"}},
 					},
 				},
 			},
-			Response: &authorizationapi.AuthorizationConditionsResponse{Decision: emptyDecision},
+			Response: &authorizationv1alpha1.AuthorizationConditionsResponse{Decision: emptyDecision},
 		},
 	}, {
 		name: "only ManagedFields on ObjectMeta is allowed",
-		obj: authorizationapi.AuthorizationConditionsReview{
+		obj: authorizationv1alpha1.AuthorizationConditionsReview{
 			ObjectMeta: metav1.ObjectMeta{
 				ManagedFields: []metav1.ManagedFieldsEntry{{Manager: "test"}},
 			},
-			Request:  &authorizationapi.AuthorizationConditionsRequest{Decision: emptyDecision},
-			Response: &authorizationapi.AuthorizationConditionsResponse{Decision: emptyDecision},
+			Request:  &authorizationv1alpha1.AuthorizationConditionsRequest{Decision: emptyDecision},
+			Response: &authorizationv1alpha1.AuthorizationConditionsResponse{Decision: emptyDecision},
 		},
 	}, {
 		name: "empty id is skipped by handwritten path (declarative covers it)",
-		obj: authorizationapi.AuthorizationConditionsReview{
-			Request: &authorizationapi.AuthorizationConditionsRequest{
-				Decision: authorizationapi.ConditionsAwareDecision{
-					ConditionsMap: &authorizationapi.ConditionsMap{
-						DenyConditions: []authorizationapi.Condition{{ID: ""}},
+		obj: authorizationv1alpha1.AuthorizationConditionsReview{
+			Request: &authorizationv1alpha1.AuthorizationConditionsRequest{
+				Decision: authorizationv1.ConditionsAwareDecision{
+					ConditionsMap: &authorizationv1.ConditionsMap{
+						DenyConditions: []authorizationv1.Condition{{ID: ""}},
 					},
 				},
 			},
-			Response: &authorizationapi.AuthorizationConditionsResponse{Decision: emptyDecision},
+			Response: &authorizationv1alpha1.AuthorizationConditionsResponse{Decision: emptyDecision},
 		},
 	}, {
 		name: "invalid label-key format is skipped by handwritten path (declarative covers it)",
-		obj: authorizationapi.AuthorizationConditionsReview{
-			Request: &authorizationapi.AuthorizationConditionsRequest{
-				Decision: authorizationapi.ConditionsAwareDecision{
-					ConditionsMap: &authorizationapi.ConditionsMap{
-						AllowConditions: []authorizationapi.Condition{
+		obj: authorizationv1alpha1.AuthorizationConditionsReview{
+			Request: &authorizationv1alpha1.AuthorizationConditionsRequest{
+				Decision: authorizationv1.ConditionsAwareDecision{
+					ConditionsMap: &authorizationv1.ConditionsMap{
+						AllowConditions: []authorizationv1.Condition{
 							{ID: "example.com/foo/bar"},
 							{ID: "example.com/_bad", Type: "example.com/e?"},
 						},
 					},
 				},
 			},
-			Response: &authorizationapi.AuthorizationConditionsResponse{Decision: emptyDecision},
+			Response: &authorizationv1alpha1.AuthorizationConditionsResponse{Decision: emptyDecision},
 		},
 	}, {
 		name: "condition and description exactly at MaxBytes are allowed",
-		obj: authorizationapi.AuthorizationConditionsReview{
-			Request: &authorizationapi.AuthorizationConditionsRequest{
-				Decision: authorizationapi.ConditionsAwareDecision{
-					ConditionsMap: &authorizationapi.ConditionsMap{
-						AllowConditions: []authorizationapi.Condition{{
+		obj: authorizationv1alpha1.AuthorizationConditionsReview{
+			Request: &authorizationv1alpha1.AuthorizationConditionsRequest{
+				Decision: authorizationv1.ConditionsAwareDecision{
+					ConditionsMap: &authorizationv1.ConditionsMap{
+						AllowConditions: []authorizationv1.Condition{{
 							ID:          "example.com/foo",
 							Condition:   strings.Repeat("a", authorizer.MaxConditionBytes),
 							Description: strings.Repeat("b", authorizer.MaxConditionDescriptionBytes),
@@ -588,7 +589,7 @@ func TestValidateAuthorizationConditionsReview(t *testing.T) {
 					},
 				},
 			},
-			Response: &authorizationapi.AuthorizationConditionsResponse{Decision: emptyDecision},
+			Response: &authorizationv1alpha1.AuthorizationConditionsResponse{Decision: emptyDecision},
 		},
 	}}
 
@@ -602,66 +603,66 @@ func TestValidateAuthorizationConditionsReview(t *testing.T) {
 
 	errorCases := []struct {
 		name string
-		obj  authorizationapi.AuthorizationConditionsReview
+		obj  authorizationv1alpha1.AuthorizationConditionsReview
 		msgs []string
 	}{{
 		name: "non-empty name in ObjectMeta",
-		obj: authorizationapi.AuthorizationConditionsReview{
+		obj: authorizationv1alpha1.AuthorizationConditionsReview{
 			ObjectMeta: metav1.ObjectMeta{Name: "a-name"},
-			Request:    &authorizationapi.AuthorizationConditionsRequest{Decision: emptyDecision},
-			Response:   &authorizationapi.AuthorizationConditionsResponse{Decision: emptyDecision},
+			Request:    &authorizationv1alpha1.AuthorizationConditionsRequest{Decision: emptyDecision},
+			Response:   &authorizationv1alpha1.AuthorizationConditionsResponse{Decision: emptyDecision},
 		},
 		msgs: []string{`metadata: Invalid value:`, `must be empty`},
 	}, {
 		name: "non-empty namespace in ObjectMeta",
-		obj: authorizationapi.AuthorizationConditionsReview{
+		obj: authorizationv1alpha1.AuthorizationConditionsReview{
 			ObjectMeta: metav1.ObjectMeta{Namespace: "ns"},
-			Request:    &authorizationapi.AuthorizationConditionsRequest{Decision: emptyDecision},
-			Response:   &authorizationapi.AuthorizationConditionsResponse{Decision: emptyDecision},
+			Request:    &authorizationv1alpha1.AuthorizationConditionsRequest{Decision: emptyDecision},
+			Response:   &authorizationv1alpha1.AuthorizationConditionsResponse{Decision: emptyDecision},
 		},
 		msgs: []string{`metadata: Invalid value:`, `must be empty`},
 	}, {
 		name: "non-empty labels in ObjectMeta",
-		obj: authorizationapi.AuthorizationConditionsReview{
+		obj: authorizationv1alpha1.AuthorizationConditionsReview{
 			ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"k": "v"}},
-			Request:    &authorizationapi.AuthorizationConditionsRequest{Decision: emptyDecision},
-			Response:   &authorizationapi.AuthorizationConditionsResponse{Decision: emptyDecision},
+			Request:    &authorizationv1alpha1.AuthorizationConditionsRequest{Decision: emptyDecision},
+			Response:   &authorizationv1alpha1.AuthorizationConditionsResponse{Decision: emptyDecision},
 		},
 		msgs: []string{`metadata: Invalid value:`, `must be empty`},
 	}, {
 		name: "request allowConditions: id missing domain prefix",
-		obj: authorizationapi.AuthorizationConditionsReview{
-			Request: &authorizationapi.AuthorizationConditionsRequest{
-				Decision: authorizationapi.ConditionsAwareDecision{
-					ConditionsMap: &authorizationapi.ConditionsMap{
-						AllowConditions: []authorizationapi.Condition{{ID: "no-slash"}},
+		obj: authorizationv1alpha1.AuthorizationConditionsReview{
+			Request: &authorizationv1alpha1.AuthorizationConditionsRequest{
+				Decision: authorizationv1.ConditionsAwareDecision{
+					ConditionsMap: &authorizationv1.ConditionsMap{
+						AllowConditions: []authorizationv1.Condition{{ID: "no-slash"}},
 					},
 				},
 			},
-			Response: &authorizationapi.AuthorizationConditionsResponse{Decision: emptyDecision},
+			Response: &authorizationv1alpha1.AuthorizationConditionsResponse{Decision: emptyDecision},
 		},
 		msgs: []string{`request.decision.conditionsMap.allowConditions[0].id: Invalid value: "no-slash": must be a domain-prefixed key`},
 	}, {
 		name: "request noOpinionConditions: type missing domain prefix",
-		obj: authorizationapi.AuthorizationConditionsReview{
-			Request: &authorizationapi.AuthorizationConditionsRequest{
-				Decision: authorizationapi.ConditionsAwareDecision{
-					ConditionsMap: &authorizationapi.ConditionsMap{
-						NoOpinionConditions: []authorizationapi.Condition{{ID: "example.com/id", Type: "no-slash"}},
+		obj: authorizationv1alpha1.AuthorizationConditionsReview{
+			Request: &authorizationv1alpha1.AuthorizationConditionsRequest{
+				Decision: authorizationv1.ConditionsAwareDecision{
+					ConditionsMap: &authorizationv1.ConditionsMap{
+						NoOpinionConditions: []authorizationv1.Condition{{ID: "example.com/id", Type: "no-slash"}},
 					},
 				},
 			},
-			Response: &authorizationapi.AuthorizationConditionsResponse{Decision: emptyDecision},
+			Response: &authorizationv1alpha1.AuthorizationConditionsResponse{Decision: emptyDecision},
 		},
 		msgs: []string{`request.decision.conditionsMap.noOpinionConditions[0].type: Invalid value: "no-slash": must be a domain-prefixed key`},
 	}, {
 		name: "response denyConditions: id at index reflects its position",
-		obj: authorizationapi.AuthorizationConditionsReview{
-			Request: &authorizationapi.AuthorizationConditionsRequest{Decision: emptyDecision},
-			Response: &authorizationapi.AuthorizationConditionsResponse{
-				Decision: authorizationapi.ConditionsAwareDecision{
-					ConditionsMap: &authorizationapi.ConditionsMap{
-						DenyConditions: []authorizationapi.Condition{
+		obj: authorizationv1alpha1.AuthorizationConditionsReview{
+			Request: &authorizationv1alpha1.AuthorizationConditionsRequest{Decision: emptyDecision},
+			Response: &authorizationv1alpha1.AuthorizationConditionsResponse{
+				Decision: authorizationv1.ConditionsAwareDecision{
+					ConditionsMap: &authorizationv1.ConditionsMap{
+						DenyConditions: []authorizationv1.Condition{
 							{ID: "example.com/ok"},
 							{ID: "bad"},
 						},
@@ -672,28 +673,28 @@ func TestValidateAuthorizationConditionsReview(t *testing.T) {
 		msgs: []string{`response.decision.conditionsMap.denyConditions[1].id: Invalid value: "bad": must be a domain-prefixed key`},
 	}, {
 		name: "condition body over MaxConditionBytes",
-		obj: authorizationapi.AuthorizationConditionsReview{
-			Request: &authorizationapi.AuthorizationConditionsRequest{
-				Decision: authorizationapi.ConditionsAwareDecision{
-					ConditionsMap: &authorizationapi.ConditionsMap{
-						AllowConditions: []authorizationapi.Condition{{
+		obj: authorizationv1alpha1.AuthorizationConditionsReview{
+			Request: &authorizationv1alpha1.AuthorizationConditionsRequest{
+				Decision: authorizationv1.ConditionsAwareDecision{
+					ConditionsMap: &authorizationv1.ConditionsMap{
+						AllowConditions: []authorizationv1.Condition{{
 							ID:        "example.com/foo",
 							Condition: strings.Repeat("a", authorizer.MaxConditionBytes+1),
 						}},
 					},
 				},
 			},
-			Response: &authorizationapi.AuthorizationConditionsResponse{Decision: emptyDecision},
+			Response: &authorizationv1alpha1.AuthorizationConditionsResponse{Decision: emptyDecision},
 		},
 		msgs: []string{`request.decision.conditionsMap.allowConditions[0].condition: Too long`},
 	}, {
 		name: "description over MaxConditionDescriptionBytes",
-		obj: authorizationapi.AuthorizationConditionsReview{
-			Request: &authorizationapi.AuthorizationConditionsRequest{Decision: emptyDecision},
-			Response: &authorizationapi.AuthorizationConditionsResponse{
-				Decision: authorizationapi.ConditionsAwareDecision{
-					ConditionsMap: &authorizationapi.ConditionsMap{
-						DenyConditions: []authorizationapi.Condition{{
+		obj: authorizationv1alpha1.AuthorizationConditionsReview{
+			Request: &authorizationv1alpha1.AuthorizationConditionsRequest{Decision: emptyDecision},
+			Response: &authorizationv1alpha1.AuthorizationConditionsResponse{
+				Decision: authorizationv1.ConditionsAwareDecision{
+					ConditionsMap: &authorizationv1.ConditionsMap{
+						DenyConditions: []authorizationv1.Condition{{
 							ID:          "example.com/foo",
 							Description: strings.Repeat("b", authorizer.MaxConditionDescriptionBytes+1),
 						}},
@@ -704,22 +705,22 @@ func TestValidateAuthorizationConditionsReview(t *testing.T) {
 		msgs: []string{`response.decision.conditionsMap.denyConditions[0].description: Too long`},
 	}, {
 		name: "traversal covers all three buckets in both request and response",
-		obj: authorizationapi.AuthorizationConditionsReview{
-			Request: &authorizationapi.AuthorizationConditionsRequest{
-				Decision: authorizationapi.ConditionsAwareDecision{
-					ConditionsMap: &authorizationapi.ConditionsMap{
-						DenyConditions:      []authorizationapi.Condition{{ID: "bad-deny"}},
-						NoOpinionConditions: []authorizationapi.Condition{{ID: "bad-noop"}},
-						AllowConditions:     []authorizationapi.Condition{{ID: "bad-allow"}},
+		obj: authorizationv1alpha1.AuthorizationConditionsReview{
+			Request: &authorizationv1alpha1.AuthorizationConditionsRequest{
+				Decision: authorizationv1.ConditionsAwareDecision{
+					ConditionsMap: &authorizationv1.ConditionsMap{
+						DenyConditions:      []authorizationv1.Condition{{ID: "bad-deny"}},
+						NoOpinionConditions: []authorizationv1.Condition{{ID: "bad-noop"}},
+						AllowConditions:     []authorizationv1.Condition{{ID: "bad-allow"}},
 					},
 				},
 			},
-			Response: &authorizationapi.AuthorizationConditionsResponse{
-				Decision: authorizationapi.ConditionsAwareDecision{
-					ConditionsMap: &authorizationapi.ConditionsMap{
-						DenyConditions:      []authorizationapi.Condition{{ID: "bad-deny"}},
-						NoOpinionConditions: []authorizationapi.Condition{{ID: "bad-noop"}},
-						AllowConditions:     []authorizationapi.Condition{{ID: "bad-allow"}},
+			Response: &authorizationv1alpha1.AuthorizationConditionsResponse{
+				Decision: authorizationv1.ConditionsAwareDecision{
+					ConditionsMap: &authorizationv1.ConditionsMap{
+						DenyConditions:      []authorizationv1.Condition{{ID: "bad-deny"}},
+						NoOpinionConditions: []authorizationv1.Condition{{ID: "bad-noop"}},
+						AllowConditions:     []authorizationv1.Condition{{ID: "bad-allow"}},
 					},
 				},
 			},
@@ -734,10 +735,10 @@ func TestValidateAuthorizationConditionsReview(t *testing.T) {
 		},
 	}, {
 		name: "nil ConditionsMap in decision is skipped by handwritten validation",
-		obj: authorizationapi.AuthorizationConditionsReview{
+		obj: authorizationv1alpha1.AuthorizationConditionsReview{
 			ObjectMeta: metav1.ObjectMeta{Name: "not-empty"},
-			Request:    &authorizationapi.AuthorizationConditionsRequest{Decision: emptyDecision},
-			Response:   &authorizationapi.AuthorizationConditionsResponse{Decision: emptyDecision},
+			Request:    &authorizationv1alpha1.AuthorizationConditionsRequest{Decision: emptyDecision},
+			Response:   &authorizationv1alpha1.AuthorizationConditionsResponse{Decision: emptyDecision},
 		},
 		msgs: []string{`metadata: Invalid value:`},
 	}}
@@ -766,52 +767,52 @@ func TestValidateAuthorizationConditionsReview(t *testing.T) {
 func TestValidateCondition(t *testing.T) {
 	testCases := []struct {
 		name    string
-		cond    authorizationapi.Condition
+		cond    authorizationv1.Condition
 		wantErr bool
 		msg     string
 	}{{
 		name: "valid id only",
-		cond: authorizationapi.Condition{ID: "example.com/foo"},
+		cond: authorizationv1.Condition{ID: "example.com/foo"},
 	}, {
 		name: "valid id and type",
-		cond: authorizationapi.Condition{ID: "example.com/foo", Type: "example.io/bar"},
+		cond: authorizationv1.Condition{ID: "example.com/foo", Type: "example.io/bar"},
 	}, {
 		name: "empty id is skipped (declarative covers required)",
-		cond: authorizationapi.Condition{ID: ""},
+		cond: authorizationv1.Condition{ID: ""},
 	}, {
 		name: "id with too many slashes is skipped (declarative covers label-key format)",
-		cond: authorizationapi.Condition{ID: "example.com/foo/bar"},
+		cond: authorizationv1.Condition{ID: "example.com/foo/bar"},
 	}, {
 		name: "id with malformed name part is skipped (declarative covers label-key format)",
-		cond: authorizationapi.Condition{ID: "example.com/_bad"},
+		cond: authorizationv1.Condition{ID: "example.com/_bad"},
 	}, {
 		name: "type empty is skipped",
-		cond: authorizationapi.Condition{ID: "example.com/foo", Type: ""},
+		cond: authorizationv1.Condition{ID: "example.com/foo", Type: ""},
 	}, {
 		name:    "id missing domain prefix",
-		cond:    authorizationapi.Condition{ID: "no-slash"},
+		cond:    authorizationv1.Condition{ID: "no-slash"},
 		wantErr: true,
 		msg:     `id: Invalid value: "no-slash": must be a domain-prefixed key`,
 	}, {
 		name:    "type set but not domain-prefixed",
-		cond:    authorizationapi.Condition{ID: "example.com/foo", Type: "bad"},
+		cond:    authorizationv1.Condition{ID: "example.com/foo", Type: "bad"},
 		wantErr: true,
 		msg:     `type: Invalid value: "bad": must be a domain-prefixed key`,
 	}, {
 		name: "condition body at MaxBytes is allowed",
-		cond: authorizationapi.Condition{
+		cond: authorizationv1.Condition{
 			ID:        "example.com/foo",
 			Condition: strings.Repeat("a", authorizer.MaxConditionBytes),
 		},
 	}, {
 		name: "description at MaxBytes is allowed",
-		cond: authorizationapi.Condition{
+		cond: authorizationv1.Condition{
 			ID:          "example.com/foo",
 			Description: strings.Repeat("b", authorizer.MaxConditionDescriptionBytes),
 		},
 	}, {
 		name: "condition body just over MaxBytes",
-		cond: authorizationapi.Condition{
+		cond: authorizationv1.Condition{
 			ID:        "example.com/foo",
 			Condition: strings.Repeat("a", authorizer.MaxConditionBytes+1),
 		},
@@ -819,7 +820,7 @@ func TestValidateCondition(t *testing.T) {
 		msg:     `condition: Too long`,
 	}, {
 		name: "description just over MaxBytes",
-		cond: authorizationapi.Condition{
+		cond: authorizationv1.Condition{
 			ID:          "example.com/foo",
 			Description: strings.Repeat("b", authorizer.MaxConditionDescriptionBytes+1),
 		},

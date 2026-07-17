@@ -1,5 +1,5 @@
 /*
-Copyright The Kubernetes Authors.
+Copyright 2017 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,14 +14,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// +k8s:conversion-gen=k8s.io/kubernetes/pkg/apis/authorization
-// +k8s:conversion-gen-external-types=k8s.io/api/authorization/v1alpha1
-// +k8s:defaulter-gen=false
-// +k8s:validation-gen=false
-
-// +groupName=authorization.k8s.io
-
 package v1alpha1
 
-// Validations and defaulting are defined in k8s.io/apiserver/pkg/apis/authorization/v1alpha1 and thus need to be imported below to make the init() fire
-import _ "k8s.io/apiserver/pkg/apis/authorization/v1alpha1"
+import (
+	"k8s.io/apimachinery/pkg/runtime"
+)
+
+func addDefaultingFuncs(scheme *runtime.Scheme) error {
+	return RegisterDefaults(scheme)
+}

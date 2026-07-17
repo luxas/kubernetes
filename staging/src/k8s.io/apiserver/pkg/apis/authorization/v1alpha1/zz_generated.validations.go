@@ -34,7 +34,7 @@ import (
 	validate "k8s.io/apimachinery/pkg/api/validate"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	field "k8s.io/apimachinery/pkg/util/validation/field"
-	v1 "k8s.io/kubernetes/pkg/apis/authorization/v1"
+	v1 "k8s.io/apiserver/pkg/apis/authorization/v1"
 )
 
 func init() { localSchemeBuilder.Register(RegisterValidations) }

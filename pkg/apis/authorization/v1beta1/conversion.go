@@ -33,6 +33,7 @@ var unconditionalDecisionTypesSorted = []authorization.ConditionsAwareDecisionTy
 }
 
 func enforceUnconditionalHandledDecisionTypesOnly(ao *authorization.AuthorizationOptions) error {
+	// TODO: Externalize these validations using generic types, such that the logic can be unified across v1 and internal -> v1beta1
 	// if ao is set, the only allowed value is [Allow, Deny, NoOpinion], which is how callers should interpret
 	// ao == nil. Anything else cannot be expressed in v1beta1, and thus error.
 	if ao != nil {
