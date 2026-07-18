@@ -49,6 +49,12 @@ type WantsUnconditionalAuthorizer interface {
 	admission.InitializationValidator
 }
 
+// WantsAuthorizer defines a function which sets authorizer.Authorizer for admission plugins that need it.
+type WantsAuthorizer interface {
+	SetAuthorizer(authorizer.Authorizer)
+	admission.InitializationValidator
+}
+
 // WantsQuotaConfiguration defines a function which sets quota configuration for admission plugins that need it.
 type WantsQuotaConfiguration interface {
 	SetQuotaConfiguration(quota.Configuration)

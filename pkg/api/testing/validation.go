@@ -47,7 +47,17 @@ import (
 // (+k8s:validation-gen=false) but share an internal type with versions that do
 // not. Only intentional opt-outs belong here; any other version missing
 // declarative validation should fail the sweep, not be skipped.
-var skippedEquivalenceGroupVersions = sets.New("extensions/v1beta1", "events.k8s.io/v1beta1")
+//
+// authorization.k8s.io/v1beta1 is included because it does not expose
+// spec.authorizationOptions or status.conditionalDecision — declarative
+// validation on v1beta1 legitimately produces fewer errors than v1 for the
+// same internal object, which would otherwise trip the cross-version
+// equivalence comparison in the authorization declarative-validation tests.
+var skippedEquivalenceGroupVersions = sets.New(
+	"extensions/v1beta1",
+	"events.k8s.io/v1beta1",
+	"authorization.k8s.io/v1beta1",
+)
 
 // VerifyVersionedValidationEquivalence tests that all versions of an API return equivalent validation errors.
 // It accepts optional configuration to handle path normalization across API versions where structures differ.

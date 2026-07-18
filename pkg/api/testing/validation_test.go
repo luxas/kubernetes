@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/apitesting/roundtrip"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	nodevalidation "k8s.io/kubernetes/pkg/apis/node/validation"
@@ -59,6 +60,12 @@ func TestVersionedValidationByFuzzing(t *testing.T) {
 		"Scale": "scale",
 	}
 
+	ignoreConversionErrorGroupKinds := sets.New(
+		schema.GroupKind{Group: "authorization.k8s.io", Kind: "SubjectAccessReview"},
+		schema.GroupKind{Group: "authorization.k8s.io", Kind: "SelfSubjectAccessReview"},
+		schema.GroupKind{Group: "authorization.k8s.io", Kind: "LocalSubjectAccessReview"},
+	)
+
 	fuzzIters := *roundtrip.FuzzIters / 10 // TODO: Find a better way to manage test running time
 	f := fuzzer.FuzzerFor(FuzzerFuncs, rand.NewSource(rand.Int63()), legacyscheme.Codecs)
 
@@ -85,6 +92,9 @@ func TestVersionedValidationByFuzzing(t *testing.T) {
 
 				if subresource != "" {
 					opts = append(opts, WithSubResources(subresource))
+				}
+				if ignoreConversionErrorGroupKinds.Has(gvk.GroupKind()) {
+					opts = append(opts, WithIgnoreObjectConversionErrors())
 				}
 
 				VerifyVersionedValidationEquivalence(t, obj, nil, opts...)
