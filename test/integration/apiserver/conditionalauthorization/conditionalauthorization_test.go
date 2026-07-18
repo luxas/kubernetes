@@ -25,11 +25,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 	"time"
 
 	"github.com/google/cel-go/cel"
+	"github.com/google/go-cmp/cmp"
 
 	admissionv1 "k8s.io/api/admission/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
@@ -1707,17 +1707,9 @@ authorizers:
 				t.Fatalf("failed to create SubjectAccessReview: %v", err)
 			}
 			// The decision is conditional, so Allowed and Denied must both be false.
-			if response.Status.Allowed {
-				t.Errorf("expected Allowed=false for conditional decision, got true")
-			}
-			if response.Status.Denied {
-				t.Errorf("expected Denied=false for conditional decision, got true")
-			}
-			if response.Status.ConditionalDecision == nil {
-				t.Fatalf("expected ConditionalDecision to be set, got nil")
-			}
-			if !reflect.DeepEqual(response.Status.ConditionalDecision, expectedConditionalDecision) {
-				t.Errorf("unexpected ConditionalDecision:\ngot:  %+v\nwant: %+v", response.Status.ConditionalDecision, conditionalDecision)
+			want := authorizationv1.SubjectAccessReviewStatus{ConditionalDecision: expectedConditionalDecision}
+			if diff := cmp.Diff(want, response.Status); diff != "" {
+				t.Errorf("unexpected Status (-want +got):\n%s", diff)
 			}
 		})
 
@@ -1742,14 +1734,11 @@ authorizers:
 			// Without conditional authorization requested, the conditional decision
 			// from the webhook is treated as NoOpinion, falling through to RBAC
 			// which does not have a rule for this user.
-			if response.Status.Allowed {
-				t.Errorf("expected Allowed=false, got true")
+			want := authorizationv1.SubjectAccessReviewStatus{
+				Reason: "conditional-webhook: webhook authorizer tried to return conditional decision although client does not support it",
 			}
-			if response.Status.Denied {
-				t.Errorf("expected Denied=false, got true")
-			}
-			if response.Status.ConditionalDecision != nil {
-				t.Errorf("expected ConditionalDecision to be nil when not requested, got: %+v", response.Status.ConditionalDecision)
+			if diff := cmp.Diff(want, response.Status); diff != "" {
+				t.Errorf("unexpected Status (-want +got):\n%s", diff)
 			}
 		})
 
@@ -1783,17 +1772,9 @@ authorizers:
 			if err != nil {
 				t.Fatalf("failed to create SelfSubjectAccessReview: %v", err)
 			}
-			if response.Status.Allowed {
-				t.Errorf("expected Allowed=false for conditional decision, got true")
-			}
-			if response.Status.Denied {
-				t.Errorf("expected Denied=false for conditional decision, got true")
-			}
-			if response.Status.ConditionalDecision == nil {
-				t.Fatalf("expected ConditionalDecision to be set, got nil")
-			}
-			if !reflect.DeepEqual(response.Status.ConditionalDecision, expectedConditionalDecision) {
-				t.Errorf("unexpected ConditionalDecision:\ngot:  %+v\nwant: %+v", response.Status.ConditionalDecision, conditionalDecision)
+			want := authorizationv1.SubjectAccessReviewStatus{ConditionalDecision: expectedConditionalDecision}
+			if diff := cmp.Diff(want, response.Status); diff != "" {
+				t.Errorf("unexpected Status (-want +got):\n%s", diff)
 			}
 		})
 
@@ -1818,14 +1799,11 @@ authorizers:
 			if err != nil {
 				t.Fatalf("failed to create SelfSubjectAccessReview: %v", err)
 			}
-			if response.Status.Allowed {
-				t.Errorf("expected Allowed=false, got true")
+			want := authorizationv1.SubjectAccessReviewStatus{
+				Reason: "conditional-webhook: webhook authorizer tried to return conditional decision although client does not support it",
 			}
-			if response.Status.Allowed {
-				t.Errorf("expected Denied=false, got true")
-			}
-			if response.Status.ConditionalDecision != nil {
-				t.Errorf("expected ConditionalDecision to be nil when not requested, got: %+v", response.Status.ConditionalDecision)
+			if diff := cmp.Diff(want, response.Status); diff != "" {
+				t.Errorf("unexpected Status (-want +got):\n%s", diff)
 			}
 		})
 
@@ -1856,17 +1834,9 @@ authorizers:
 			if err != nil {
 				t.Fatalf("failed to create LocalSubjectAccessReview: %v", err)
 			}
-			if response.Status.Allowed {
-				t.Errorf("expected Allowed=false for conditional decision, got true")
-			}
-			if response.Status.Denied {
-				t.Errorf("expected Denied=false for conditional decision, got true")
-			}
-			if response.Status.ConditionalDecision == nil {
-				t.Fatalf("expected ConditionalDecision to be set, got nil")
-			}
-			if !reflect.DeepEqual(response.Status.ConditionalDecision, expectedConditionalDecision) {
-				t.Errorf("unexpected ConditionalDecision:\ngot:  %+v\nwant: %+v", response.Status.ConditionalDecision, conditionalDecision)
+			want := authorizationv1.SubjectAccessReviewStatus{ConditionalDecision: expectedConditionalDecision}
+			if diff := cmp.Diff(want, response.Status); diff != "" {
+				t.Errorf("unexpected Status (-want +got):\n%s", diff)
 			}
 		})
 
@@ -1889,14 +1859,11 @@ authorizers:
 			if err != nil {
 				t.Fatalf("failed to create LocalSubjectAccessReview: %v", err)
 			}
-			if response.Status.Allowed {
-				t.Errorf("expected Allowed=false, got true")
+			want := authorizationv1.SubjectAccessReviewStatus{
+				Reason: "conditional-webhook: webhook authorizer tried to return conditional decision although client does not support it",
 			}
-			if response.Status.Allowed {
-				t.Errorf("expected Denied=false, got true")
-			}
-			if response.Status.ConditionalDecision != nil {
-				t.Errorf("expected ConditionalDecision to be nil when not requested, got: %+v", response.Status.ConditionalDecision)
+			if diff := cmp.Diff(want, response.Status); diff != "" {
+				t.Errorf("unexpected Status (-want +got):\n%s", diff)
 			}
 		})
 
@@ -1934,14 +1901,12 @@ authorizers:
 			if err != nil {
 				t.Fatalf("failed to create SubjectAccessReview: %v", err)
 			}
-			if !response.Status.Allowed {
-				t.Errorf("expected Allowed=true for unconditional allow, got false")
+			want := authorizationv1.SubjectAccessReviewStatus{
+				Allowed: true,
+				Reason:  "conditional-webhook: {unconditionally allowed}",
 			}
-			if response.Status.Denied {
-				t.Errorf("expected Denied=false for unconditional allow, got true")
-			}
-			if response.Status.ConditionalDecision != nil {
-				t.Errorf("expected ConditionalDecision to be nil for unconditional allow, got: %+v", response.Status.ConditionalDecision)
+			if diff := cmp.Diff(want, response.Status); diff != "" {
+				t.Errorf("unexpected Status (-want +got):\n%s", diff)
 			}
 		})
 
@@ -1980,14 +1945,12 @@ authorizers:
 			if err != nil {
 				t.Fatalf("failed to create SubjectAccessReview: %v", err)
 			}
-			if response.Status.Allowed {
-				t.Errorf("expected Allowed=false for unconditional deny, got true")
+			want := authorizationv1.SubjectAccessReviewStatus{
+				Denied: true,
+				Reason: "conditional-webhook: {unconditionally denied}",
 			}
-			if !response.Status.Denied {
-				t.Errorf("expected Denied=true for unconditional deny, got false")
-			}
-			if response.Status.ConditionalDecision != nil {
-				t.Errorf("expected ConditionalDecision to be nil for unconditional deny, got: %+v", response.Status.ConditionalDecision)
+			if diff := cmp.Diff(want, response.Status); diff != "" {
+				t.Errorf("unexpected Status (-want +got):\n%s", diff)
 			}
 		})
 		// Test that an unconditional deny from the webhook is properly returned
@@ -2026,14 +1989,12 @@ authorizers:
 			if err != nil {
 				t.Fatalf("failed to create SubjectAccessReview: %v", err)
 			}
-			if response.Status.Allowed {
-				t.Errorf("expected Allowed=false for unconditional deny, got true")
+			want := authorizationv1.SubjectAccessReviewStatus{
+				Denied: true,
+				Reason: "webhook authorizer tried to return conditional decision although client does not support it",
 			}
-			if !response.Status.Denied {
-				t.Errorf("expected Denied=true for unconditional deny, got false")
-			}
-			if response.Status.ConditionalDecision != nil {
-				t.Errorf("expected ConditionalDecision to be nil for unconditional deny, got: %+v", response.Status.ConditionalDecision)
+			if diff := cmp.Diff(want, response.Status); diff != "" {
+				t.Errorf("unexpected Status (-want +got):\n%s", diff)
 			}
 		})
 
@@ -2431,6 +2392,7 @@ func acrEvaluateCEL(t *testing.T, expectedConditionsType string) func(acr *autho
 				Type: decisionType,
 			},
 		}
+		// TODO(luxas): Add Reason and EvaluateError here so we can assert them in the SAR tests
 		switch decisionType {
 		case authorizationv1.ConditionsAwareDecisionTypeDeny:
 			acr.Response.Decision.Deny = &authorizationv1.UnconditionalDecision{}
