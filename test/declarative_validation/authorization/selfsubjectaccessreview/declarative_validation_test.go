@@ -24,9 +24,11 @@ import (
 	"strings"
 	"testing"
 
+	authorizationv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	authorizationvalidation "k8s.io/apiserver/pkg/apis/authorization/validation"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	genericfeatures "k8s.io/apiserver/pkg/features"
@@ -35,7 +37,6 @@ import (
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	apitesting "k8s.io/kubernetes/pkg/api/testing"
 	"k8s.io/kubernetes/pkg/apis/authorization"
-	authorizationvalidation "k8s.io/kubernetes/pkg/apis/authorization/validation"
 )
 
 func TestDeclarativeValidate(t *testing.T) {
@@ -110,8 +111,12 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 		"status.conditionalDecision forbidden when feature gate disabled": {
 			v1Only: true,
 			obj:    mkSelfSAR(setConditionalDecision(&authorization.ConditionsAwareDecision{})),
+			// Two Forbidden errors are emitted at status.conditionalDecision: one from
+			// declarative validation (+k8s:ifDisabled=ConditionalAuthorization) and one
+			// from the imperative "client did not opt into conditions-awareness" check.
 			expectedErrs: field.ErrorList{
 				field.Forbidden(field.NewPath("status", "conditionalDecision"), ""),
+				field.Forbidden(field.NewPath("status", "conditionalDecision"), "").MarkFromImperative(),
 			},
 		},
 		"status.conditionalDecision.type required": {
@@ -306,6 +311,21 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 				t.Skipf("case exercises authorization.k8s.io/v1-only fields; skipping for apiVersion=%q", apiVersion)
 			}
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ConditionalAuthorization, tc.enableConditionalAuthorization)
+			// Cases that exercise status.conditionalDecision validation assume the client
+			// opted into conditions-awareness; otherwise the validator emits an unrelated
+			// Forbidden error at status.conditionalDecision. Set a valid AuthorizationOptions
+			// when the feature gate is enabled and no opt-in has been configured explicitly.
+			if tc.enableConditionalAuthorization && tc.obj.Status.ConditionalDecision != nil && tc.obj.Spec.AuthorizationOptions == nil {
+				tc.obj.Spec.AuthorizationOptions = &authorization.AuthorizationOptions{
+					HandledDecisionTypes: []authorization.ConditionsAwareDecisionType{
+						authorization.ConditionsAwareDecisionTypeAllow,
+						authorization.ConditionsAwareDecisionTypeDeny,
+						authorization.ConditionsAwareDecisionTypeNoOpinion,
+						authorization.ConditionsAwareDecisionTypeConditionsMap,
+						authorization.ConditionsAwareDecisionTypeUnion,
+					},
+				}
+			}
 			// v1Only cases carry internal fields that authorization.k8s.io/v1beta1 refuses to
 			// round-trip (it dropped the conditional-authorization fields). Ignore conversion
 			// errors so the cross-version sweep skips v1beta1 instead of failing; the
@@ -313,7 +333,11 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 			// skippedEquivalenceGroupVersions.
 			apitesting.VerifyValidationEquivalenceFunc(t, ctx, &tc.obj, func(ctx context.Context, obj runtime.Object) field.ErrorList {
 				sar := obj.(*authorization.SelfSubjectAccessReview)
-				return authorizationvalidation.ValidateSelfSubjectAccessReviewCreate(ctx, legacyscheme.Scheme, sar)
+				sarV1 := &authorizationv1.SelfSubjectAccessReview{}
+				if err := legacyscheme.Scheme.Convert(sar, sarV1, nil); err != nil {
+					return field.ErrorList{field.InternalError(nil, err)}
+				}
+				return authorizationvalidation.ValidateSelfSubjectAccessReviewCreate(ctx, legacyscheme.Scheme, sarV1)
 			}, tc.expectedErrs, apitesting.WithIgnoreObjectConversionErrors())
 		})
 	}

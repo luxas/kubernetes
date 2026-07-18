@@ -24,15 +24,16 @@ import (
 	"strings"
 	"testing"
 
+	authorizationv1alpha1 "k8s.io/api/authorization/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	authorizationvalidation "k8s.io/apiserver/pkg/apis/authorization/validation"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	apitesting "k8s.io/kubernetes/pkg/api/testing"
 	"k8s.io/kubernetes/pkg/apis/authorization"
-	authorizationvalidation "k8s.io/kubernetes/pkg/apis/authorization/validation"
 )
 
 func TestDeclarativeValidate(t *testing.T) {
@@ -62,6 +63,13 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 			obj: mkACR(),
 			expectedErrs: field.ErrorList{
 				requestUnionErr,
+			},
+		},
+		"response.uid required": {
+			obj: mkACR(clearResponseUID()),
+			expectedErrs: field.ErrorList{
+				requestUnionErr,
+				field.Required(field.NewPath("response", "uid"), ""),
 			},
 		},
 		"decision.type required (request+response)": {
@@ -276,7 +284,11 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 		t.Run(k, func(t *testing.T) {
 			apitesting.VerifyValidationEquivalenceFunc(t, ctx, &tc.obj, func(ctx context.Context, obj runtime.Object) field.ErrorList {
 				acr := obj.(*authorization.AuthorizationConditionsReview)
-				return authorizationvalidation.ValidateAuthorizationConditionsReviewCreate(ctx, legacyscheme.Scheme, acr)
+				acrV1alpha1 := &authorizationv1alpha1.AuthorizationConditionsReview{}
+				if err := legacyscheme.Scheme.Convert(acr, acrV1alpha1, nil); err != nil {
+					return field.ErrorList{field.InternalError(nil, err)}
+				}
+				return authorizationvalidation.ValidateAuthorizationConditionsReviewCreate(ctx, legacyscheme.Scheme, acrV1alpha1)
 			}, tc.expectedErrs)
 		})
 	}
@@ -289,6 +301,7 @@ func mkACR(tweaks ...func(*authorization.AuthorizationConditionsReview)) authori
 			Decision: validNoOpinionDecision(),
 		},
 		Response: &authorization.AuthorizationConditionsResponse{
+			UID:      "test-uid",
 			Decision: validNoOpinionDecision(),
 		},
 	}
@@ -301,6 +314,12 @@ func mkACR(tweaks ...func(*authorization.AuthorizationConditionsReview)) authori
 func setRequestDecision(d authorization.ConditionsAwareDecision) func(*authorization.AuthorizationConditionsReview) {
 	return func(acr *authorization.AuthorizationConditionsReview) {
 		acr.Request.Decision = d
+	}
+}
+
+func clearResponseUID() func(*authorization.AuthorizationConditionsReview) {
+	return func(acr *authorization.AuthorizationConditionsReview) {
+		acr.Response.UID = ""
 	}
 }
 
