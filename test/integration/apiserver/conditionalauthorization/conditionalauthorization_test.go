@@ -52,6 +52,7 @@ import (
 	kubeapiservertesting "k8s.io/kubernetes/cmd/kube-apiserver/app/testing"
 	"k8s.io/kubernetes/test/integration/authutil"
 	"k8s.io/kubernetes/test/integration/framework"
+	"k8s.io/utils/ptr"
 )
 
 // TestConditionalAuthorizationEnabled tests the conditional authorization flow
@@ -366,7 +367,7 @@ authorizers:
 			expectAllowed: true,
 			// When disabled, the conditional decision is treated as NoOpinion,
 			// falling through to RBAC which denies (no RBAC rules for this user).
-			expectAllowedWhenDisabled: boolPtr(false),
+			expectAllowedWhenDisabled: new(false),
 		},
 		{
 			name: "conditional deny - condition evaluates to deny",
@@ -465,7 +466,7 @@ authorizers:
 				return err
 			},
 			expectAllowed:             true,
-			expectAllowedWhenDisabled: boolPtr(false),
+			expectAllowedWhenDisabled: new(false),
 		},
 		{
 			name: "cel deny by name pattern mismatch",
@@ -560,7 +561,7 @@ authorizers:
 				return err
 			},
 			expectAllowed:             true,
-			expectAllowedWhenDisabled: boolPtr(false),
+			expectAllowedWhenDisabled: new(false),
 		},
 		{
 			name: "cel deny by data content missing",
@@ -632,7 +633,7 @@ authorizers:
 				return err
 			},
 			expectAllowed:             false,
-			expectAllowedWhenDisabled: boolPtr(false),
+			expectAllowedWhenDisabled: new(false),
 		},
 		{
 			name: "cel deny overrides allow and noopinion",
@@ -776,7 +777,7 @@ authorizers:
 				expectAllowed: true,
 				// When disabled, the conditional create decision is treated as NoOpinion,
 				// falls through to RBAC which denies (no RBAC rules for this user).
-				expectAllowedWhenDisabled: boolPtr(false),
+				expectAllowedWhenDisabled: new(false),
 			},
 			{
 				name: "update-to-create conditional deny by label",
@@ -921,7 +922,7 @@ authorizers:
 					return err
 				},
 				expectAllowed:             true,
-				expectAllowedWhenDisabled: boolPtr(false),
+				expectAllowedWhenDisabled: new(false),
 			},
 			{
 				name: "cel authorizer compound authorization - deny",
@@ -983,7 +984,7 @@ authorizers:
 					return err
 				},
 				expectAllowed:             true,
-				expectAllowedWhenDisabled: boolPtr(false),
+				expectAllowedWhenDisabled: new(false),
 			},
 			{
 				name: "cel namespaceObject - negative match",
@@ -1042,13 +1043,13 @@ authorizers:
 							APIVersion: "apps/v1",
 						},
 						MaxReplicas:                    10,
-						TargetCPUUtilizationPercentage: int32Ptr(80),
+						TargetCPUUtilizationPercentage: ptr.To[int32](80),
 					},
 				}, metav1.CreateOptions{})
 				return err
 			},
 			expectAllowed:             true,
-			expectAllowedWhenDisabled: boolPtr(false),
+			expectAllowedWhenDisabled: new(false),
 		},
 		{
 			name:             "hpa v1 cpu utilization - deny",
@@ -1064,7 +1065,7 @@ authorizers:
 							APIVersion: "apps/v1",
 						},
 						MaxReplicas:                    10,
-						TargetCPUUtilizationPercentage: int32Ptr(90),
+						TargetCPUUtilizationPercentage: ptr.To[int32](90),
 					},
 				}, metav1.CreateOptions{})
 				return err
@@ -1092,7 +1093,7 @@ authorizers:
 									Name: corev1.ResourceCPU,
 									Target: autoscalingv2.MetricTarget{
 										Type:               autoscalingv2.UtilizationMetricType,
-										AverageUtilization: int32Ptr(80),
+										AverageUtilization: ptr.To[int32](80),
 									},
 								},
 							},
@@ -1102,7 +1103,7 @@ authorizers:
 				return err
 			},
 			expectAllowed:             true,
-			expectAllowedWhenDisabled: boolPtr(false),
+			expectAllowedWhenDisabled: new(false),
 		},
 		{
 			name:             "hpa v2 cpu utilization - deny",
@@ -1125,7 +1126,7 @@ authorizers:
 									Name: corev1.ResourceCPU,
 									Target: autoscalingv2.MetricTarget{
 										Type:               autoscalingv2.UtilizationMetricType,
-										AverageUtilization: int32Ptr(90),
+										AverageUtilization: ptr.To[int32](90),
 									},
 								},
 							},
@@ -1151,19 +1152,19 @@ authorizers:
 							APIVersion: "apps/v1",
 						},
 						MaxReplicas:                    10,
-						TargetCPUUtilizationPercentage: int32Ptr(70),
+						TargetCPUUtilizationPercentage: ptr.To[int32](70),
 					},
 				}, metav1.CreateOptions{})
 				if err != nil {
 					return fmt.Errorf("initial create should have succeeded: %w", err)
 				}
 				// Update to 80% (allowed: new=80<=80 && old=70<=80)
-				created.Spec.TargetCPUUtilizationPercentage = int32Ptr(80)
+				created.Spec.TargetCPUUtilizationPercentage = ptr.To[int32](80)
 				_, err = client.AutoscalingV1().HorizontalPodAutoscalers("test-ns").Update(context.TODO(), created, metav1.UpdateOptions{})
 				return err
 			},
 			expectAllowed:             true,
-			expectAllowedWhenDisabled: boolPtr(false),
+			expectAllowedWhenDisabled: new(false),
 		},
 		{
 			name:             "hpa v1 cpu utilization - update denied",
@@ -1180,14 +1181,14 @@ authorizers:
 							APIVersion: "apps/v1",
 						},
 						MaxReplicas:                    10,
-						TargetCPUUtilizationPercentage: int32Ptr(70),
+						TargetCPUUtilizationPercentage: ptr.To[int32](70),
 					},
 				}, metav1.CreateOptions{})
 				if err != nil {
 					return fmt.Errorf("initial create should have succeeded: %w", err)
 				}
 				// Update to 90% (denied: new=90>80)
-				created.Spec.TargetCPUUtilizationPercentage = int32Ptr(90)
+				created.Spec.TargetCPUUtilizationPercentage = ptr.To[int32](90)
 				_, err = client.AutoscalingV1().HorizontalPodAutoscalers("test-ns").Update(context.TODO(), created, metav1.UpdateOptions{})
 				return err
 			},
@@ -1215,7 +1216,7 @@ authorizers:
 									Name: corev1.ResourceCPU,
 									Target: autoscalingv2.MetricTarget{
 										Type:               autoscalingv2.UtilizationMetricType,
-										AverageUtilization: int32Ptr(70),
+										AverageUtilization: ptr.To[int32](70),
 									},
 								},
 							},
@@ -1226,12 +1227,12 @@ authorizers:
 					return fmt.Errorf("initial create should have succeeded: %w", err)
 				}
 				// Update to 80% (allowed: new=80<=80 && old=70<=80)
-				created.Spec.Metrics[0].Resource.Target.AverageUtilization = int32Ptr(80)
+				created.Spec.Metrics[0].Resource.Target.AverageUtilization = ptr.To[int32](80)
 				_, err = client.AutoscalingV2().HorizontalPodAutoscalers("test-ns").Update(context.TODO(), created, metav1.UpdateOptions{})
 				return err
 			},
 			expectAllowed:             true,
-			expectAllowedWhenDisabled: boolPtr(false),
+			expectAllowedWhenDisabled: new(false),
 		},
 		{
 			name:             "hpa v2 cpu utilization - update denied",
@@ -1255,7 +1256,7 @@ authorizers:
 									Name: corev1.ResourceCPU,
 									Target: autoscalingv2.MetricTarget{
 										Type:               autoscalingv2.UtilizationMetricType,
-										AverageUtilization: int32Ptr(70),
+										AverageUtilization: ptr.To[int32](70),
 									},
 								},
 							},
@@ -1266,7 +1267,7 @@ authorizers:
 					return fmt.Errorf("initial create should have succeeded: %w", err)
 				}
 				// Update to 90% (denied: new=90>80)
-				created.Spec.Metrics[0].Resource.Target.AverageUtilization = int32Ptr(90)
+				created.Spec.Metrics[0].Resource.Target.AverageUtilization = ptr.To[int32](90)
 				_, err = client.AutoscalingV2().HorizontalPodAutoscalers("test-ns").Update(context.TODO(), created, metav1.UpdateOptions{})
 				return err
 			},
@@ -1305,7 +1306,7 @@ authorizers:
 				return err
 			},
 			expectAllowed:             true,
-			expectAllowedWhenDisabled: boolPtr(false),
+			expectAllowedWhenDisabled: new(false),
 		},
 		{
 			name:             "crd v1 replicas - create denied",
@@ -1366,7 +1367,7 @@ authorizers:
 				return err
 			},
 			expectAllowed:             true,
-			expectAllowedWhenDisabled: boolPtr(false),
+			expectAllowedWhenDisabled: new(false),
 		},
 		{
 			name:             "crd v2 replicas.max - create denied",
@@ -1434,7 +1435,7 @@ authorizers:
 				return err
 			},
 			expectAllowed:             true,
-			expectAllowedWhenDisabled: boolPtr(false),
+			expectAllowedWhenDisabled: new(false),
 		},
 		{
 			name:             "crd v1 replicas - update denied",
@@ -1517,7 +1518,7 @@ authorizers:
 				return err
 			},
 			expectAllowed:             true,
-			expectAllowedWhenDisabled: boolPtr(false),
+			expectAllowedWhenDisabled: new(false),
 		},*/
 		{
 			name:             "crd v2 replicas.max - update denied",
@@ -2250,14 +2251,6 @@ authorizers:
 			})
 		})
 	}
-}
-
-func boolPtr(b bool) *bool {
-	return &b
-}
-
-func int32Ptr(i int32) *int32 {
-	return &i
 }
 
 // TODO(luxas): Reactivate this when we add support for in-tree evaluation.
