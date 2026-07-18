@@ -42,6 +42,8 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextensionsclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
+
+	crdconversiontesting "k8s.io/apiextensions-apiserver/test/integration/conversion"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -151,6 +153,14 @@ authorizers:
 		t.Fatal(err)
 	}
 
+	closeConversion, conversionClientConfig, err := crdconversiontesting.StartConversionWebhookServer(
+		crdconversiontesting.NewObjectConverterWebhookHandler(t, convertScalableWidget),
+	)
+	if err != nil {
+		t.Fatalf("failed to start conversion webhook: %v", err)
+	}
+	t.Cleanup(closeConversion)
+
 	// Start the test API server with the AuthorizationConfiguration, feature gate,
 	// and the AuthorizationConditionsEnforcer admission plugin
 	flags := []string{
@@ -164,7 +174,7 @@ authorizers:
 	adminClient := clientset.NewForConfigOrDie(server.ClientConfig)
 
 	// Create the "test-ns" namespace for tests, with labels for namespaceObject tests
-	_, err := adminClient.CoreV1().Namespaces().Create(context.TODO(), &corev1.Namespace{
+	_, err = adminClient.CoreV1().Namespaces().Create(context.TODO(), &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   "test-ns",
 			Labels: map[string]string{"env": "production", "team": "platform"},
@@ -193,6 +203,13 @@ authorizers:
 				Singular: "scalablewidget",
 				Kind:     "ScalableWidget",
 				ListKind: "ScalableWidgetList",
+			},
+			Conversion: &apiextensionsv1.CustomResourceConversion{
+				Strategy: apiextensionsv1.WebhookConverter,
+				Webhook: &apiextensionsv1.WebhookConversion{
+					ClientConfig:             conversionClientConfig,
+					ConversionReviewVersions: []string{"v1"},
+				},
 			},
 			Versions: []apiextensionsv1.CustomResourceDefinitionVersion{
 				{
@@ -1453,14 +1470,10 @@ authorizers:
 			},
 			expectAllowed: false,
 		},
-		// This fails with an error, as no "real" CRD conversion happens, and the old object comes in with spec={"replicas": {}}, as
-		// the v1 data was spec={"replicas": 5}, and during "conversion", the replicas field was just cast into an object, which means
-		// that it's not even possible to apply the v1 condition (that targeted spec.replicas as an int).
-		// TODO(luxas): See if there's anything we can do about this.
-		/*{
-			name:             "crd v2 replicas.max - update allowed",
-			user:             "alice-crd-v2-update-allow",
-			authorizers:      celConditionalAuthorizerVariants(crdReplicasDecision),
+		{
+			name:        "crd v2 replicas.max - update allowed",
+			user:        "alice-crd-v2-update-allow",
+			authorizers: celConditionalAuthorizerVariants(crdReplicasDecision),
 			makeRequest: func(t *testing.T, _ *clientset.Clientset, suffix string) error {
 				config := rest.CopyConfig(server.ClientConfig)
 				config.Impersonate.UserName = "alice-crd-v2-update-allow" + suffix
@@ -1499,7 +1512,7 @@ authorizers:
 			},
 			expectAllowed:             true,
 			expectAllowedWhenDisabled: new(false),
-		},*/
+		},
 		{
 			name:        "crd v2 replicas.max - update denied",
 			user:        "alice-crd-v2-update-deny",
@@ -2198,6 +2211,55 @@ func hpaCPUUtilizationDecision(a authorizer.Attributes, conditionsType string) a
 
 // crdReplicasDecision is a decisionFunc for the ScalableWidget CRD test cases.
 // It emits a ConditionsMap that only allows updates/creates whose replicas is
+// convertScalableWidget converts a single ScalableWidget custom resource between
+// v1 (spec.replicas: integer) and v2 (spec.replicas: {max: integer})
+// representations for use as an ObjectConverterFunc in the CRD conversion webhook.
+// Same-version passes through unchanged; missing replicas is propagated as an
+// unset field so round-trips stay lossless for the shapes the tests exercise.
+func convertScalableWidget(desiredAPIVersion string, in runtime.RawExtension) (runtime.RawExtension, error) {
+	obj := &unstructured.Unstructured{}
+	if _, _, err := unstructured.UnstructuredJSONScheme.Decode(in.Raw, nil, obj); err != nil {
+		return runtime.RawExtension{}, fmt.Errorf("decode CR: %w", err)
+	}
+	currentAPIVersion := obj.GetAPIVersion()
+
+	switch {
+	case currentAPIVersion == desiredAPIVersion:
+		// Same-version request: no field transformation needed.
+	case currentAPIVersion == "example.com/v1" && desiredAPIVersion == "example.com/v2":
+		replicas, found, err := unstructured.NestedInt64(obj.Object, "spec", "replicas")
+		if err != nil {
+			return runtime.RawExtension{}, fmt.Errorf("v1→v2: read spec.replicas: %w", err)
+		}
+		if found {
+			if err := unstructured.SetNestedField(obj.Object, map[string]interface{}{"max": replicas}, "spec", "replicas"); err != nil {
+				return runtime.RawExtension{}, fmt.Errorf("v1→v2: set spec.replicas: %w", err)
+			}
+		}
+	case currentAPIVersion == "example.com/v2" && desiredAPIVersion == "example.com/v1":
+		max, found, err := unstructured.NestedInt64(obj.Object, "spec", "replicas", "max")
+		if err != nil {
+			return runtime.RawExtension{}, fmt.Errorf("v2→v1: read spec.replicas.max: %w", err)
+		}
+		if found {
+			if err := unstructured.SetNestedField(obj.Object, max, "spec", "replicas"); err != nil {
+				return runtime.RawExtension{}, fmt.Errorf("v2→v1: set spec.replicas: %w", err)
+			}
+		} else {
+			unstructured.RemoveNestedField(obj.Object, "spec", "replicas")
+		}
+	default:
+		return runtime.RawExtension{}, fmt.Errorf("unsupported ScalableWidget conversion %s → %s", currentAPIVersion, desiredAPIVersion)
+	}
+
+	obj.SetAPIVersion(desiredAPIVersion)
+	raw, err := json.Marshal(obj.Object)
+	if err != nil {
+		return runtime.RawExtension{}, fmt.Errorf("marshal CR: %w", err)
+	}
+	return runtime.RawExtension{Raw: raw}, nil
+}
+
 // at most 10. The CEL expression is version-specific: for v1 it checks
 // spec.replicas (integer), for v2 it checks spec.replicas.max (integer nested
 // in an object). For updates, both old and new objects must satisfy the

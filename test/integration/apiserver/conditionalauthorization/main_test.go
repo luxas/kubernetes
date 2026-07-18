@@ -19,9 +19,23 @@ package conditionalauthorization
 import (
 	"testing"
 
+	"go.uber.org/goleak"
+
 	"k8s.io/kubernetes/test/integration/framework"
 )
 
+// TestMain adds package-scoped goleak ignores for HTTP transport goroutines
+// that survive kube-apiserver teardown. The CRD conversion webhook client
+// cache (apiextensions-apiserver's CRConverterFactory → webhook.ClientManager)
+// holds strong references to *rest.RESTClient — and therefore to
+// *http.Transport — past server.TearDownFn. Client-go's tlsTransportCache
+// uses weak references (ClientsAllowTLSCacheGC=beta), but the strong ref from
+// the converter factory prevents finalization within a typical test deadline,
+// leaving idle persistConn.{readLoop,writeLoop} goroutines that
+// framework.goleakFindRetry then polls up to 600 s for.
 func TestMain(m *testing.M) {
-	framework.EtcdMain(m.Run)
+	framework.EtcdMain(m.Run,
+		goleak.IgnoreTopFunction("net/http.(*persistConn).readLoop"),
+		goleak.IgnoreTopFunction("net/http.(*persistConn).writeLoop"),
+	)
 }
