@@ -89,7 +89,7 @@ type conditionsAwareFakeAuthorizer struct {
 }
 
 func (f *conditionsAwareFakeAuthorizer) Authorize(ctx context.Context, a authorizer.Attributes) (authorizer.Decision, string, error) {
-	return unconditionalParts(f.ConditionsAwareAuthorize(ctx, a))
+	return f.ConditionsAwareAuthorize(ctx, a).UnconditionalParts()
 }
 
 func (f *conditionsAwareFakeAuthorizer) ConditionsAwareAuthorize(_ context.Context, _ authorizer.Attributes) authorizer.ConditionsAwareDecision {
@@ -101,23 +101,6 @@ func (f *conditionsAwareFakeAuthorizer) EvaluateConditions(ctx context.Context, 
 		return f.evalConditions(ctx, d, data)
 	}
 	return authorizer.DecisionDeny, "", authorizer.ErrorConditionEvaluationNotSupported
-}
-
-// unconditionalParts turns a ConditionsAwareDecision into the (Decision, reason, error)
-// triple that Authorize expects. If the decision is still conditional, fail closed to the
-// decision's FailureDecision with a fixed reason. Copy of the same helper in the authorizer
-// package's tests.
-func unconditionalParts(d authorizer.ConditionsAwareDecision) (authorizer.Decision, string, error) {
-	switch {
-	case d.IsAllow():
-		return authorizer.DecisionAllow, d.Reason(), d.Error()
-	case d.IsDeny():
-		return authorizer.DecisionDeny, d.Reason(), d.Error()
-	case d.IsNoOpinion():
-		return authorizer.DecisionNoOpinion, d.Reason(), d.Error()
-	default:
-		return d.FailureDecision(), "failed closed: tried to return conditional decision to conditions-unaware authorizer", nil
-	}
 }
 
 // ---------- fake rest.Updater ----------
@@ -543,7 +526,9 @@ func TestConditionsEnforcerEndToEnd(t *testing.T) {
 					handler = withCompoundAuthorization(handler, tt.compoundAuthorizer, testCodecs)
 
 					if mode.gate {
-						handler = filters.WithAuthorizationAndConditionsSupport(handler, tt.authorizer, testCodecs.WithoutConversion(), tt.conditionalAuthzClassifier)
+						// This test is exercising the conditions-enforcer admission plugin, so mark
+						// the enforcer as enabled in the WithConditionsAwareAuthorization dispatch.
+						handler = filters.WithConditionsAwareAuthorization(handler, tt.authorizer, testCodecs.WithoutConversion(), true /* conditionsEnforcerEnabled */, tt.conditionalAuthzClassifier)
 					} else {
 						handler = filters.WithAuthorization(handler, tt.authorizer, testCodecs.WithoutConversion())
 					}

@@ -320,7 +320,7 @@ type conditionsAwareFakeAuthorizer struct {
 }
 
 func (f *conditionsAwareFakeAuthorizer) Authorize(ctx context.Context, a authorizer.Attributes) (authorizer.Decision, string, error) {
-	return unconditionalParts(f.ConditionsAwareAuthorize(ctx, a))
+	return f.ConditionsAwareAuthorize(ctx, a).UnconditionalParts()
 }
 
 func (f *conditionsAwareFakeAuthorizer) ConditionsAwareAuthorize(_ context.Context, _ authorizer.Attributes) authorizer.ConditionsAwareDecision {
@@ -329,23 +329,6 @@ func (f *conditionsAwareFakeAuthorizer) ConditionsAwareAuthorize(_ context.Conte
 
 func (f *conditionsAwareFakeAuthorizer) EvaluateConditions(_ context.Context, _ authorizer.ConditionsAwareDecision, _ authorizer.ConditionsData) (authorizer.Decision, string, error) {
 	return authorizer.DecisionDeny, "", authorizer.ErrorConditionEvaluationNotSupported
-}
-
-// unconditionalParts turns a ConditionsAwareDecision into the (Decision, reason, error)
-// triple that Authorize expects. If the decision is still conditional, fail closed to the
-// decision's FailureDecision with a fixed reason. Copy of the same helper in the authorizer
-// package's tests.
-func unconditionalParts(d authorizer.ConditionsAwareDecision) (authorizer.Decision, string, error) {
-	switch {
-	case d.IsAllow():
-		return authorizer.DecisionAllow, d.Reason(), d.Error()
-	case d.IsDeny():
-		return authorizer.DecisionDeny, d.Reason(), d.Error()
-	case d.IsNoOpinion():
-		return authorizer.DecisionNoOpinion, d.Reason(), d.Error()
-	default:
-		return d.FailureDecision(), "authorizer tried to return conditional decision, but the ConditionalAuthorization feature gate is disabled", nil
-	}
 }
 
 func TestWithAuthorization(t *testing.T) {
@@ -394,7 +377,10 @@ func TestWithAuthorization(t *testing.T) {
 			name:       "allow",
 			authorizer: fakeAuthorizer{authorizer.DecisionAllow, "RBAC: allowed", nil},
 			disabled:   expectedOutcome{statusCode: http.StatusOK, handlerCalled: true, decisionAnnotation: DecisionAllow, reasonAnnotation: "RBAC: allowed"},
-			enabled:    expectedOutcome{statusCode: http.StatusOK, handlerCalled: true, decisionAnnotation: DecisionAllow, reasonAnnotation: "RBAC: allowed"},
+			// gate on: withConditionsAwareAuthorization delegates audit annotations on the
+			// allow path (both unconditional and conditional) to the AuthorizationConditionsEnforcer
+			// admission plugin, which is not in this filter-only test chain.
+			enabled: expectedOutcome{statusCode: http.StatusOK, handlerCalled: true},
 		},
 		{
 			name:       "deny",
@@ -421,7 +407,7 @@ func TestWithAuthorization(t *testing.T) {
 			},
 			conditionalAuthzClassifier: classifierAlwaysTrue,
 			// gate off: condMap constructor fail-closes to NoOpinion (no deny effect) => forbidden
-			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: DecisionForbid, reasonAnnotation: "authorizer tried to return conditional decision, but the ConditionalAuthorization feature gate is disabled"},
+			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: DecisionForbid, reasonAnnotation: "failed closed: tried to return conditional decision to conditions-unaware authorizer"},
 			// gate on: CanBecomeAllowed=true, classifier=true => conditional path
 			enabled: expectedOutcome{statusCode: http.StatusOK, handlerCalled: true, conditionalInContext: true},
 		},
@@ -432,9 +418,9 @@ func TestWithAuthorization(t *testing.T) {
 			},
 			conditionalAuthzClassifier: classifierAlwaysFalse,
 			// gate off: condMap constructor fail-closes to NoOpinion => forbidden
-			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: DecisionForbid, reasonAnnotation: "authorizer tried to return conditional decision, but the ConditionalAuthorization feature gate is disabled"},
+			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: DecisionForbid, reasonAnnotation: "failed closed: tried to return conditional decision to conditions-unaware authorizer"},
 			// gate on: classifier rejects, err=nil => forbidden
-			enabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: DecisionForbid, reasonAnnotation: "authorizer tried to return conditional decision, but the ConditionalAuthorization feature gate is disabled"},
+			enabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: DecisionForbid, reasonAnnotation: "failed closed: tried to return conditional decision to conditions-unaware authorizer"},
 		},
 		{
 			name: "conditional allow + classifier nil",
@@ -443,9 +429,9 @@ func TestWithAuthorization(t *testing.T) {
 			},
 			conditionalAuthzClassifier: nil,
 			// gate off: condMap constructor fail-closes to NoOpinion => forbidden
-			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: DecisionForbid, reasonAnnotation: "authorizer tried to return conditional decision, but the ConditionalAuthorization feature gate is disabled"},
+			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: DecisionForbid, reasonAnnotation: "failed closed: tried to return conditional decision to conditions-unaware authorizer"},
 			// gate on: no classifier, err=nil => forbidden
-			enabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: DecisionForbid, reasonAnnotation: "authorizer tried to return conditional decision, but the ConditionalAuthorization feature gate is disabled"},
+			enabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: DecisionForbid, reasonAnnotation: "failed closed: tried to return conditional decision to conditions-unaware authorizer"},
 		},
 		{
 			name: "conditional deny-only + classifier true",
@@ -454,7 +440,7 @@ func TestWithAuthorization(t *testing.T) {
 			},
 			conditionalAuthzClassifier: classifierAlwaysTrue,
 			// gate off: condMap constructor fail-closes to Deny (has deny effect) => forbidden
-			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: DecisionForbid, reasonAnnotation: "authorizer tried to return conditional decision, but the ConditionalAuthorization feature gate is disabled"},
+			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: DecisionForbid, reasonAnnotation: "failed closed: tried to return conditional decision to conditions-unaware authorizer"},
 			// gate on: CanBecomeAllowed=false, err=nil => forbidden
 			enabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: DecisionForbid},
 		},
@@ -490,12 +476,25 @@ func TestWithAuthorization(t *testing.T) {
 
 					innerHandler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 						handlerCalled = true
-						_, _, gotConditionalDecision = request.ConditionallyAuthorizedDecisionFrom(req.Context())
+						// A conditions-aware decision is always attached to the context when
+						// withConditionsAwareAuthorization is used, even for unconditional
+						// outcomes. Consider a "conditional" decision propagated only if the
+						// decision it carries is not an unconditional Allow/Deny/NoOpinion.
+						_, decision, ok := request.ConditionallyAuthorizedDecisionFrom(req.Context())
+						gotConditionalDecision = ok && !decision.IsUnconditional()
 						w.WriteHeader(http.StatusOK)
 					})
 
 					noopMetrics := func(_ context.Context, _ string, _, _ time.Time) {}
-					handler := withAuthorization(innerHandler, tt.authorizer, negotiatedSerializer, noopMetrics, tt.conditionalAuthzClassifier)
+					// Mirror the dispatch that the public WithConditionsAwareAuthorization wrapper does:
+					// use the conditions-aware handler only when the gate is on and the AuthorizationConditionsEnforcer is enabled.
+					// In this test, the admission plugin is always considered present, and thus is the second AND term always true.
+					var handler http.Handler
+					if mode.gate {
+						handler = withConditionsAwareAuthorization(innerHandler, tt.authorizer, negotiatedSerializer, noopMetrics, tt.conditionalAuthzClassifier)
+					} else {
+						handler = withAuthorization(innerHandler, tt.authorizer, negotiatedSerializer, noopMetrics)
+					}
 
 					req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/namespaces/default/pods", nil)
 					req = withTestContext(req, nil, &auditinternal.Event{Level: auditinternal.LevelMetadata})

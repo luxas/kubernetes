@@ -25,7 +25,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"slices"
 	"strings"
 	"testing"
 
@@ -36,6 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
+	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	authorizationcel "k8s.io/apiserver/pkg/authorization/cel"
 	genericfeatures "k8s.io/apiserver/pkg/features"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
@@ -136,6 +136,19 @@ var testAttr = authorizer.AttributesRecord{
 	ResourceRequest: true,
 }
 
+// testCtx is a context that models what the API server request chain always
+// installs: a RequestInfo describing the in-flight request. Downstream
+// declarative validation (invoked from the webhook authorizer's SAR/ACR
+// response-validation step) reads the API version off this RequestInfo, so
+// tests that call the authorizer methods directly must supply one.
+var testCtx = genericapirequest.WithRequestInfo(context.Background(), &genericapirequest.RequestInfo{
+	IsResourceRequest: true,
+	APIGroup:          "",
+	APIVersion:        "v1",
+	Resource:          "configmaps",
+	Verb:              "create",
+})
+
 // TestConditionsAwareAuthorize tests the ConditionsAwareAuthorize method
 // including all decision types and error cases.
 func TestConditionsAwareAuthorize(t *testing.T) {
@@ -200,13 +213,16 @@ func TestConditionsAwareAuthorize(t *testing.T) {
 			name:            "webhook error with failurePolicy=NoOpinion",
 			sarErr:          fmt.Errorf("webhook server unavailable"),
 			decisionOnError: authorizer.DecisionNoOpinion,
-			wantDecision:    `NoOpinion(err="webhook server unavailable")`,
+			// The failure path in conditionsAwareFailureDecision tags the decision
+			// with reason="failed closed" so operators can distinguish a "the
+			// webhook itself failed" outcome from an explicit authorizer answer.
+			wantDecision: `NoOpinion(reason="failed closed", err="webhook server unavailable")`,
 		},
 		{
 			name:            "webhook error with failurePolicy=Deny",
 			sarErr:          fmt.Errorf("webhook server unavailable"),
 			decisionOnError: authorizer.DecisionDeny,
-			wantDecision:    `Deny(err="webhook server unavailable")`,
+			wantDecision:    `Deny(reason="failed closed", err="webhook server unavailable")`,
 		},
 		{
 			name: "both Allowed and Denied",
@@ -218,6 +234,10 @@ func TestConditionsAwareAuthorize(t *testing.T) {
 			wantDecision:    `Deny(err="webhook subject access review returned both allow and deny response")`,
 		},
 		{
+			// The declarative-validation layer (ValidateSubjectAccessReviewCreate) emits an
+			// aggregate of two errors when both status.denied and status.conditionalDecision
+			// are set with an empty conditionsMap: the union violation and the required-when-
+			// type=ConditionsMap violation.
 			name: "both conditional and Denied",
 			sarStatus: authorizationv1.SubjectAccessReviewStatus{
 				Denied: true,
@@ -226,7 +246,7 @@ func TestConditionsAwareAuthorize(t *testing.T) {
 				},
 			},
 			decisionOnError: authorizer.DecisionDeny,
-			wantDecision:    `Deny(err="webhook subject access review returned both conditional and deny response")`,
+			wantDecision:    `Deny(reason="failed closed", err="[status.denied: Invalid value: true: must be false when status.conditionalDecision.type=ConditionsMap, status.conditionalDecision.conditionsMap: Invalid value: \"\": must be specified when ` + "`type`" + ` is \"ConditionsMap\"]")`,
 		},
 		{
 			name: "both conditional and Allowed",
@@ -237,7 +257,7 @@ func TestConditionsAwareAuthorize(t *testing.T) {
 				},
 			},
 			decisionOnError: authorizer.DecisionDeny,
-			wantDecision:    `Deny(err="webhook subject access review returned both conditional and allow response")`,
+			wantDecision:    `Deny(reason="failed closed", err="[status.allowed: Invalid value: true: must be false when status.conditionalDecision.type=ConditionsMap, status.conditionalDecision.conditionsMap: Invalid value: \"\": must be specified when ` + "`type`" + ` is \"ConditionsMap\"]")`,
 		},
 		{
 			// ConditionsMap must come first in the Union sub-list so that
@@ -286,14 +306,14 @@ func TestConditionsAwareAuthorize(t *testing.T) {
 			}
 
 			wh := newTestWebhookAuthorizer(sarReviewer, nil, tc.decisionOnError)
-			decision := wh.ConditionsAwareAuthorize(context.Background(), testAttr)
+			decision := wh.ConditionsAwareAuthorize(testCtx, testAttr)
 
 			if got := decision.String(); got != tc.wantDecision {
 				t.Errorf("expected decision %s, got %s", tc.wantDecision, got)
 			}
 			if sarReviewer.received == nil {
 				t.Error("expected SAR to be called")
-			} else if conditionalAuthEnabled(sarReviewer.received.Spec.AuthorizationOptions) {
+			} else if !sarReviewer.received.Spec.AuthorizationOptions.SupportsConditionalAuthorization() {
 				t.Error("expected ConditionalAuthorization to be enabled in the outgoing SAR")
 			}
 		})
@@ -384,7 +404,7 @@ func TestAuthorize_FoldDown(t *testing.T) {
 			}
 
 			wh := newTestWebhookAuthorizer(sarReviewer, nil, authorizer.DecisionNoOpinion)
-			d, _, _ := wh.Authorize(context.Background(), testAttr)
+			d, _, _ := wh.Authorize(testCtx, testAttr)
 			if d != tc.wantDecision {
 				t.Errorf("expected %v, got %v", tc.wantDecision, d)
 			}
@@ -744,7 +764,7 @@ func TestEvaluateConditions(t *testing.T) {
 			wantDecision:    authorizer.DecisionDeny,
 			wantReason:      "failed closed",
 			wantErr:         true,
-			wantErrContains: "tried to return Allow from EvaluateConditions, even though that was not a possible outcome",
+			wantErrContains: "tried to return Allow from EvaluateConditions, but the possible outcomes were",
 		},
 		{
 			// PossibleDecisions of an Allow-only ConditionsMap is {NoOpinion, Allow},
@@ -767,7 +787,7 @@ func TestEvaluateConditions(t *testing.T) {
 			wantDecision:    authorizer.DecisionNoOpinion,
 			wantReason:      "failed closed",
 			wantErr:         true,
-			wantErrContains: "tried to return Deny from EvaluateConditions, even though that was not a possible outcome",
+			wantErrContains: "tried to return Deny from EvaluateConditions, but the possible outcomes were",
 		},
 		{
 			// A Union that contains any unconditional Allow/Deny leaf drops NoOpinion
@@ -797,7 +817,7 @@ func TestEvaluateConditions(t *testing.T) {
 			wantDecision:    authorizer.DecisionDeny,
 			wantReason:      "failed closed",
 			wantErr:         true,
-			wantErrContains: "tried to return NoOpinion from EvaluateConditions, even though that was not a possible outcome",
+			wantErrContains: "tried to return NoOpinion from EvaluateConditions, but the possible outcomes were",
 		},
 	}
 
@@ -814,7 +834,7 @@ func TestEvaluateConditions(t *testing.T) {
 			}
 
 			wh := newTestWebhookAuthorizer(&fakeSubjectAccessReviewer{}, acrReviewer, tc.decisionOnError)
-			d, reason, err := wh.EvaluateConditions(context.Background(), tc.decision, fakeConditionsData{})
+			d, reason, err := wh.EvaluateConditions(testCtx, tc.decision, fakeConditionsData{})
 
 			if (err != nil) != tc.wantErr {
 				t.Errorf("wantErr=%v, got err=%v", tc.wantErr, err)
@@ -837,12 +857,6 @@ func TestEvaluateConditions(t *testing.T) {
 			}
 		})
 	}
-}
-
-func conditionalAuthEnabled(ao *authorizationv1.AuthorizationOptions) bool {
-	return ao != nil &&
-		slices.Contains(ao.HandledDecisionTypes, authorizationv1.ConditionsAwareDecisionTypeConditionsMap) &&
-		slices.Contains(ao.HandledDecisionTypes, authorizationv1.ConditionsAwareDecisionTypeUnion)
 }
 
 // TestConditionsAwareAuthorize_EndToEnd tests a full round-trip using an HTTP
@@ -876,7 +890,7 @@ func TestConditionsAwareAuthorize_EndToEnd(t *testing.T) {
 			return
 		}
 
-		receivedConditionalAuth = conditionalAuthEnabled(sar.Spec.AuthorizationOptions)
+		receivedConditionalAuth = sar.Spec.AuthorizationOptions.SupportsConditionalAuthorization()
 
 		resp := authorizationv1.SubjectAccessReview{
 			TypeMeta: metav1.TypeMeta{
@@ -898,7 +912,7 @@ func TestConditionsAwareAuthorize_EndToEnd(t *testing.T) {
 		t.Fatalf("failed to create authorizer: %v", err)
 	}
 
-	decision := wh.ConditionsAwareAuthorize(context.Background(), testAttr)
+	decision := wh.ConditionsAwareAuthorize(testCtx, testAttr)
 
 	if !receivedConditionalAuth {
 		t.Error("expected ConditionalAuthorization to be sent in the SAR request")
@@ -961,7 +975,7 @@ func TestEvaluateConditions_EndToEnd(t *testing.T) {
 	}
 
 	wh := newTestWebhookAuthorizer(&fakeSubjectAccessReviewer{}, acrReviewer, authorizer.DecisionNoOpinion)
-	d, reason, err := wh.EvaluateConditions(context.Background(), condDecision, fakeConditionsData{})
+	d, reason, err := wh.EvaluateConditions(testCtx, condDecision, fakeConditionsData{})
 
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)

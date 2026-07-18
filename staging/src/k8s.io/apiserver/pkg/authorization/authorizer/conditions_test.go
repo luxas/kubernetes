@@ -1123,7 +1123,7 @@ var _ authorizer.Authorizer = sampleAuthorizer{}
 type sampleAuthorizer struct{}
 
 func (a sampleAuthorizer) Authorize(ctx context.Context, attrs authorizer.Attributes) (authorizer.Decision, string, error) {
-	return unconditionalParts(a.ConditionsAwareAuthorize(ctx, attrs))
+	return a.ConditionsAwareAuthorize(ctx, attrs).UnconditionalParts()
 }
 
 func (a sampleAuthorizer) ConditionsAwareAuthorize(ctx context.Context, attrs authorizer.Attributes) authorizer.ConditionsAwareDecision {
@@ -1195,23 +1195,6 @@ func objWithLabels(lbls map[string]string) *unstructured.Unstructured {
 		obj.SetLabels(lbls)
 	}
 	return obj
-}
-
-func unconditionalParts(d authorizer.ConditionsAwareDecision) (authorizer.Decision, string, error) {
-	switch {
-	case d.IsAllow():
-		return authorizer.DecisionAllow, d.Reason(), d.Error()
-	case d.IsDeny():
-		return authorizer.DecisionDeny, d.Reason(), d.Error()
-	case d.IsNoOpinion():
-		return authorizer.DecisionNoOpinion, d.Reason(), d.Error()
-	default:
-		// An error is not returned here, as that could yield a HTTP response code of 500 instead of 403.
-		// For the use-case described above with regards to calling this function in Authorize, not returning
-		// an error is important, as it is valid to always fail closed, as if this happens, no unconditional
-		// permissions were given the requestor.
-		return d.FailureDecision(), "failed closed: tried to return conditional decision to conditions-unaware authorizer", nil
-	}
 }
 
 // TestConditionsAwareDecisionConditionsMap_ClonesInputSlices verifies that

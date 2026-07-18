@@ -1720,10 +1720,6 @@ authorizers:
 			authorizationv1.ConditionsAwareDecisionTypeUnion,
 		}
 
-		wantMismatchStatus := authorizationv1.SubjectAccessReviewStatus{
-			Reason: "conditional-webhook: webhook authorizer tried to return conditional decision although client does not support it",
-		}
-
 		resourceAttrs := &authorizationv1.ResourceAttributes{
 			Verb:      "create",
 			Group:     "",
@@ -1820,8 +1816,10 @@ authorizers:
 				authz: configmapAuthorizer(func() authorizer.ConditionsAwareDecision {
 					return internalConditionalAllow
 				}),
-				wantConditionalStatus:   authorizationv1.SubjectAccessReviewStatus{ConditionalDecision: expectedConditionalAllowDecision},
-				wantUnconditionalStatus: wantMismatchStatus,
+				wantConditionalStatus: authorizationv1.SubjectAccessReviewStatus{ConditionalDecision: expectedConditionalAllowDecision},
+				wantUnconditionalStatus: authorizationv1.SubjectAccessReviewStatus{
+					Reason: "conditional-webhook: failed closed",
+				},
 			},
 			{
 				name: "unconditional allow",
@@ -1864,7 +1862,7 @@ authorizers:
 				},
 				wantUnconditionalStatus: authorizationv1.SubjectAccessReviewStatus{
 					Denied: true,
-					Reason: "webhook authorizer tried to return conditional decision although client does not support it",
+					Reason: "failed closed",
 				},
 			},
 		}
@@ -2521,7 +2519,13 @@ func (h *webhookServerHandler) handleSAR(ctx context.Context, w http.ResponseWri
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	decision := h.getAuthorizer().ConditionsAwareAuthorize(ctx, attrs)
+	var decision authorizer.ConditionsAwareDecision
+	if sar.Spec.AuthorizationOptions.SupportsConditionalAuthorization() {
+		decision = h.getAuthorizer().ConditionsAwareAuthorize(ctx, attrs)
+	} else {
+		decision = authorizer.ConditionsAwareDecisionFromParts(h.getAuthorizer().Authorize(ctx, attrs))
+	}
+
 	applyDecisionToSAR(sar, decision)
 
 	w.Header().Set("Content-Type", "application/json")

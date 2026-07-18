@@ -26,7 +26,6 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	genericfeatures "k8s.io/apiserver/pkg/features"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
-	"k8s.io/utils/ptr"
 
 	"k8s.io/klog/v2"
 
@@ -56,24 +55,80 @@ type ConditionalAuthorizationRequestClassifier func(attrs authorizer.Attributes)
 type recordAuthorizationMetricsFunc func(ctx context.Context, resultLabel string, authStart time.Time, authFinish time.Time)
 
 // WithAuthorization passes all authorized requests on to handler, and returns a forbidden error otherwise.
-func WithAuthorization(hhandler http.Handler, auth authorizer.Authorizer, s runtime.NegotiatedSerializer) http.Handler {
-	return withAuthorization(hhandler, auth, s, recordAuthorizationMetrics, nil)
+func WithAuthorization(hhandler http.Handler, auth authorizer.UnconditionalAuthorizer, s runtime.NegotiatedSerializer) http.Handler {
+	RegisterMetrics()
+	return withAuthorization(hhandler, auth, s, recordAuthorizationMetrics)
 }
 
-// WithAuthorizationAndConditionsSupport passes all authorized requests on to handler, and returns a forbidden error otherwise.
+// WithConditionsAwareAuthorization passes all authorized requests on to handler, and returns a forbidden error otherwise.
 // If conditionalAuthzClassifier returns true, it also allows conditionally authorized requests through, as then the classifier
 // guarantees that there is some conditions enforcement later in the request handler chain.
-func WithAuthorizationAndConditionsSupport(hhandler http.Handler, auth authorizer.Authorizer, s runtime.NegotiatedSerializer, conditionalAuthzClassifier ConditionalAuthorizationRequestClassifier) http.Handler {
-	return withAuthorization(hhandler, auth, s, recordAuthorizationMetrics, conditionalAuthzClassifier)
+//
+// When the ConditionalAuthorization feature gate is on AND the AuthorizationConditionsEnforcer admission plugin is enabled,
+// the request always flows through the conditions-aware handler so a ConditionsAwareDecision is attached to the context —
+// the enforcer plugin requires that context value to be present even when the classifier says "no conditional support here"
+// (it then observes an unconditional decision and short-circuits). Only when the gate is off or the plugin is disabled
+// do we fall back to the plain WithAuthorization filter, which is the pre-feature behaviour.
+func WithConditionsAwareAuthorization(hhandler http.Handler, auth authorizer.Authorizer, s runtime.NegotiatedSerializer, conditionsEnforcerEnabled bool, conditionalAuthzClassifier ConditionalAuthorizationRequestClassifier) http.Handler {
+	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) && conditionsEnforcerEnabled {
+		RegisterMetrics()
+		return withConditionsAwareAuthorization(hhandler, auth, s, recordAuthorizationMetrics, conditionalAuthzClassifier)
+	}
+	return WithAuthorization(hhandler, auth, s)
 }
 
-func withAuthorization(handler http.Handler, a authorizer.Authorizer, s runtime.NegotiatedSerializer, metrics recordAuthorizationMetricsFunc, conditionalAuthzClassifier ConditionalAuthorizationRequestClassifier) http.Handler {
+func withAuthorization(handler http.Handler, a authorizer.UnconditionalAuthorizer, s runtime.NegotiatedSerializer, metrics recordAuthorizationMetricsFunc) http.Handler {
 	if a == nil {
 		klog.Warning("Authorization is disabled")
 		return handler
 	}
-	// Registering metrics first here makes the metrics on purpose unavailable if authorization is disabled.
-	RegisterMetrics()
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		ctx := req.Context()
+		authorizationStart := time.Now()
+
+		attributes, err := GetAuthorizerAttributes(ctx)
+		if err != nil {
+			responsewriters.InternalError(w, req, err)
+			return
+		}
+		authorized, reason, err := a.Authorize(ctx, attributes)
+
+		metricsResultLabel := authorizationMetricsLabelForAuthorize(authorized, err)
+
+		authorizationFinish := time.Now()
+		request.TrackAuthorizationLatency(ctx, authorizationFinish.Sub(authorizationStart))
+		defer func() {
+			metrics(ctx, metricsResultLabel, authorizationStart, authorizationFinish)
+		}()
+
+		// an authorizer like RBAC could encounter evaluation errors and still allow the request, so authorizer decision is checked before error here.
+		if authorized == authorizer.DecisionAllow {
+			audit.AddAuditAnnotations(ctx,
+				DecisionAnnotationKey, DecisionAllow,
+				ReasonAnnotationKey, reason)
+			handler.ServeHTTP(w, req)
+			return
+		}
+		if err != nil {
+			audit.AddAuditAnnotation(ctx, ReasonAnnotationKey, ReasonError)
+			responsewriters.InternalError(w, req, err)
+			return
+		}
+
+		klog.V(4).InfoS("Forbidden", "URI", req.RequestURI, "reason", reason)
+		audit.AddAuditAnnotations(ctx,
+			DecisionAnnotationKey, DecisionForbid,
+			ReasonAnnotationKey, reason)
+		responsewriters.Forbidden(attributes, w, req, reason, s)
+	})
+}
+
+func withConditionsAwareAuthorization(handler http.Handler, a authorizer.Authorizer, s runtime.NegotiatedSerializer, metrics recordAuthorizationMetricsFunc, conditionalAuthzClassifier ConditionalAuthorizationRequestClassifier) http.Handler {
+	if a == nil {
+		klog.Warning("Authorization is disabled")
+		return handler
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		ctx := req.Context()
 		authorizationStart := time.Now()
@@ -84,28 +139,21 @@ func withAuthorization(handler http.Handler, a authorizer.Authorizer, s runtime.
 			return
 		}
 
-		var reason string
-		var metricsResultLabel string
-		var unconditionallyAuthorized bool // = false, unless set in the branches below
-		var conditionsAwareDecision *authorizer.ConditionsAwareDecision
+		var conditionsAwareDecision authorizer.ConditionsAwareDecision
 
 		// Both branches must set unconditionallyAuthorized, reason, err, and metricsResultLabel properly
 		// Only call ConditionsAwareAuthorize for requests that support conditional authorization.
-		if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) && conditionalAuthzClassifier != nil && conditionalAuthzClassifier(attributes) {
-			conditionsAwareDecision = ptr.To(a.ConditionsAwareAuthorize(ctx, attributes))
-
-			unconditionallyAuthorized = conditionsAwareDecision.IsAllow()
-			reason = conditionsAwareDecision.Reason()
-			err = conditionsAwareDecision.Error()
-			metricsResultLabel = authorizationMetricsLabelForAuthorizeConditionsAware(*conditionsAwareDecision)
+		if conditionalAuthzClassifier != nil && conditionalAuthzClassifier(attributes) {
+			conditionsAwareDecision = a.ConditionsAwareAuthorize(ctx, attributes)
 		} else {
-			var decision authorizer.Decision
-			decision, reason, err = a.Authorize(ctx, attributes)
-
-			unconditionallyAuthorized = decision == authorizer.DecisionAllow
-			// reason, err are already set above
-			metricsResultLabel = authorizationMetricsLabelForAuthorize(decision, err)
+			conditionsAwareDecision = authorizer.ConditionsAwareDecisionFromParts(a.Authorize(ctx, attributes))
 		}
+
+		// Attach the conditionsAwareDecision to the request context
+		ctx = request.WithConditionallyAuthorizedDecision(ctx, a, conditionsAwareDecision)
+		req = req.WithContext(ctx)
+
+		metricsResultLabel := authorizationMetricsLabelForAuthorizeConditionsAware(conditionsAwareDecision)
 
 		authorizationFinish := time.Now()
 		request.TrackAuthorizationLatency(ctx, authorizationFinish.Sub(authorizationStart))
@@ -113,31 +161,21 @@ func withAuthorization(handler http.Handler, a authorizer.Authorizer, s runtime.
 			metrics(ctx, metricsResultLabel, authorizationStart, authorizationFinish)
 		}()
 
+		// If either the request is unconditionally Allowed or conditionally Allowed, proceed to the AuthorizationConditionsEnforcer and let it enforce the final decision.
+		// Audit annotations for the allow path (both unconditional and conditional) are set by the AuthorizationConditionsEnforcer admission plugin.
 		// an authorizer like RBAC could encounter evaluation errors and still allow the request, so authorizer decision is checked before error here.
-		if unconditionallyAuthorized {
-			audit.AddAuditAnnotations(ctx,
-				DecisionAnnotationKey, DecisionAllow,
-				ReasonAnnotationKey, reason)
+		if conditionsAwareDecision.PossibleDecisions().Has(authorizer.DecisionAllow) {
 			handler.ServeHTTP(w, req)
 			return
 		}
 
-		// Only let conditionally-authorized requests proceed when:
-		// a) the conditional authorization feature is enabled
-		// b) there is a possibility that the conditional decision can evaluate to Allow (otherwise, fail fast)
-		// c) if this request now is let past this filter, there exists some later HTTP handler in the chain which
-		//	  evaluates the conditions against the admission control data, and enforces that the decision evaluates to Allow
-		//    in order to let the request through to the storage layer. This is pluggably decided by conditionalAuthzClassifier.
-		if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) && conditionsAwareDecision != nil {
-			if conditionsAwareDecision.PossibleDecisions().Has(authorizer.DecisionAllow) {
-				ctx = request.WithConditionallyAuthorizedDecision(ctx, a, *conditionsAwareDecision)
-				req = req.WithContext(ctx)
-				// Audit annotations are set in the AuthorizationConditionsEnforcer admission plugin.
-				handler.ServeHTTP(w, req)
-				return
-			}
-		}
+		// Set reason and err variables to keep parity with withAuthorization above
+		reason := conditionsAwareDecision.Reason()
+		err = conditionsAwareDecision.Error()
 
+		// Surface authorizer-side errors before treating the decision as a plain
+		// non-allow. Without this, a NoOpinion-with-error would fall through to
+		// the Forbidden response and swallow the internal error entirely.
 		if err != nil {
 			audit.AddAuditAnnotation(ctx, ReasonAnnotationKey, ReasonError)
 			responsewriters.InternalError(w, req, err)

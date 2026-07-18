@@ -185,6 +185,7 @@ func (a *AdmissionOptions) ApplyTo(
 	}
 
 	c.AdmissionControl = admissionmetrics.WithStepMetrics(admissionChain)
+	c.Authorization.ConditionsEnforcerPluginEnabled = slices.Contains(pluginNames, conditionsenforcer.PluginName)
 	return nil
 }
 

@@ -87,8 +87,8 @@ func (c *conditionsEnforcer) Handles(operation admission.Operation) bool {
 func (c *conditionsEnforcer) Validate(ctx context.Context, a admission.Attributes, o admission.ObjectInterfaces) error {
 	authz, decisionToEnforce, ok := request.ConditionallyAuthorizedDecisionFrom(ctx)
 	if !ok {
-		// In the unconditionally authorized path, nothing is added to the context, hence this means "directly authorized"
-		return nil
+		// The server is responsible for using WithConditionsAwareAuthorization whenever the ConditionalAuthorization feature is on and this admission plugin is enabled.
+		return fmt.Errorf("the WithConditionsAwareAuthorization HTTP filter should propagate a ConditionsAwareDecision in the context when the AuthorizationConditionsEnforcer admission plugin is enabled")
 	}
 
 	// The a.GetObject() and a.GetOldObject() objects are passed to admission using the internal API types. Before
@@ -104,7 +104,13 @@ func (c *conditionsEnforcer) Validate(ctx context.Context, a admission.Attribute
 		return fmt.Errorf("failed to convert objects to request version: %w", err)
 	}
 
-	decision, reason, err := authz.EvaluateConditions(ctx, decisionToEnforce, versionedAttributes)
+	var decision authorizer.Decision
+	var reason string
+	if decisionToEnforce.IsUnconditional() {
+		decision, reason, err = decisionToEnforce.UnconditionalParts()
+	} else {
+		decision, reason, err = authz.EvaluateConditions(ctx, decisionToEnforce, versionedAttributes)
+	}
 
 	// The code flow here should exactly match filters.WithAuthorization.
 	// an authorizer could encounter evaluation errors and still allow the request, so authorizer decision is checked before error here.

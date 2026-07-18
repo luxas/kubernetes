@@ -331,7 +331,9 @@ func TestRecordAuthorizationMetricsMetrics(t *testing.T) {
 			defer authorizationAttemptsCounter.Reset()
 
 			audit := &auditinternal.Event{Level: auditinternal.LevelMetadata}
-			handler := WithAuthorizationAndConditionsSupport(&fakeHTTPHandler{}, tt.authorizer, negotiatedSerializer, tt.classifier)
+			// Match the signature of WithConditionsAwareAuthorization: the test enables the enforcer plugin
+			// so that the conditions-aware dispatch is exercised whenever the classifier is non-nil.
+			handler := WithConditionsAwareAuthorization(&fakeHTTPHandler{}, tt.authorizer, negotiatedSerializer, true /* conditionsEnforcerEnabled */, tt.classifier)
 			// TODO: fake audit injector
 
 			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/namespaces/default/pods", nil)
