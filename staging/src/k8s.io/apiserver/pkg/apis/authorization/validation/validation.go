@@ -29,6 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	metav1validation "k8s.io/apimachinery/pkg/apis/meta/v1/validation"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	genericfeatures "k8s.io/apiserver/pkg/features"
@@ -41,12 +42,23 @@ import (
 // "ConditionalAuthorization" option when the corresponding feature gate is
 // enabled, so that the +k8s:ifDisabled("ConditionalAuthorization")=+k8s:forbidden
 // tag on spec.conditionalAuthorization does not reject the field.
-func sarValidationConfig() rest.DeclarativeValidationConfig {
+func sarValidationConfig(gvk schema.GroupVersionKind) rest.DeclarativeValidationConfig {
 	var options []string
 	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
 		options = append(options, string(genericfeatures.ConditionalAuthorization))
 	}
-	return rest.DeclarativeValidationConfig{Options: options}
+	return rest.DeclarativeValidationConfig{
+		Options:              options,
+		SubresourceGVKMapper: mapper{gvk: gvk},
+	}
+}
+
+type mapper struct {
+	gvk schema.GroupVersionKind
+}
+
+func (m mapper) GroupVersionKind(containingGV schema.GroupVersion) schema.GroupVersionKind {
+	return m.gvk
 }
 
 // ValidateSubjectAccessReviewSpec validates a SubjectAccessReviewSpec and returns an
@@ -82,11 +94,54 @@ func ValidateSelfSubjectAccessReviewSpec(spec authorizationv1.SelfSubjectAccessR
 	return allErrs
 }
 
+// ValidateSubjectAccessReviewStatus validates a SubjectAccessReviewSpec and returns an
+// ErrorList with any errors.
+func ValidateSubjectAccessReviewStatus(status authorizationv1.SubjectAccessReviewStatus, clientIsConditionsAware bool, fldPath *field.Path) field.ErrorList {
+	allErrs := field.ErrorList{}
+
+	if status.Allowed && status.Denied {
+		allErrs = append(allErrs, field.Invalid(fldPath, status.Denied,
+			"allowed and denied are mutually exclusive"))
+	}
+
+	if status.ConditionalDecision != nil {
+
+		// If status.ConditionalDecision is set, but the client did _not_ opt-into conditions, the server did not respect the wish of the client to be unconditional-only
+		if !clientIsConditionsAware {
+			allErrs = append(allErrs, field.Forbidden(fldPath.Child("conditionalDecision"), "can only be set when the client opted into conditions-awareness"))
+		}
+
+		switch status.ConditionalDecision.Type {
+		// Avoid confusion; don't make it possible to specify [Allow, Deny, NoOpinion] top-level using status.conditionalDecision
+		case authorizationv1.ConditionsAwareDecisionTypeDeny, authorizationv1.ConditionsAwareDecisionTypeAllow, authorizationv1.ConditionsAwareDecisionTypeNoOpinion:
+			allErrs = append(allErrs, field.Invalid(fldPath.Child("conditionalDecision", "type"), status.ConditionalDecision.Type,
+				"cannot be one of [Allow, Deny, NoOpinion], these decisions must be expressed using status.allowed and status.denied"))
+
+		// Enforce status.allowed=false && status.denied=false for a conditional decision
+		case authorizationv1.ConditionsAwareDecisionTypeConditionsMap, authorizationv1.ConditionsAwareDecisionTypeUnion:
+			if status.Allowed {
+				allErrs = append(allErrs, field.Invalid(fldPath.Child("allowed"), status.Allowed,
+					fmt.Sprintf("must be false when status.conditionalDecision.type=%s", status.ConditionalDecision.Type)))
+			}
+			if status.Denied {
+				allErrs = append(allErrs, field.Invalid(fldPath.Child("denied"), status.Denied,
+					fmt.Sprintf("must be false when status.conditionalDecision.type=%s", status.ConditionalDecision.Type)))
+			}
+			// unrecognized modes are covered by declarative validation
+		}
+
+		allErrs = append(allErrs, ValidateConditionsAwareDecision(status.ConditionalDecision, fldPath.Child("conditionalDecision"))...)
+	}
+
+	return allErrs
+}
+
 // ValidateSubjectAccessReview validates a SubjectAccessReview and returns an
 // ErrorList with any errors.
 func ValidateSubjectAccessReview(sar *authorizationv1.SubjectAccessReview) field.ErrorList {
 	allErrs := ValidateSubjectAccessReviewSpec(sar.Spec, field.NewPath("spec"))
-	allErrs = append(allErrs, ValidateConditionsAwareDecision(sar.Status.ConditionalDecision, field.NewPath("status", "conditionalDecision"))...)
+	allErrs = append(allErrs, ValidateSubjectAccessReviewStatus(sar.Status, sar.Spec.AuthorizationOptions.SupportsConditionalAuthorization(), field.NewPath("status"))...)
+
 	objectMetaShallowCopy := sar.ObjectMeta
 	objectMetaShallowCopy.ManagedFields = nil
 	if !apiequality.Semantic.DeepEqual(metav1.ObjectMeta{}, objectMetaShallowCopy) {
@@ -99,7 +154,7 @@ func ValidateSubjectAccessReview(sar *authorizationv1.SubjectAccessReview) field
 // ErrorList with any errors.
 func ValidateSelfSubjectAccessReview(sar *authorizationv1.SelfSubjectAccessReview) field.ErrorList {
 	allErrs := ValidateSelfSubjectAccessReviewSpec(sar.Spec, field.NewPath("spec"))
-	allErrs = append(allErrs, ValidateConditionsAwareDecision(sar.Status.ConditionalDecision, field.NewPath("status", "conditionalDecision"))...)
+	allErrs = append(allErrs, ValidateSubjectAccessReviewStatus(sar.Status, sar.Spec.AuthorizationOptions.SupportsConditionalAuthorization(), field.NewPath("status"))...)
 	objectMetaShallowCopy := sar.ObjectMeta
 	objectMetaShallowCopy.ManagedFields = nil
 	if !apiequality.Semantic.DeepEqual(metav1.ObjectMeta{}, objectMetaShallowCopy) {
@@ -112,7 +167,7 @@ func ValidateSelfSubjectAccessReview(sar *authorizationv1.SelfSubjectAccessRevie
 // ErrorList with any errors.
 func ValidateLocalSubjectAccessReview(sar *authorizationv1.LocalSubjectAccessReview) field.ErrorList {
 	allErrs := ValidateSubjectAccessReviewSpec(sar.Spec, field.NewPath("spec"))
-	allErrs = append(allErrs, ValidateConditionsAwareDecision(sar.Status.ConditionalDecision, field.NewPath("status", "conditionalDecision"))...)
+	allErrs = append(allErrs, ValidateSubjectAccessReviewStatus(sar.Status, sar.Spec.AuthorizationOptions.SupportsConditionalAuthorization(), field.NewPath("status"))...)
 
 	objectMetaShallowCopy := sar.ObjectMeta
 	objectMetaShallowCopy.Namespace = ""
@@ -190,8 +245,14 @@ func validateLabelSelectorAttributes(selector *authorizationv1.LabelSelectorAttr
 // ValidateAuthorizationConditionsReview validates a AuthorizationConditionsReview and returns an
 // ErrorList with any errors.
 func ValidateAuthorizationConditionsReview(acr *authorizationv1alpha1.AuthorizationConditionsReview) field.ErrorList {
-	allErrs := ValidateAuthorizationConditionsRequest(acr.Request, field.NewPath("request"))
-	allErrs = append(allErrs, ValidateAuthorizationConditionsResponse(acr.Response, field.NewPath("response"))...)
+	allErrs := field.ErrorList{}
+	if acr.Request != nil {
+		allErrs = append(allErrs, ValidateAuthorizationConditionsRequest(acr.Request, field.NewPath("request"))...)
+	}
+	if acr.Response != nil {
+		allErrs = append(allErrs, ValidateAuthorizationConditionsResponse(acr.Response, field.NewPath("response"))...)
+	}
+
 	objectMetaShallowCopy := acr.ObjectMeta
 	objectMetaShallowCopy.ManagedFields = nil
 	if !apiequality.Semantic.DeepEqual(metav1.ObjectMeta{}, objectMetaShallowCopy) {
@@ -204,7 +265,7 @@ func ValidateAuthorizationConditionsReview(acr *authorizationv1alpha1.Authorizat
 // ErrorList with any errors.
 func ValidateAuthorizationConditionsRequest(req *authorizationv1alpha1.AuthorizationConditionsRequest, fldPath *field.Path) field.ErrorList {
 	allErrs := ValidateConditionsAwareDecision(&req.Decision, fldPath.Child("decision"))
-	// TODO(luxas): AdmissionReviewRequest validation here
+	// TODO(luxas): We could consider validating the AdmissionRequest here, either declaratively or manually. However, the original AdmissionRequest does not have any validation.
 	return allErrs
 }
 
@@ -220,10 +281,8 @@ func ValidateAuthorizationConditionsResponse(resp *authorizationv1alpha1.Authori
 // validation are enforced here; every emitted error mirrors a declarative Beta rule and
 // is marked CoveredByDeclarative so the equivalence check treats them as one.
 func ValidateConditionsAwareDecision(decision *authorizationv1.ConditionsAwareDecision, fldPath *field.Path) field.ErrorList {
-	if decision == nil {
-		return nil
-	}
 	allErrs := field.ErrorList{}
+	// TODO(luxas): Do we need to validate the unionDiscriminator beta marker here too?
 	if decision.ConditionsMap != nil {
 		allErrs = append(allErrs, ValidateConditionsMap(decision.ConditionsMap, fldPath.Child("conditionsMap"))...)
 	}
@@ -296,7 +355,7 @@ func validateDomainPrefixSeparator(fldPath *field.Path, key string) field.ErrorL
 func ValidateSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.Scheme, sar *authorizationv1.SubjectAccessReview) field.ErrorList {
 	errs := ValidateSubjectAccessReview(sar)
 	dv := rest.DeclarativeValidation{Scheme: scheme}
-	return dv.ValidateDeclaratively(ctx, sar, nil, errs, operation.Create, sarValidationConfig())
+	return dv.ValidateDeclaratively(ctx, sar, nil, errs, operation.Create, sarValidationConfig(authorizationv1.SchemeGroupVersion.WithKind("SubjectAccessReview")))
 }
 
 // ValidateSelfSubjectAccessReviewCreate is the single composition of handwritten and declarative
@@ -304,7 +363,7 @@ func ValidateSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.Sche
 func ValidateSelfSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.Scheme, sar *authorizationv1.SelfSubjectAccessReview) field.ErrorList {
 	errs := ValidateSelfSubjectAccessReview(sar)
 	dv := rest.DeclarativeValidation{Scheme: scheme}
-	return dv.ValidateDeclaratively(ctx, sar, nil, errs, operation.Create, sarValidationConfig())
+	return dv.ValidateDeclaratively(ctx, sar, nil, errs, operation.Create, sarValidationConfig(authorizationv1.SchemeGroupVersion.WithKind("SelfSubjectAccessReview")))
 }
 
 // ValidateLocalSubjectAccessReviewCreate is the single composition of handwritten and declarative
@@ -312,7 +371,7 @@ func ValidateSelfSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.
 func ValidateLocalSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.Scheme, sar *authorizationv1.LocalSubjectAccessReview) field.ErrorList {
 	errs := ValidateLocalSubjectAccessReview(sar)
 	dv := rest.DeclarativeValidation{Scheme: scheme}
-	return dv.ValidateDeclaratively(ctx, sar, nil, errs, operation.Create, sarValidationConfig())
+	return dv.ValidateDeclaratively(ctx, sar, nil, errs, operation.Create, sarValidationConfig(authorizationv1.SchemeGroupVersion.WithKind("LocalSubjectAccessReview")))
 }
 
 // ValidateAuthorizationConditionsReviewCreate is the single composition of handwritten and declarative
@@ -320,5 +379,5 @@ func ValidateLocalSubjectAccessReviewCreate(ctx context.Context, scheme *runtime
 func ValidateAuthorizationConditionsReviewCreate(ctx context.Context, scheme *runtime.Scheme, acr *authorizationv1alpha1.AuthorizationConditionsReview) field.ErrorList {
 	errs := ValidateAuthorizationConditionsReview(acr)
 	dv := rest.DeclarativeValidation{Scheme: scheme}
-	return dv.ValidateDeclaratively(ctx, acr, nil, errs, operation.Create, sarValidationConfig())
+	return dv.ValidateDeclaratively(ctx, acr, nil, errs, operation.Create, sarValidationConfig(authorizationv1alpha1.SchemeGroupVersion.WithKind("AuthorizationConditionsReview")))
 }

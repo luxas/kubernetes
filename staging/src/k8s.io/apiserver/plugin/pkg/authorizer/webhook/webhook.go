@@ -22,7 +22,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"iter"
 	"net/http"
 	"slices"
 	"strconv"
@@ -41,10 +40,13 @@ import (
 	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/util/cache"
 	utilnet "k8s.io/apimachinery/pkg/util/net"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apiserver/pkg/apis/apiserver"
 	apiservervalidation "k8s.io/apiserver/pkg/apis/apiserver/validation"
+	apiserverauthorizationv1 "k8s.io/apiserver/pkg/apis/authorization/v1"
+	authorizationvalidation "k8s.io/apiserver/pkg/apis/authorization/validation"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	authorizationcel "k8s.io/apiserver/pkg/authorization/cel"
@@ -257,9 +259,9 @@ func (w *WebhookAuthorizer) Authorize(ctx context.Context, attr authorizer.Attri
 	case r.Status.ConditionalDecision != nil:
 		// Fail with Deny if there is at least one Deny condition or decision.
 		if shouldFailWithDeny(*r.Status.ConditionalDecision) {
-			return authorizer.DecisionDeny, "webhook authorizer tried to return conditional decision although client does not support it", nil
+			return authorizer.DecisionDeny, r.Status.Reason, fmt.Errorf("webhook authorizer tried to return conditional decision although client does not support it")
 		}
-		return authorizer.DecisionNoOpinion, "webhook authorizer tried to return conditional decision although client does not support it", nil
+		return authorizer.DecisionNoOpinion, r.Status.Reason, fmt.Errorf("webhook authorizer tried to return conditional decision although client does not support it")
 	case r.Status.Denied:
 		return authorizer.DecisionDeny, r.Status.Reason, nil
 	case r.Status.Allowed:
@@ -341,29 +343,38 @@ func (w *WebhookAuthorizer) ConditionsAwareAuthorize(ctx context.Context, attr a
 		return w.conditionsAwareFailureDecision(err)
 	}
 
-	switch {
-	case r.Status.Denied && r.Status.Allowed:
+	// Preserve the exact same error as in the Authorize codepath above; Validation also covers this case but formats the error differently
+	if r.Status.Denied && r.Status.Allowed {
 		return authorizer.ConditionsAwareDecisionDeny(r.Status.Reason, fmt.Errorf("webhook subject access review returned both allow and deny response"))
-	case r.Status.Denied && r.Status.ConditionalDecision != nil:
-		return authorizer.ConditionsAwareDecisionDeny(r.Status.Reason, fmt.Errorf("webhook subject access review returned both conditional and deny response"))
-	case r.Status.Allowed && r.Status.ConditionalDecision != nil:
-		return authorizer.ConditionsAwareDecisionDeny(r.Status.Reason, fmt.Errorf("webhook subject access review returned both conditional and allow response"))
+	}
+
+	if errs := authorizationvalidation.ValidateSubjectAccessReviewCreate(ctx, scheme.Scheme, r); len(errs) > 0 {
+		return w.conditionsAwareFailureDecision(errs.ToAggregate())
+	}
+
+	var evaluationErr error
+	if len(r.Status.EvaluationError) != 0 {
+		evaluationErr = errors.New(r.Status.EvaluationError)
+	}
+
+	switch {
+	// ordered by least permissive first for safety. Validation above ensures the status is well-formed and mutually exclusive options are not set.
 	case r.Status.Denied:
-		return authorizer.ConditionsAwareDecisionDeny(r.Status.Reason, nil)
-	case r.Status.Allowed:
-		return authorizer.ConditionsAwareDecisionAllow(r.Status.Reason, nil)
+		return authorizer.ConditionsAwareDecisionDeny(r.Status.Reason, evaluationErr)
 	case r.Status.ConditionalDecision != nil:
-		return deserializeDecision(*r.Status.ConditionalDecision, w.conditionsAwareFailureDecision)
+		return apiserverauthorizationv1.DeserializeConditionsAwareDecision(*r.Status.ConditionalDecision, w.conditionsAwareFailureDecision)
+	case r.Status.Allowed:
+		return authorizer.ConditionsAwareDecisionAllow(r.Status.Reason, evaluationErr)
 	default:
-		return authorizer.ConditionsAwareDecisionNoOpinion(r.Status.Reason, nil)
+		return authorizer.ConditionsAwareDecisionNoOpinion(r.Status.Reason, evaluationErr)
 	}
 }
 
 func (w *WebhookAuthorizer) conditionsAwareFailureDecision(err error) authorizer.ConditionsAwareDecision {
 	if w.decisionOnError == authorizer.DecisionNoOpinion {
-		return authorizer.ConditionsAwareDecisionNoOpinion("", err)
+		return authorizer.ConditionsAwareDecisionNoOpinion("failed closed", err)
 	}
-	return authorizer.ConditionsAwareDecisionDeny("", err)
+	return authorizer.ConditionsAwareDecisionDeny("failed closed", err)
 }
 
 func (w *WebhookAuthorizer) sendSARWebhook(ctx context.Context, r *authorizationv1.SubjectAccessReview, attr authorizer.Attributes) (authorizationv1.SubjectAccessReviewStatus, error) {
@@ -457,7 +468,7 @@ func (w *WebhookAuthorizer) EvaluateConditions(ctx context.Context, decision aut
 
 	r := &authorizationv1alpha1.AuthorizationConditionsReview{
 		Request: &authorizationv1alpha1.AuthorizationConditionsRequest{
-			Decision: serializeConditionsAwareDecision(decision),
+			Decision: apiserverauthorizationv1.SerializeConditionsAwareDecision(decision),
 		},
 	}
 
@@ -525,156 +536,29 @@ func (w *WebhookAuthorizer) EvaluateConditions(ctx context.Context, decision aut
 		return decision.FailureDecision(), "failed closed", fmt.Errorf("uid mismatch in webhook EvaluateConditions for webhook with name %q, expected %q but got %q", w.name, evaluateRequestUUID, result.Response.UID)
 	}
 
-	// TODO(luxas): Enforce validation here. However, that validation code cannot be in any internal packages, where validations usually are.
-	// TODO(luxas): Make it impossible to have allowed=true and conditionalDecision.type=Deny
-	// TODO(luxas): Add AuditAnnotations+Warning additions here properly
+	if errs := authorizationvalidation.ValidateAuthorizationConditionsReviewCreate(ctx, scheme.Scheme, result); len(errs) > 0 {
+		return decision.FailureDecision(), "failed closed", errs.ToAggregate()
+	}
 
 	switch result.Response.Decision.Type {
 	case authorizationv1.ConditionsAwareDecisionTypeDeny:
 		if !decision.PossibleDecisions().Has(authorizer.DecisionDeny) {
-			return decision.FailureDecision(), "failed closed", fmt.Errorf("webhook authorizer tried to return Deny from EvaluateConditions, even though that was not a possible outcome")
+			return decision.FailureDecision(), "failed closed", fmt.Errorf("webhook authorizer tried to return Deny from EvaluateConditions, but the possible outcomes were %v", sets.List(decision.PossibleDecisions()))
 		}
-		return authorizer.DecisionDeny, deserializeV1Reason(result.Response.Decision.Deny), deserializeV1EvaluationError(result.Response.Decision.Deny)
+		return authorizer.DecisionDeny, apiserverauthorizationv1.DeserializeReason(result.Response.Decision.Deny), apiserverauthorizationv1.DeserializeEvaluationError(result.Response.Decision.Deny)
 	case authorizationv1.ConditionsAwareDecisionTypeNoOpinion:
 		if !decision.PossibleDecisions().Has(authorizer.DecisionNoOpinion) {
-			return decision.FailureDecision(), "failed closed", fmt.Errorf("webhook authorizer tried to return NoOpinion from EvaluateConditions, even though that was not a possible outcome")
+			return decision.FailureDecision(), "failed closed", fmt.Errorf("webhook authorizer tried to return NoOpinion from EvaluateConditions, but the possible outcomes were %v", sets.List(decision.PossibleDecisions()))
 		}
-		return authorizer.DecisionNoOpinion, deserializeV1Reason(result.Response.Decision.NoOpinion), deserializeV1EvaluationError(result.Response.Decision.NoOpinion)
+		return authorizer.DecisionNoOpinion, apiserverauthorizationv1.DeserializeReason(result.Response.Decision.NoOpinion), apiserverauthorizationv1.DeserializeEvaluationError(result.Response.Decision.NoOpinion)
 	case authorizationv1.ConditionsAwareDecisionTypeAllow:
 		if !decision.PossibleDecisions().Has(authorizer.DecisionAllow) {
-			return decision.FailureDecision(), "failed closed", fmt.Errorf("webhook authorizer tried to return Allow from EvaluateConditions, even though that was not a possible outcome")
+			return decision.FailureDecision(), "failed closed", fmt.Errorf("webhook authorizer tried to return Allow from EvaluateConditions, but the possible outcomes were %v", sets.List(decision.PossibleDecisions()))
 		}
-		return authorizer.DecisionAllow, deserializeV1Reason(result.Response.Decision.Allow), deserializeV1EvaluationError(result.Response.Decision.Allow)
+		return authorizer.DecisionAllow, apiserverauthorizationv1.DeserializeReason(result.Response.Decision.Allow), apiserverauthorizationv1.DeserializeEvaluationError(result.Response.Decision.Allow)
 	default:
 		return decision.FailureDecision(), "failed closed", fmt.Errorf("unrecognized decision type %q", result.Response.Decision.Type)
 	}
-}
-
-func deserializeV1EvaluationError(ud *authorizationv1.UnconditionalDecision) error {
-	if ud == nil || len(ud.EvaluationError) == 0 {
-		return nil
-	}
-	return errors.New(ud.EvaluationError)
-}
-
-func deserializeV1Reason(ud *authorizationv1.UnconditionalDecision) string {
-	if ud == nil {
-		return ""
-	}
-	return ud.Reason
-}
-
-func deserializeDecision(serializedDecision authorizationv1.ConditionsAwareDecision, failClosed func(error) authorizer.ConditionsAwareDecision) authorizer.ConditionsAwareDecision {
-	switch serializedDecision.Type {
-	case authorizationv1.ConditionsAwareDecisionTypeAllow:
-		return authorizer.ConditionsAwareDecisionAllow(deserializeV1Reason(serializedDecision.Allow), deserializeV1EvaluationError(serializedDecision.Allow))
-	case authorizationv1.ConditionsAwareDecisionTypeDeny:
-		return authorizer.ConditionsAwareDecisionDeny(deserializeV1Reason(serializedDecision.Deny), deserializeV1EvaluationError(serializedDecision.Deny))
-	case authorizationv1.ConditionsAwareDecisionTypeNoOpinion:
-		return authorizer.ConditionsAwareDecisionNoOpinion(deserializeV1Reason(serializedDecision.NoOpinion), deserializeV1EvaluationError(serializedDecision.NoOpinion))
-	case authorizationv1.ConditionsAwareDecisionTypeConditionsMap:
-		if serializedDecision.ConditionsMap != nil {
-			return authorizer.ConditionsAwareDecisionConditionsMap(
-				deserializeConditions(serializedDecision.ConditionsMap.DenyConditions),
-				deserializeConditions(serializedDecision.ConditionsMap.NoOpinionConditions),
-				deserializeConditions(serializedDecision.ConditionsMap.AllowConditions),
-			)
-		}
-		return authorizer.ConditionsAwareDecisionConditionsMap(nil, nil, nil)
-	case authorizationv1.ConditionsAwareDecisionTypeUnion:
-		chain := authorizer.ConditionsAwareDecisionUnion{}
-		for _, namedDecision := range serializedDecision.Union {
-			chain.Add(namedDecision.AuthorizerName, deserializeDecision(namedDecision.Decision, failClosed))
-		}
-		return chain.ToDecision()
-	default:
-		return failClosed(fmt.Errorf("unrecognized ConditionsAwareDecision.type=%q", serializedDecision.Type))
-	}
-}
-
-func deserializeConditions(serializedConditions []authorizationv1.Condition) []authorizer.Condition {
-	deserializedConditions := make([]authorizer.Condition, len(serializedConditions))
-	for i, serialized := range serializedConditions {
-		deserializedConditions[i] = authorizer.GenericCondition{
-			ID:          serialized.ID,
-			Condition:   serialized.Condition,
-			Type:        serialized.Type,
-			Description: serialized.Description,
-		}
-	}
-	return deserializedConditions
-}
-
-// TODO(luxas): Deduplicate this code with authorizationutil (helpers.go)
-func serializeConditionsAwareDecision(decision authorizer.ConditionsAwareDecision) authorizationv1.ConditionsAwareDecision {
-	var errString string
-	if decision.Error() != nil {
-		errString = decision.Error().Error()
-	}
-	switch {
-	case decision.IsAllow():
-		return authorizationv1.ConditionsAwareDecision{
-			Type: authorizationv1.ConditionsAwareDecisionTypeAllow,
-			Allow: &authorizationv1.UnconditionalDecision{
-				Reason:          decision.Reason(),
-				EvaluationError: errString,
-			},
-		}
-	case decision.IsNoOpinion():
-		return authorizationv1.ConditionsAwareDecision{
-			Type: authorizationv1.ConditionsAwareDecisionTypeNoOpinion,
-			NoOpinion: &authorizationv1.UnconditionalDecision{
-				Reason:          decision.Reason(),
-				EvaluationError: errString,
-			},
-		}
-	case decision.IsConditionsMap():
-
-		return authorizationv1.ConditionsAwareDecision{
-			Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
-			ConditionsMap: &authorizationv1.ConditionsMap{
-				DenyConditions:      collectConditions(decision.ConditionsMap().DenyConditions()),
-				NoOpinionConditions: collectConditions(decision.ConditionsMap().NoOpinionConditions()),
-				AllowConditions:     collectConditions(decision.ConditionsMap().AllowConditions()),
-			},
-		}
-	case decision.IsUnion():
-		subDecisions := []authorizationv1.NamedConditionsAwareDecision{}
-		for authorizerName, subDecision := range decision.UnionedDecisions() {
-			subDecisions = append(subDecisions, authorizationv1.NamedConditionsAwareDecision{
-				AuthorizerName: authorizerName,
-				Decision:       serializeConditionsAwareDecision(subDecision),
-			})
-		}
-		return authorizationv1.ConditionsAwareDecision{
-			Type: authorizationv1.ConditionsAwareDecisionTypeUnion,
-			// Reason and EvaluationError are not serialized in Unions, as that information is anyways
-			// available when reading the leaves.
-			Union: subDecisions,
-		}
-	default:
-		// If none of the other cases matched, it's a Deny
-		return authorizationv1.ConditionsAwareDecision{
-			Type: authorizationv1.ConditionsAwareDecisionTypeDeny,
-			Deny: &authorizationv1.UnconditionalDecision{
-				Reason:          decision.Reason(),
-				EvaluationError: errString,
-			},
-		}
-	}
-}
-
-func collectConditions(condIter iter.Seq[authorizer.Condition]) []authorizationv1.Condition {
-	conds := []authorizationv1.Condition{}
-	for condition := range condIter {
-		conds = append(conds, authorizationv1.Condition{
-			ID:          condition.GetID(),
-			Condition:   condition.GetCondition(),
-			Type:        condition.GetType(),
-			Description: condition.GetDescription(),
-		})
-	}
-	return conds
 }
 
 func resourceAttributesFrom(attr authorizer.Attributes) *authorizationv1.ResourceAttributes {
@@ -1013,22 +897,11 @@ func v1beta1StatusToV1Status(in *authorizationv1beta1.SubjectAccessReviewStatus)
 	}
 }
 
-// unconditionalDecisionTypesSorted represents the default value of HandledDecisionTypes when AuthorizationOptions == nil
-// TODO(luxas): Make this a helper in the v1 k8s.io/apiserver authorizationutil
-var unconditionalDecisionTypesSorted = []authorizationv1.ConditionsAwareDecisionType{
-	authorizationv1.ConditionsAwareDecisionTypeAllow,
-	authorizationv1.ConditionsAwareDecisionTypeDeny,
-	authorizationv1.ConditionsAwareDecisionTypeNoOpinion,
-}
-
 func v1SpecToV1beta1Spec(in *authorizationv1.SubjectAccessReviewSpec) (authorizationv1beta1.SubjectAccessReviewSpec, error) {
 	// if in.AuthorizationOptions are set, the only allowed value is [Allow, Deny, NoOpinion], which is how callers should interpret
 	// in.AuthorizationOptions == nil. Anything else cannot be expressed in v1beta1, and thus error.
-	if in.AuthorizationOptions != nil {
-		sortedDecisionTypes := slices.Sorted(slices.Values(in.AuthorizationOptions.HandledDecisionTypes))
-		if !slices.Equal(sortedDecisionTypes, unconditionalDecisionTypesSorted) {
-			return authorizationv1beta1.SubjectAccessReviewSpec{}, fmt.Errorf("cannot send SubjectAccessReview with non-default AuthorizationOptions to a v1beta1 client. Got handledDecisionTypes %v, supported %v", in.AuthorizationOptions.HandledDecisionTypes, unconditionalDecisionTypesSorted)
-		}
+	if !in.AuthorizationOptions.GetHandledDecisionTypes().Equal(authorizationv1.UnconditionalAuthorizationDecisionTypes()) {
+		return authorizationv1beta1.SubjectAccessReviewSpec{}, fmt.Errorf("cannot send SubjectAccessReview with non-default AuthorizationOptions to a v1beta1 client. Got handledDecisionTypes %v, supported %v", in.AuthorizationOptions.HandledDecisionTypes, sets.List(authorizationv1.UnconditionalAuthorizationDecisionTypes()))
 	}
 
 	return authorizationv1beta1.SubjectAccessReviewSpec{

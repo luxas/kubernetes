@@ -68,7 +68,8 @@ type AuthorizationConditionsResponse struct {
 	// This must be copied over from the corresponding AuthorizationConditionsRequest.
 	// It is possible that the same request content (except uid) is sent to the
 	// authorizer multiple times.
-	// +optional
+	// +k8s:required
+	// +required
 	UID types.UID `json:"uid" protobuf:"bytes,1,opt,name=uid"`
 
 	// decision contains the authorizer's decision after seeing the data.

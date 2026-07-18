@@ -18,29 +18,25 @@ package v1beta1
 
 import (
 	fmt "fmt"
-	"slices"
 
+	authorizationv1 "k8s.io/api/authorization/v1"
 	authorizationv1beta1 "k8s.io/api/authorization/v1beta1"
 	conversion "k8s.io/apimachinery/pkg/conversion"
+	"k8s.io/apimachinery/pkg/util/sets"
 	authorization "k8s.io/kubernetes/pkg/apis/authorization"
+	authorizationv1internal "k8s.io/kubernetes/pkg/apis/authorization/v1"
 )
 
-// unconditionalDecisionTypesSorted represents the default value of HandledDecisionTypes when AuthorizationOptions == nil
-var unconditionalDecisionTypesSorted = []authorization.ConditionsAwareDecisionType{
-	authorization.ConditionsAwareDecisionTypeAllow,
-	authorization.ConditionsAwareDecisionTypeDeny,
-	authorization.ConditionsAwareDecisionTypeNoOpinion,
-}
-
 func enforceUnconditionalHandledDecisionTypesOnly(ao *authorization.AuthorizationOptions) error {
-	// TODO: Externalize these validations using generic types, such that the logic can be unified across v1 and internal -> v1beta1
-	// if ao is set, the only allowed value is [Allow, Deny, NoOpinion], which is how callers should interpret
-	// ao == nil. Anything else cannot be expressed in v1beta1, and thus error.
-	if ao != nil {
-		sortedDecisionTypes := slices.Sorted(slices.Values(ao.HandledDecisionTypes))
-		if !slices.Equal(sortedDecisionTypes, unconditionalDecisionTypesSorted) {
-			return fmt.Errorf("cannot send SubjectAccessReview with non-default AuthorizationOptions to a v1beta1 client. Got handledDecisionTypes %v, supported %v", ao.HandledDecisionTypes, unconditionalDecisionTypesSorted)
-		}
+	// Convert to v1 to make use of the helper functions
+	authzOptionsV1 := &authorizationv1.AuthorizationOptions{}
+	if err := authorizationv1internal.Convert_authorization_AuthorizationOptions_To_v1_AuthorizationOptions(ao, authzOptionsV1, nil); err != nil {
+		return err
+	}
+	// Ensure that the HandledDecisionTypes are [Allow, Deny, NoOpinion]
+	if !authzOptionsV1.GetHandledDecisionTypes().Equal(authorizationv1.UnconditionalAuthorizationDecisionTypes()) {
+		return fmt.Errorf("cannot send SubjectAccessReview with non-default AuthorizationOptions to a v1beta1 client. Got handledDecisionTypes %v, supported %v",
+			ao.HandledDecisionTypes, sets.List(authorizationv1.UnconditionalAuthorizationDecisionTypes()))
 	}
 	return nil
 }
@@ -66,24 +62,9 @@ func Convert_authorization_SubjectAccessReviewSpec_To_v1beta1_SubjectAccessRevie
 // Convert_authorization_SubjectAccessReviewStatus_To_v1beta1_SubjectAccessReviewStatus explicitly does not propagate the ConditionalDecision field to the v1beta1
 // object; the conversion is thus lossy. However, this is ok, as {Local,Self,}SubjectAccessReview objects are never stored.
 func Convert_authorization_SubjectAccessReviewStatus_To_v1beta1_SubjectAccessReviewStatus(in *authorization.SubjectAccessReviewStatus, out *authorizationv1beta1.SubjectAccessReviewStatus, s conversion.Scope) error {
-	// in.ConditionalDecision is not present (thus always implicitly nil) in v1beta1, ensure that the field either can be dropped (if it's covered by in.Allowed and in.Denied), or reject with an error.
+	// in.ConditionalDecision != nil implies that the response is conditional; this is not expressible in v1beta1, so fail closed.
 	if in.ConditionalDecision != nil {
-		switch in.ConditionalDecision.Type {
-		case authorization.ConditionsAwareDecisionTypeDeny:
-			if !(in.Allowed == false && in.Denied == true) { // assert against true/false explicitly for readability
-				return fmt.Errorf("inconsistent input object, got in.ConditionalDecision.Type=Deny, but in.Allowed=%t (expected false) and in.Denied=%t (expected true)", in.Allowed, in.Denied)
-			}
-		case authorization.ConditionsAwareDecisionTypeNoOpinion:
-			if !(in.Allowed == false && in.Denied == false) {
-				return fmt.Errorf("inconsistent input object, got in.ConditionalDecision.Type=Allow, but in.Allowed=%t (expected false) and in.Denied=%t (expected false)", in.Allowed, in.Denied)
-			}
-		case authorization.ConditionsAwareDecisionTypeAllow:
-			if !(in.Allowed == true && in.Denied == false) {
-				return fmt.Errorf("inconsistent input object, got in.ConditionalDecision.Type=Allow, but in.Allowed=%t (expected true) and in.Denied=%t (expected false)", in.Allowed, in.Denied)
-			}
-		default:
-			return fmt.Errorf("cannot convert SubjectAccessReviewStatus to v1beta1, v1beta1 does not support in.ConditionalDecision.Type=%s", in.ConditionalDecision.Type)
-		}
+		return fmt.Errorf("cannot convert SubjectAccessReviewStatus to v1beta1, v1beta1 does not support in.ConditionalDecision, which is non-nil in the input object")
 	}
 
 	return autoConvert_authorization_SubjectAccessReviewStatus_To_v1beta1_SubjectAccessReviewStatus(in, out, s)

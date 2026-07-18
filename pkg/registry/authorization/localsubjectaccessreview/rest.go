@@ -67,10 +67,11 @@ func (r *REST) GetSingularName() string {
 func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation rest.ValidateObjectFunc, options *metav1.CreateOptions) (runtime.Object, error) {
 	localSubjectAccessReview, ok := obj.(*authorizationapi.LocalSubjectAccessReview)
 	if !ok {
-		return nil, apierrors.NewBadRequest(fmt.Sprintf("not a LocaLocalSubjectAccessReview: %#v", obj))
+		return nil, apierrors.NewBadRequest(fmt.Sprintf("not a LocalSubjectAccessReview: %#v", obj))
 	}
 
 	// Clear status so it's not taken into account during input validation.
+	// This is important, as we cannot make validation stricter; in k8s 1.36 and before, the client was able to pass a bogus status without a validation error.
 	localSubjectAccessReview.Status = authorizationapi.SubjectAccessReviewStatus{}
 
 	// Clear the options for opting into conditions-awareness when the feature gate is off.
@@ -104,21 +105,12 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 
 	authorizationAttributes := authorizationutil.AuthorizationAttributesFrom(localSubjectAccessReview.Spec)
 
-	// Find out what decision types the client and server support, and below match against their intersection.
-	serverHandledDecisionTypes := authorizationutil.ServerHandledDecisionTypes(utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization))
-	clientHandledDecisionTypes := authorizationutil.ClientHandledDecisionTypes(localSubjectAccessReview.Spec.AuthorizationOptions)
-	bothHandledDecisionTypes := serverHandledDecisionTypes.Intersection(clientHandledDecisionTypes)
-
-	// Exact matches are performed against bothHandledDecisionTypes. If none of them match, the client provided an unsupported set,
-	// for example [Allow], which we shall reject as a bad request, as this is HandledDecisionTypes is not covered by validation above.
-	// The extra utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) check here is technically redundant,
-	// but should help the reader see that the conditional path only triggers when the feature gate is on.
-	if authorizationutil.SupportsConditionalAuthorization(bothHandledDecisionTypes) && utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
-		// conditions-aware flow, feature gate is on and client supports conditions
+	// Only activate Conditional Authorization if both the server and client supports it
+	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) && localSubjectAccessReviewV1.Spec.AuthorizationOptions.SupportsConditionalAuthorization() {
 		conditionsAwareDecision := r.authorizer.ConditionsAwareAuthorize(ctx, authorizationAttributes)
 		localSubjectAccessReview.Status = authorizationutil.ConditionsAwareDecisionToSARStatus(ctx, authorizationAttributes, conditionsAwareDecision)
 
-	} else if authorizationutil.SupportsUnconditionalAuthorization(bothHandledDecisionTypes) {
+	} else if localSubjectAccessReviewV1.Spec.AuthorizationOptions.SupportsUnconditionalAuthorization() {
 		// conditions-unaware flow, feature gate is off or client does not support conditions
 		decision, reason, evaluationErr := r.authorizer.Authorize(ctx, authorizationAttributes)
 
@@ -129,8 +121,8 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 			EvaluationError: authorizationutil.BuildEvaluationError(evaluationErr, authorizationAttributes),
 		}
 	} else {
-		// bothHandledDecisionTypes was neither [Allow, ConditionsMap, Deny, NoOpinion, Union] or [Allow, Deny, NoOpinion], reject it.
-		return nil, apierrors.NewBadRequest(fmt.Sprintf("unsupported client-handled decision types: %v", sets.List(clientHandledDecisionTypes)))
+		// the HandledDecisionTypes was neither [Allow, ConditionsMap, Deny, NoOpinion, Union] or [Allow, Deny, NoOpinion], reject it.
+		return nil, apierrors.NewBadRequest(fmt.Sprintf("unsupported client-handled decision types: %v", sets.List(localSubjectAccessReviewV1.Spec.AuthorizationOptions.GetHandledDecisionTypes())))
 	}
 
 	return localSubjectAccessReview, nil

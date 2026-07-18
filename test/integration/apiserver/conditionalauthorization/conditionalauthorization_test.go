@@ -2438,6 +2438,14 @@ func acrEvaluateCEL(t *testing.T, expectedConditionsType string) func(acr *autho
 				Type: decisionType,
 			},
 		}
+		switch decisionType {
+		case authorizationv1.ConditionsAwareDecisionTypeDeny:
+			acr.Response.Decision.Deny = &authorizationv1.UnconditionalDecision{}
+		case authorizationv1.ConditionsAwareDecisionTypeNoOpinion:
+			acr.Response.Decision.NoOpinion = &authorizationv1.UnconditionalDecision{}
+		case authorizationv1.ConditionsAwareDecisionTypeAllow:
+			acr.Response.Decision.Allow = &authorizationv1.UnconditionalDecision{}
+		}
 	}
 }
 
