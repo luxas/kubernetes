@@ -1622,8 +1622,9 @@ authorizers:
 						if err == nil {
 							t.Fatalf("expected request to be denied, got success")
 						}
-						if !apierrors.IsForbidden(err) && !apierrors.IsUnauthorized(err) {
-							t.Fatalf("expected Forbidden or Unauthorized error, got: %v", err)
+						// TODO(luxas): I don't think we expect Unauthorized ever?
+						if !apierrors.IsForbidden(err) {
+							t.Fatalf("expected Forbidden error, got: %v", err)
 						}
 					}
 				})
@@ -1632,8 +1633,8 @@ authorizers:
 	}
 
 	if featureEnabled {
-		// The conditional decision the webhook returns for configmap SARs.
-		conditionalDecision := &authorizationv1.ConditionsAwareDecision{
+		// The conditional allow-decision the parent webhook handler returns for configmap SARs.
+		conditionalAllowDecision := &authorizationv1.ConditionsAwareDecision{
 			Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
 			ConditionsMap: &authorizationv1.ConditionsMap{
 				AllowConditions: []authorizationv1.Condition{
@@ -1647,45 +1648,58 @@ authorizers:
 			},
 		}
 
-		expectedConditionalDecision := &authorizationv1.ConditionsAwareDecision{
-			Type: authorizationv1.ConditionsAwareDecisionTypeUnion,
-			Union: []authorizationv1.NamedConditionsAwareDecision{
-				{
-					AuthorizerName: "system-privileged-group.authorizer.kubernetes.io",
-					Decision: authorizationv1.ConditionsAwareDecision{
-						Type:      authorizationv1.ConditionsAwareDecisionTypeNoOpinion,
-						NoOpinion: &authorizationv1.UnconditionalDecision{},
-					},
-				},
-				{
-					AuthorizerName: "conditional-webhook",
-					Decision:       *conditionalDecision,
-				},
-				{
-					AuthorizerName: "rbac",
-					Decision: authorizationv1.ConditionsAwareDecision{
-						Type:      authorizationv1.ConditionsAwareDecisionTypeNoOpinion,
-						NoOpinion: &authorizationv1.UnconditionalDecision{},
+		// The conditional deny-decision the "conditional deny" test row's sarHandler installs.
+		conditionalDenyDecision := &authorizationv1.ConditionsAwareDecision{
+			Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
+			ConditionsMap: &authorizationv1.ConditionsMap{
+				DenyConditions: []authorizationv1.Condition{
+					{
+						ID:        "example.com/deny-sensitive-label",
+						Condition: `has(object.metadata.labels) && has(object.metadata.labels.sensitive)`,
+						Type:      "example.com/opaque-cel-condition-type",
 					},
 				},
 			},
 		}
 
-		// Configure the webhook: return a conditional decision for configmap SARs,
-		// NoOpinion for everything else (falls through to RBAC).
-		webhookServer.handler.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
-			if sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "configmaps" {
-				sar.Status.ConditionalDecision = conditionalDecision
+		// expectedUnion wraps the conditional-webhook's decision in the Union structure
+		// the apiserver returns to conditions-aware clients: system-privileged NoOpinion,
+		// then the webhook's decision, then rbac NoOpinion.
+		expectedUnion := func(webhookDecision authorizationv1.ConditionsAwareDecision) *authorizationv1.ConditionsAwareDecision {
+			return &authorizationv1.ConditionsAwareDecision{
+				Type: authorizationv1.ConditionsAwareDecisionTypeUnion,
+				Union: []authorizationv1.NamedConditionsAwareDecision{
+					{
+						AuthorizerName: "system-privileged-group.authorizer.kubernetes.io",
+						Decision: authorizationv1.ConditionsAwareDecision{
+							Type:      authorizationv1.ConditionsAwareDecisionTypeNoOpinion,
+							NoOpinion: &authorizationv1.UnconditionalDecision{},
+						},
+					},
+					{
+						AuthorizerName: "conditional-webhook",
+						Decision:       webhookDecision,
+					},
+					{
+						AuthorizerName: "rbac",
+						Decision: authorizationv1.ConditionsAwareDecision{
+							Type:      authorizationv1.ConditionsAwareDecisionTypeNoOpinion,
+							NoOpinion: &authorizationv1.UnconditionalDecision{},
+						},
+					},
+				},
 			}
 		}
-		webhookServer.handler.acrHandler = acrEvaluateCEL(t, "example.com/opaque-cel-condition-type")
 
-		type sarEndpoint int
-		const (
-			endpointSAR sarEndpoint = iota
-			endpointSelfSAR
-			endpointLocalSAR
-		)
+		expectedConditionalAllowDecision := expectedUnion(*conditionalAllowDecision)
+		expectedConditionalDenyDecision := expectedUnion(*conditionalDenyDecision)
+
+		// Configure the webhook: return a conditional decision for configmap SARs,
+		// NoOpinion for everything else (falls through to RBAC).
+		// TODO(luxas): Can we make this panic to make sure it's never called
+		webhookServer.handler.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
+			panic("should not be called")
+		} // acrEvaluateCEL(t, "example.com/opaque-cel-condition-type")
 
 		handledAll := []authorizationv1.ConditionsAwareDecisionType{
 			authorizationv1.ConditionsAwareDecisionTypeAllow,
@@ -1695,80 +1709,120 @@ authorizers:
 			authorizationv1.ConditionsAwareDecisionTypeUnion,
 		}
 
+		wantMismatchStatus := authorizationv1.SubjectAccessReviewStatus{
+			Reason: "conditional-webhook: webhook authorizer tried to return conditional decision although client does not support it",
+		}
+
+		resourceAttrs := &authorizationv1.ResourceAttributes{
+			Verb:      "create",
+			Group:     "",
+			Version:   "v1",
+			Resource:  "configmaps",
+			Namespace: "test-ns",
+		}
+
+		type sendFn func(t *testing.T, user string, authOpts *authorizationv1.AuthorizationOptions) authorizationv1.SubjectAccessReviewStatus
+
+		sendSAR := func(t *testing.T, user string, authOpts *authorizationv1.AuthorizationOptions) authorizationv1.SubjectAccessReviewStatus {
+			t.Helper()
+			sar := &authorizationv1.SubjectAccessReview{
+				Spec: authorizationv1.SubjectAccessReviewSpec{
+					ResourceAttributes:   resourceAttrs,
+					User:                 user,
+					AuthorizationOptions: authOpts,
+				},
+			}
+			resp, err := adminClient.AuthorizationV1().SubjectAccessReviews().Create(context.TODO(), sar, metav1.CreateOptions{})
+			if err != nil {
+				t.Fatalf("failed to create SubjectAccessReview: %v", err)
+			}
+			return resp.Status
+		}
+
+		sendSelfSAR := func(t *testing.T, user string, authOpts *authorizationv1.AuthorizationOptions) authorizationv1.SubjectAccessReviewStatus {
+			t.Helper()
+			impersonationConfig := rest.CopyConfig(server.ClientConfig)
+			impersonationConfig.Impersonate.UserName = user
+			userClient := clientset.NewForConfigOrDie(impersonationConfig)
+			ssar := &authorizationv1.SelfSubjectAccessReview{
+				Spec: authorizationv1.SelfSubjectAccessReviewSpec{
+					ResourceAttributes:   resourceAttrs,
+					AuthorizationOptions: authOpts,
+				},
+			}
+			resp, err := userClient.AuthorizationV1().SelfSubjectAccessReviews().Create(context.TODO(), ssar, metav1.CreateOptions{})
+			if err != nil {
+				t.Fatalf("failed to create SelfSubjectAccessReview: %v", err)
+			}
+			return resp.Status
+		}
+
+		sendLocalSAR := func(t *testing.T, user string, authOpts *authorizationv1.AuthorizationOptions) authorizationv1.SubjectAccessReviewStatus {
+			t.Helper()
+			lsar := &authorizationv1.LocalSubjectAccessReview{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "test-ns"},
+				Spec: authorizationv1.SubjectAccessReviewSpec{
+					ResourceAttributes:   resourceAttrs,
+					User:                 user,
+					AuthorizationOptions: authOpts,
+				},
+			}
+			resp, err := adminClient.AuthorizationV1().LocalSubjectAccessReviews("test-ns").Create(context.TODO(), lsar, metav1.CreateOptions{})
+			if err != nil {
+				t.Fatalf("failed to create LocalSubjectAccessReview: %v", err)
+			}
+			return resp.Status
+		}
+
+		endpoints := []struct {
+			name string
+			send sendFn
+		}{
+			{"SubjectAccessReview", sendSAR},
+			{"SelfSubjectAccessReview", sendSelfSAR},
+			{"LocalSubjectAccessReview", sendLocalSAR},
+		}
+
 		cases := []struct {
-			name            string
-			endpoint        sarEndpoint
-			user            string
-			withConditional bool
-			sarHandler      func(*authorizationv1.SubjectAccessReview)
-			wantStatus      authorizationv1.SubjectAccessReviewStatus
+			name string
+			// user is to distinguish the cases from each other, otherwise cached responses are returned as the spec is otherwise shared between all cases
+			user                    string
+			sarHandler              func(*authorizationv1.SubjectAccessReview)
+			wantConditionalStatus   authorizationv1.SubjectAccessReviewStatus
+			wantUnconditionalStatus authorizationv1.SubjectAccessReviewStatus
 		}{
 			{
-				name:            "SubjectAccessReview with conditional authorization requested",
-				endpoint:        endpointSAR,
-				user:            "sar-test-user",
-				withConditional: true,
-				wantStatus:      authorizationv1.SubjectAccessReviewStatus{ConditionalDecision: expectedConditionalDecision},
-			},
-			{
-				name:     "SubjectAccessReview without conditional authorization requested",
-				endpoint: endpointSAR,
-				user:     "sar-test-user-no-cond",
-				wantStatus: authorizationv1.SubjectAccessReviewStatus{
-					Reason: "conditional-webhook: webhook authorizer tried to return conditional decision although client does not support it",
+				name: "conditional allow",
+				user: "conditional-allow-user",
+				sarHandler: func(sar *authorizationv1.SubjectAccessReview) {
+					if sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "configmaps" {
+						sar.Status.ConditionalDecision = conditionalAllowDecision
+					}
 				},
+				wantConditionalStatus:   authorizationv1.SubjectAccessReviewStatus{ConditionalDecision: expectedConditionalAllowDecision},
+				wantUnconditionalStatus: wantMismatchStatus,
 			},
 			{
-				name:            "SelfSubjectAccessReview with conditional authorization requested",
-				endpoint:        endpointSelfSAR,
-				user:            "selfsar-test-user",
-				withConditional: true,
-				wantStatus:      authorizationv1.SubjectAccessReviewStatus{ConditionalDecision: expectedConditionalDecision},
-			},
-			{
-				name:     "SelfSubjectAccessReview without conditional authorization requested",
-				endpoint: endpointSelfSAR,
-				user:     "selfsar-test-user-no-cond",
-				wantStatus: authorizationv1.SubjectAccessReviewStatus{
-					Reason: "conditional-webhook: webhook authorizer tried to return conditional decision although client does not support it",
-				},
-			},
-			{
-				name:            "LocalSubjectAccessReview with conditional authorization requested",
-				endpoint:        endpointLocalSAR,
-				user:            "local-sar-test-user",
-				withConditional: true,
-				wantStatus:      authorizationv1.SubjectAccessReviewStatus{ConditionalDecision: expectedConditionalDecision},
-			},
-			{
-				name:     "LocalSubjectAccessReview without conditional authorization requested",
-				endpoint: endpointLocalSAR,
-				user:     "local-sar-test-user-no-cond",
-				wantStatus: authorizationv1.SubjectAccessReviewStatus{
-					Reason: "conditional-webhook: webhook authorizer tried to return conditional decision although client does not support it",
-				},
-			},
-			{
-				name:            "SubjectAccessReview unconditional allow with conditional authorization requested",
-				endpoint:        endpointSAR,
-				user:            "sar-unconditional-allow-user",
-				withConditional: true,
+				name: "unconditional allow",
+				user: "unconditional-allow-user",
 				sarHandler: func(sar *authorizationv1.SubjectAccessReview) {
 					if sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "configmaps" {
 						sar.Status.Allowed = true
 						sar.Status.Reason = "unconditionally allowed"
 					}
 				},
-				wantStatus: authorizationv1.SubjectAccessReviewStatus{
+				wantConditionalStatus: authorizationv1.SubjectAccessReviewStatus{
 					Allowed: true,
 					Reason:  "conditional-webhook: {unconditionally allowed}",
 				},
+				wantUnconditionalStatus: authorizationv1.SubjectAccessReviewStatus{
+					Allowed: true,
+					Reason:  "unconditionally allowed",
+				},
 			},
 			{
-				name:            "SubjectAccessReview unconditional deny with conditional authorization requested",
-				endpoint:        endpointSAR,
-				user:            "sar-unconditional-deny-user",
-				withConditional: true,
+				name: "unconditional deny",
+				user: "unconditional-deny-user",
 				sarHandler: func(sar *authorizationv1.SubjectAccessReview) {
 					if sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "configmaps" {
 						sar.Status.Allowed = false
@@ -1776,32 +1830,27 @@ authorizers:
 						sar.Status.Reason = "unconditionally denied"
 					}
 				},
-				wantStatus: authorizationv1.SubjectAccessReviewStatus{
+				wantConditionalStatus: authorizationv1.SubjectAccessReviewStatus{
 					Denied: true,
 					Reason: "conditional-webhook: {unconditionally denied}",
 				},
+				wantUnconditionalStatus: authorizationv1.SubjectAccessReviewStatus{
+					Denied: true,
+					Reason: "unconditionally denied",
+				},
 			},
 			{
-				name:     "SubjectAccessReview conditional deny fails closed when client is not conditions-aware",
-				endpoint: endpointSAR,
-				user:     "sar-unconditional-deny-user",
+				name: "conditional deny",
+				user: "conditional-deny-user",
 				sarHandler: func(sar *authorizationv1.SubjectAccessReview) {
 					if sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "configmaps" {
-						sar.Status.ConditionalDecision = &authorizationv1.ConditionsAwareDecision{
-							Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
-							ConditionsMap: &authorizationv1.ConditionsMap{
-								DenyConditions: []authorizationv1.Condition{
-									{
-										ID:        "example.com/deny-sensitive-label",
-										Condition: `has(object.metadata.labels) && has(object.metadata.labels.sensitive)`,
-										Type:      "example.com/opaque-cel-condition-type",
-									},
-								},
-							},
-						}
+						sar.Status.ConditionalDecision = conditionalDenyDecision
 					}
 				},
-				wantStatus: authorizationv1.SubjectAccessReviewStatus{
+				wantConditionalStatus: authorizationv1.SubjectAccessReviewStatus{
+					ConditionalDecision: expectedConditionalDenyDecision,
+				},
+				wantUnconditionalStatus: authorizationv1.SubjectAccessReviewStatus{
 					Denied: true,
 					Reason: "webhook authorizer tried to return conditional decision although client does not support it",
 				},
@@ -1810,74 +1859,42 @@ authorizers:
 
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
-				if tc.sarHandler != nil {
-					prev := webhookServer.handler.sarHandler
-					webhookServer.handler.sarHandler = tc.sarHandler
-					t.Cleanup(func() { webhookServer.handler.sarHandler = prev })
+				if tc.sarHandler == nil {
+					t.Fatal("sarHandler is required")
 				}
 
-				resourceAttrs := &authorizationv1.ResourceAttributes{
-					Verb:      "create",
-					Group:     "",
-					Version:   "v1",
-					Resource:  "configmaps",
-					Namespace: "test-ns",
-				}
-				var authOpts *authorizationv1.AuthorizationOptions
-				if tc.withConditional {
-					authOpts = &authorizationv1.AuthorizationOptions{HandledDecisionTypes: handledAll}
-				}
+				webhookServer.handler.sarHandler = tc.sarHandler
+				t.Cleanup(func() { webhookServer.handler.sarHandler = nil })
 
-				var gotStatus authorizationv1.SubjectAccessReviewStatus
-				switch tc.endpoint {
-				case endpointSAR:
-					sar := &authorizationv1.SubjectAccessReview{
-						Spec: authorizationv1.SubjectAccessReviewSpec{
-							ResourceAttributes:   resourceAttrs,
-							User:                 tc.user,
-							AuthorizationOptions: authOpts,
-						},
-					}
-					resp, err := adminClient.AuthorizationV1().SubjectAccessReviews().Create(context.TODO(), sar, metav1.CreateOptions{})
-					if err != nil {
-						t.Fatalf("failed to create SubjectAccessReview: %v", err)
-					}
-					gotStatus = resp.Status
-
-				case endpointSelfSAR:
-					impersonationConfig := rest.CopyConfig(server.ClientConfig)
-					impersonationConfig.Impersonate.UserName = tc.user
-					userClient := clientset.NewForConfigOrDie(impersonationConfig)
-					ssar := &authorizationv1.SelfSubjectAccessReview{
-						Spec: authorizationv1.SelfSubjectAccessReviewSpec{
-							ResourceAttributes:   resourceAttrs,
-							AuthorizationOptions: authOpts,
-						},
-					}
-					resp, err := userClient.AuthorizationV1().SelfSubjectAccessReviews().Create(context.TODO(), ssar, metav1.CreateOptions{})
-					if err != nil {
-						t.Fatalf("failed to create SelfSubjectAccessReview: %v", err)
-					}
-					gotStatus = resp.Status
-
-				case endpointLocalSAR:
-					lsar := &authorizationv1.LocalSubjectAccessReview{
-						ObjectMeta: metav1.ObjectMeta{Namespace: "test-ns"},
-						Spec: authorizationv1.SubjectAccessReviewSpec{
-							ResourceAttributes:   resourceAttrs,
-							User:                 tc.user,
-							AuthorizationOptions: authOpts,
-						},
-					}
-					resp, err := adminClient.AuthorizationV1().LocalSubjectAccessReviews("test-ns").Create(context.TODO(), lsar, metav1.CreateOptions{})
-					if err != nil {
-						t.Fatalf("failed to create LocalSubjectAccessReview: %v", err)
-					}
-					gotStatus = resp.Status
+				variants := []struct {
+					name       string
+					authOpts   *authorizationv1.AuthorizationOptions
+					wantStatus authorizationv1.SubjectAccessReviewStatus
+				}{
+					{
+						name:       "conditional-client",
+						authOpts:   &authorizationv1.AuthorizationOptions{HandledDecisionTypes: handledAll},
+						wantStatus: tc.wantConditionalStatus,
+					},
+					{
+						name:       "unconditional-client",
+						authOpts:   nil,
+						wantStatus: tc.wantUnconditionalStatus,
+					},
 				}
 
-				if diff := cmp.Diff(tc.wantStatus, gotStatus); diff != "" {
-					t.Errorf("unexpected Status (-want +got):\n%s", diff)
+				for _, endpoint := range endpoints {
+					t.Run(endpoint.name, func(t *testing.T) {
+						for _, variant := range variants {
+							t.Run(variant.name, func(t *testing.T) {
+
+								gotStatus := endpoint.send(t, tc.user, variant.authOpts)
+								if diff := cmp.Diff(variant.wantStatus, gotStatus); diff != "" {
+									t.Errorf("unexpected Status (-want +got):\n%s", diff)
+								}
+							})
+						}
+					})
 				}
 			})
 		}
@@ -2425,6 +2442,7 @@ func (h *webhookServerHandler) handleSAR(w http.ResponseWriter, body []byte) {
 		safeResourceAttr(sar, func(ra *authorizationv1.ResourceAttributes) string { return ra.Namespace }),
 	)
 
+	// TODO(luxas): Make this always required, so we don't slip adding it in.
 	if h.sarHandler != nil {
 		h.sarHandler(sar)
 	}
