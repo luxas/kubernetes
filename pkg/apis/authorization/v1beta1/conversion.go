@@ -28,6 +28,11 @@ import (
 )
 
 func enforceUnconditionalHandledDecisionTypesOnly(ao *authorization.AuthorizationOptions) error {
+	// A nil AuthorizationOptions represents the default (unconditional) handled decision types,
+	// which is expressible in v1beta1.
+	if ao == nil {
+		return nil
+	}
 	// Convert to v1 to make use of the helper functions
 	authzOptionsV1 := &authorizationv1.AuthorizationOptions{}
 	if err := authorizationv1internal.Convert_authorization_AuthorizationOptions_To_v1_AuthorizationOptions(ao, authzOptionsV1, nil); err != nil {

@@ -29,17 +29,221 @@ import (
 	internalv1beta1 "k8s.io/kubernetes/pkg/apis/authorization/v1beta1"
 )
 
+// reviewKind names one of the three internal review types that share the
+// SubjectAccessReviewSpec / SubjectAccessReviewStatus conversion helpers.
+type reviewKind int
+
+const (
+	kindSAR reviewKind = iota
+	kindSelfSAR
+	kindLocalSAR
+)
+
+func (k reviewKind) String() string {
+	switch k {
+	case kindSAR:
+		return "SubjectAccessReview"
+	case kindSelfSAR:
+		return "SelfSubjectAccessReview"
+	case kindLocalSAR:
+		return "LocalSubjectAccessReview"
+	}
+	return ""
+}
+
+var allKinds = []reviewKind{kindSAR, kindSelfSAR, kindLocalSAR}
+
+// localNamespace is set on every LocalSubjectAccessReview base so that
+// ObjectMeta.Namespace propagation is exercised alongside the shared spec/status conversions.
+const localNamespace = "team-a"
+
+// mods captures the modifications a case applies to the internal spec/status
+// of a review object. The expected v1beta1 output is derived by translating
+// the same values into v1beta1 types and dropping AuthorizationOptions from
+// the spec and ConditionalDecision from the status — the two fields the
+// conversion is meant to strip. Fields that only exist on SubjectAccessReviewSpec
+// (User/Groups/Extra/UID) are silently ignored for SelfSubjectAccessReview.
+type mods struct {
+	ResourceAttributes    *authorization.ResourceAttributes
+	NonResourceAttributes *authorization.NonResourceAttributes
+	AuthorizationOptions  *authorization.AuthorizationOptions
+
+	User   string
+	Groups []string
+	Extra  map[string]authorization.ExtraValue
+	UID    string
+
+	Status authorization.SubjectAccessReviewStatus
+}
+
+// buildIn constructs a fresh internal review of the given kind with mods applied.
+// All pointer/map fields are deep-copied so sibling test iterations cannot alias input state.
+func buildIn(k reviewKind, m mods) runtime.Object {
+	ra := m.ResourceAttributes.DeepCopy()
+	nra := m.NonResourceAttributes.DeepCopy()
+	ao := m.AuthorizationOptions.DeepCopy()
+	status := *m.Status.DeepCopy()
+
+	switch k {
+	case kindSAR:
+		return &authorization.SubjectAccessReview{
+			Spec: authorization.SubjectAccessReviewSpec{
+				ResourceAttributes:    ra,
+				NonResourceAttributes: nra,
+				AuthorizationOptions:  ao,
+				User:                  m.User,
+				Groups:                append([]string(nil), m.Groups...),
+				Extra:                 copyExtra(m.Extra),
+				UID:                   m.UID,
+			},
+			Status: status,
+		}
+	case kindSelfSAR:
+		return &authorization.SelfSubjectAccessReview{
+			Spec: authorization.SelfSubjectAccessReviewSpec{
+				ResourceAttributes:    ra,
+				NonResourceAttributes: nra,
+				AuthorizationOptions:  ao,
+			},
+			Status: status,
+		}
+	case kindLocalSAR:
+		return &authorization.LocalSubjectAccessReview{
+			ObjectMeta: metav1.ObjectMeta{Namespace: localNamespace},
+			Spec: authorization.SubjectAccessReviewSpec{
+				ResourceAttributes:    ra,
+				NonResourceAttributes: nra,
+				AuthorizationOptions:  ao,
+				User:                  m.User,
+				Groups:                append([]string(nil), m.Groups...),
+				Extra:                 copyExtra(m.Extra),
+				UID:                   m.UID,
+			},
+			Status: status,
+		}
+	}
+	return nil
+}
+
+// newOut returns an empty v1beta1 destination for the given kind.
+func newOut(k reviewKind) runtime.Object {
+	switch k {
+	case kindSAR:
+		return &authorizationv1beta1.SubjectAccessReview{}
+	case kindSelfSAR:
+		return &authorizationv1beta1.SelfSubjectAccessReview{}
+	case kindLocalSAR:
+		return &authorizationv1beta1.LocalSubjectAccessReview{}
+	}
+	return nil
+}
+
+// buildExpected constructs the expected v1beta1 output for a successful
+// conversion of buildIn(k, m): fields are mirrored and AuthorizationOptions +
+// ConditionalDecision are stripped.
+func buildExpected(k reviewKind, m mods) runtime.Object {
+	ra := toV1beta1ResourceAttributes(m.ResourceAttributes)
+	nra := toV1beta1NonResourceAttributes(m.NonResourceAttributes)
+	status := toV1beta1Status(m.Status)
+
+	switch k {
+	case kindSAR:
+		return &authorizationv1beta1.SubjectAccessReview{
+			Spec: authorizationv1beta1.SubjectAccessReviewSpec{
+				ResourceAttributes:    ra,
+				NonResourceAttributes: nra,
+				User:                  m.User,
+				Groups:                append([]string(nil), m.Groups...),
+				Extra:                 toV1beta1Extra(m.Extra),
+				UID:                   m.UID,
+			},
+			Status: status,
+		}
+	case kindSelfSAR:
+		return &authorizationv1beta1.SelfSubjectAccessReview{
+			Spec: authorizationv1beta1.SelfSubjectAccessReviewSpec{
+				ResourceAttributes:    ra,
+				NonResourceAttributes: nra,
+			},
+			Status: status,
+		}
+	case kindLocalSAR:
+		return &authorizationv1beta1.LocalSubjectAccessReview{
+			ObjectMeta: metav1.ObjectMeta{Namespace: localNamespace},
+			Spec: authorizationv1beta1.SubjectAccessReviewSpec{
+				ResourceAttributes:    ra,
+				NonResourceAttributes: nra,
+				User:                  m.User,
+				Groups:                append([]string(nil), m.Groups...),
+				Extra:                 toV1beta1Extra(m.Extra),
+				UID:                   m.UID,
+			},
+			Status: status,
+		}
+	}
+	return nil
+}
+
+func toV1beta1ResourceAttributes(in *authorization.ResourceAttributes) *authorizationv1beta1.ResourceAttributes {
+	if in == nil {
+		return nil
+	}
+	return &authorizationv1beta1.ResourceAttributes{
+		Namespace:   in.Namespace,
+		Verb:        in.Verb,
+		Group:       in.Group,
+		Version:     in.Version,
+		Resource:    in.Resource,
+		Subresource: in.Subresource,
+		Name:        in.Name,
+	}
+}
+
+func toV1beta1NonResourceAttributes(in *authorization.NonResourceAttributes) *authorizationv1beta1.NonResourceAttributes {
+	if in == nil {
+		return nil
+	}
+	return &authorizationv1beta1.NonResourceAttributes{Path: in.Path, Verb: in.Verb}
+}
+
+func toV1beta1Extra(in map[string]authorization.ExtraValue) map[string]authorizationv1beta1.ExtraValue {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]authorizationv1beta1.ExtraValue, len(in))
+	for k, v := range in {
+		out[k] = authorizationv1beta1.ExtraValue(append([]string(nil), v...))
+	}
+	return out
+}
+
+// toV1beta1Status mirrors SubjectAccessReviewStatus into v1beta1, stripping
+// ConditionalDecision (which has no representation in v1beta1).
+func toV1beta1Status(in authorization.SubjectAccessReviewStatus) authorizationv1beta1.SubjectAccessReviewStatus {
+	return authorizationv1beta1.SubjectAccessReviewStatus{
+		Allowed:         in.Allowed,
+		Denied:          in.Denied,
+		Reason:          in.Reason,
+		EvaluationError: in.EvaluationError,
+	}
+}
+
+func copyExtra(in map[string]authorization.ExtraValue) map[string]authorization.ExtraValue {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]authorization.ExtraValue, len(in))
+	for k, v := range in {
+		out[k] = authorization.ExtraValue(append([]string(nil), v...))
+	}
+	return out
+}
+
 // TestConversion drives every internal→v1beta1 conversion in
-// pkg/apis/authorization/v1beta1/conversion.go through runtime.Scheme.Convert,
-// registering both the internal and the versioned type registries onto a fresh
-// scheme. Substruct-level converters (SelfSubjectAccessReviewSpec,
-// SubjectAccessReviewSpec, SubjectAccessReviewStatus) are exercised via the
-// top-level runtime.Object wrappers that contain them; enforcement of the
-// AuthorizationOptions.HandledDecisionTypes and status ConditionalDecision
-// contracts is asserted with exact error strings so any accidental drift in
-// the source is caught.
+// pkg/apis/authorization/v1beta1/conversion.go through runtime.Scheme.Convert.
+// Every case is run against all three review types (SAR, SelfSAR, LocalSAR),
+// as the spec and status converters are shared across all three.
 func TestConversion(t *testing.T) {
-	// Convenience aliases used only in expected-string construction.
 	defaultOpts := &authorization.AuthorizationOptions{
 		HandledDecisionTypes: []authorization.ConditionsAwareDecisionType{
 			authorization.ConditionsAwareDecisionTypeAllow,
@@ -51,279 +255,96 @@ func TestConversion(t *testing.T) {
 	// enforceErr formats the exact string returned by
 	// enforceUnconditionalHandledDecisionTypesOnly for a given input slice.
 	enforceErr := func(got []authorization.ConditionsAwareDecisionType) string {
-		// Mirrors the fmt.Errorf in conversion.go verbatim.
-		return "cannot send SubjectAccessReview with non-default AuthorizationOptions to a v1beta1 client. " +
-			"Got handledDecisionTypes " + fmt.Sprintf("%v", got) + ", " +
-			"supported [Allow Deny NoOpinion]"
+		return fmt.Sprintf(
+			"cannot send SubjectAccessReview with non-default AuthorizationOptions to a v1beta1 client. "+
+				"Got handledDecisionTypes %v, supported [Allow Deny NoOpinion]", got)
 	}
+	const conditionalDecisionErr = "cannot convert SubjectAccessReviewStatus to v1beta1, " +
+		"v1beta1 does not support in.ConditionalDecision, which is non-nil in the input object"
 
 	testcases := []struct {
 		Name      string
-		In        runtime.Object
-		Out       runtime.Object
-		ExpectOut runtime.Object
+		Mods      mods
 		ExpectErr string
 	}{
 		// ---------- Successful conversions ----------
 		{
-			Name: "SubjectAccessReview: nil options and nil conditional decision, identity fields preserved",
-			In: &authorization.SubjectAccessReview{
-				Spec: authorization.SubjectAccessReviewSpec{
-					ResourceAttributes: &authorization.ResourceAttributes{Verb: "get", Resource: "pods"},
-					User:               "alice",
-					Groups:             []string{"admins", "eng"},
-					Extra: map[string]authorization.ExtraValue{
-						"scopes.authentication.kubernetes.io": {"one", "two"},
-					},
-					UID: "uid-1",
+			Name: "identity fields preserved with nil options",
+			Mods: mods{
+				ResourceAttributes: &authorization.ResourceAttributes{Verb: "get", Resource: "pods"},
+				User:               "alice",
+				Groups:             []string{"admins", "eng"},
+				Extra: map[string]authorization.ExtraValue{
+					"scopes.authentication.kubernetes.io": {"one", "two"},
 				},
+				UID: "uid-1",
 				Status: authorization.SubjectAccessReviewStatus{
 					Allowed: true,
 					Reason:  "admin",
 				},
 			},
-			Out: &authorizationv1beta1.SubjectAccessReview{},
-			ExpectOut: &authorizationv1beta1.SubjectAccessReview{
-				Spec: authorizationv1beta1.SubjectAccessReviewSpec{
-					ResourceAttributes: &authorizationv1beta1.ResourceAttributes{Verb: "get", Resource: "pods"},
-					User:               "alice",
-					Groups:             []string{"admins", "eng"},
-					Extra: map[string]authorizationv1beta1.ExtraValue{
-						"scopes.authentication.kubernetes.io": {"one", "two"},
-					},
-					UID: "uid-1",
-				},
-				Status: authorizationv1beta1.SubjectAccessReviewStatus{
-					Allowed: true,
-					Reason:  "admin",
-				},
+		},
+		{
+			Name: "NonResourceAttributes preserved",
+			Mods: mods{
+				NonResourceAttributes: &authorization.NonResourceAttributes{Path: "/healthz", Verb: "get"},
 			},
 		},
 		{
-			Name: "SubjectAccessReview: canonical [Allow, Deny, NoOpinion] options dropped",
-			In: &authorization.SubjectAccessReview{
-				Spec: authorization.SubjectAccessReviewSpec{
-					User:                 "alice",
-					AuthorizationOptions: defaultOpts.DeepCopy(),
-				},
-			},
-			Out: &authorizationv1beta1.SubjectAccessReview{},
-			ExpectOut: &authorizationv1beta1.SubjectAccessReview{
-				Spec: authorizationv1beta1.SubjectAccessReviewSpec{User: "alice"},
+			Name: "canonical [Allow, Deny, NoOpinion] options dropped",
+			Mods: mods{
+				ResourceAttributes:   &authorization.ResourceAttributes{Verb: "get", Resource: "pods"},
+				AuthorizationOptions: defaultOpts.DeepCopy(),
 			},
 		},
 		{
-			Name: "SubjectAccessReview: unsorted [NoOpinion, Deny, Allow] options accepted and dropped",
-			In: &authorization.SubjectAccessReview{
-				Spec: authorization.SubjectAccessReviewSpec{
-					User: "alice",
-					AuthorizationOptions: &authorization.AuthorizationOptions{
-						HandledDecisionTypes: []authorization.ConditionsAwareDecisionType{
-							authorization.ConditionsAwareDecisionTypeNoOpinion,
-							authorization.ConditionsAwareDecisionTypeDeny,
-							authorization.ConditionsAwareDecisionTypeAllow,
-						},
+			Name: "unsorted and duplicated HandledDecisionTypes accepted as a set",
+			Mods: mods{
+				ResourceAttributes: &authorization.ResourceAttributes{Verb: "get", Resource: "pods"},
+				AuthorizationOptions: &authorization.AuthorizationOptions{
+					HandledDecisionTypes: []authorization.ConditionsAwareDecisionType{
+						authorization.ConditionsAwareDecisionTypeNoOpinion,
+						authorization.ConditionsAwareDecisionTypeAllow,
+						authorization.ConditionsAwareDecisionTypeDeny,
+						authorization.ConditionsAwareDecisionTypeAllow,
 					},
 				},
-			},
-			Out: &authorizationv1beta1.SubjectAccessReview{},
-			ExpectOut: &authorizationv1beta1.SubjectAccessReview{
-				Spec: authorizationv1beta1.SubjectAccessReviewSpec{User: "alice"},
-			},
-		},
-		{
-			Name: "SubjectAccessReview: status ConditionalDecision.Type=Deny consistent with Allowed=false Denied=true, decision dropped",
-			In: &authorization.SubjectAccessReview{
-				Status: authorization.SubjectAccessReviewStatus{
-					Allowed:             false,
-					Denied:              true,
-					Reason:              "explicitly denied",
-					ConditionalDecision: &authorization.ConditionsAwareDecision{Type: authorization.ConditionsAwareDecisionTypeDeny},
-				},
-			},
-			Out: &authorizationv1beta1.SubjectAccessReview{},
-			ExpectOut: &authorizationv1beta1.SubjectAccessReview{
-				Status: authorizationv1beta1.SubjectAccessReviewStatus{
-					Denied: true,
-					Reason: "explicitly denied",
-				},
-			},
-		},
-		{
-			Name: "SubjectAccessReview: status ConditionalDecision.Type=NoOpinion consistent with Allowed=false Denied=false, decision dropped",
-			In: &authorization.SubjectAccessReview{
-				Status: authorization.SubjectAccessReviewStatus{
-					Reason:              "no opinion",
-					ConditionalDecision: &authorization.ConditionsAwareDecision{Type: authorization.ConditionsAwareDecisionTypeNoOpinion},
-				},
-			},
-			Out: &authorizationv1beta1.SubjectAccessReview{},
-			ExpectOut: &authorizationv1beta1.SubjectAccessReview{
-				Status: authorizationv1beta1.SubjectAccessReviewStatus{Reason: "no opinion"},
-			},
-		},
-		{
-			Name: "SubjectAccessReview: status ConditionalDecision.Type=Allow consistent with Allowed=true Denied=false, decision dropped",
-			In: &authorization.SubjectAccessReview{
-				Status: authorization.SubjectAccessReviewStatus{
-					Allowed:             true,
-					Reason:              "admin override",
-					EvaluationError:     "note",
-					ConditionalDecision: &authorization.ConditionsAwareDecision{Type: authorization.ConditionsAwareDecisionTypeAllow},
-				},
-			},
-			Out: &authorizationv1beta1.SubjectAccessReview{},
-			ExpectOut: &authorizationv1beta1.SubjectAccessReview{
-				Status: authorizationv1beta1.SubjectAccessReviewStatus{
-					Allowed:         true,
-					Reason:          "admin override",
-					EvaluationError: "note",
-				},
-			},
-		},
-		{
-			Name: "SelfSubjectAccessReview: nil options, ResourceAttributes only",
-			In: &authorization.SelfSubjectAccessReview{
-				Spec: authorization.SelfSubjectAccessReviewSpec{
-					ResourceAttributes: &authorization.ResourceAttributes{Verb: "get", Resource: "pods"},
-				},
-			},
-			Out: &authorizationv1beta1.SelfSubjectAccessReview{},
-			ExpectOut: &authorizationv1beta1.SelfSubjectAccessReview{
-				Spec: authorizationv1beta1.SelfSubjectAccessReviewSpec{
-					ResourceAttributes: &authorizationv1beta1.ResourceAttributes{Verb: "get", Resource: "pods"},
-				},
-			},
-		},
-		{
-			Name: "SelfSubjectAccessReview: valid options dropped",
-			In: &authorization.SelfSubjectAccessReview{
-				Spec: authorization.SelfSubjectAccessReviewSpec{
-					NonResourceAttributes: &authorization.NonResourceAttributes{Path: "/healthz", Verb: "get"},
-					AuthorizationOptions:  defaultOpts.DeepCopy(),
-				},
-			},
-			Out: &authorizationv1beta1.SelfSubjectAccessReview{},
-			ExpectOut: &authorizationv1beta1.SelfSubjectAccessReview{
-				Spec: authorizationv1beta1.SelfSubjectAccessReviewSpec{
-					NonResourceAttributes: &authorizationv1beta1.NonResourceAttributes{Path: "/healthz", Verb: "get"},
-				},
-			},
-		},
-		{
-			Name: "LocalSubjectAccessReview: nil options, Namespace preserved",
-			In: &authorization.LocalSubjectAccessReview{
-				ObjectMeta: metav1.ObjectMeta{Namespace: "team-a"},
-				Spec: authorization.SubjectAccessReviewSpec{
-					ResourceAttributes: &authorization.ResourceAttributes{Namespace: "team-a", Verb: "list", Resource: "configmaps"},
-					User:               "bob",
-				},
-			},
-			Out: &authorizationv1beta1.LocalSubjectAccessReview{},
-			ExpectOut: &authorizationv1beta1.LocalSubjectAccessReview{
-				ObjectMeta: metav1.ObjectMeta{Namespace: "team-a"},
-				Spec: authorizationv1beta1.SubjectAccessReviewSpec{
-					ResourceAttributes: &authorizationv1beta1.ResourceAttributes{Namespace: "team-a", Verb: "list", Resource: "configmaps"},
-					User:               "bob",
-				},
-			},
-		},
-		{
-			Name: "LocalSubjectAccessReview: valid options dropped, Namespace preserved",
-			In: &authorization.LocalSubjectAccessReview{
-				ObjectMeta: metav1.ObjectMeta{Namespace: "team-a"},
-				Spec: authorization.SubjectAccessReviewSpec{
-					User:                 "bob",
-					AuthorizationOptions: defaultOpts.DeepCopy(),
-				},
-			},
-			Out: &authorizationv1beta1.LocalSubjectAccessReview{},
-			ExpectOut: &authorizationv1beta1.LocalSubjectAccessReview{
-				ObjectMeta: metav1.ObjectMeta{Namespace: "team-a"},
-				Spec:       authorizationv1beta1.SubjectAccessReviewSpec{User: "bob"},
 			},
 		},
 
 		// ---------- Error conversions: HandledDecisionTypes matrix ----------
 		{
-			Name: "SubjectAccessReview: empty HandledDecisionTypes rejected",
-			In: &authorization.SubjectAccessReview{
-				Spec: authorization.SubjectAccessReviewSpec{
-					AuthorizationOptions: &authorization.AuthorizationOptions{},
-				},
-			},
-			Out:       &authorizationv1beta1.SubjectAccessReview{},
+			Name:      "empty HandledDecisionTypes rejected",
+			Mods:      mods{AuthorizationOptions: &authorization.AuthorizationOptions{}},
 			ExpectErr: enforceErr(nil),
 		},
 		{
-			Name: "SubjectAccessReview: single value [Allow] rejected",
-			In: &authorization.SubjectAccessReview{
-				Spec: authorization.SubjectAccessReviewSpec{
-					AuthorizationOptions: &authorization.AuthorizationOptions{
-						HandledDecisionTypes: []authorization.ConditionsAwareDecisionType{
-							authorization.ConditionsAwareDecisionTypeAllow,
-						},
+			Name: "missing NoOpinion rejected",
+			Mods: mods{
+				AuthorizationOptions: &authorization.AuthorizationOptions{
+					HandledDecisionTypes: []authorization.ConditionsAwareDecisionType{
+						authorization.ConditionsAwareDecisionTypeAllow,
+						authorization.ConditionsAwareDecisionTypeDeny,
 					},
 				},
 			},
-			Out:       &authorizationv1beta1.SubjectAccessReview{},
-			ExpectErr: enforceErr([]authorization.ConditionsAwareDecisionType{authorization.ConditionsAwareDecisionTypeAllow}),
-		},
-		{
-			Name: "SubjectAccessReview: missing NoOpinion rejected",
-			In: &authorization.SubjectAccessReview{
-				Spec: authorization.SubjectAccessReviewSpec{
-					AuthorizationOptions: &authorization.AuthorizationOptions{
-						HandledDecisionTypes: []authorization.ConditionsAwareDecisionType{
-							authorization.ConditionsAwareDecisionTypeAllow,
-							authorization.ConditionsAwareDecisionTypeDeny,
-						},
-					},
-				},
-			},
-			Out: &authorizationv1beta1.SubjectAccessReview{},
 			ExpectErr: enforceErr([]authorization.ConditionsAwareDecisionType{
 				authorization.ConditionsAwareDecisionTypeAllow,
 				authorization.ConditionsAwareDecisionTypeDeny,
 			}),
 		},
 		{
-			Name: "SubjectAccessReview: duplicates in HandledDecisionTypes rejected",
-			In: &authorization.SubjectAccessReview{
-				Spec: authorization.SubjectAccessReviewSpec{
-					AuthorizationOptions: &authorization.AuthorizationOptions{
-						HandledDecisionTypes: []authorization.ConditionsAwareDecisionType{
-							authorization.ConditionsAwareDecisionTypeAllow,
-							authorization.ConditionsAwareDecisionTypeAllow,
-							authorization.ConditionsAwareDecisionTypeDeny,
-							authorization.ConditionsAwareDecisionTypeNoOpinion,
-						},
+			Name: "extra conditional decision type rejected",
+			Mods: mods{
+				AuthorizationOptions: &authorization.AuthorizationOptions{
+					HandledDecisionTypes: []authorization.ConditionsAwareDecisionType{
+						authorization.ConditionsAwareDecisionTypeAllow,
+						authorization.ConditionsAwareDecisionTypeDeny,
+						authorization.ConditionsAwareDecisionTypeNoOpinion,
+						authorization.ConditionsAwareDecisionTypeConditionsMap,
 					},
 				},
 			},
-			Out: &authorizationv1beta1.SubjectAccessReview{},
-			ExpectErr: enforceErr([]authorization.ConditionsAwareDecisionType{
-				authorization.ConditionsAwareDecisionTypeAllow,
-				authorization.ConditionsAwareDecisionTypeAllow,
-				authorization.ConditionsAwareDecisionTypeDeny,
-				authorization.ConditionsAwareDecisionTypeNoOpinion,
-			}),
-		},
-		{
-			Name: "SubjectAccessReview: extra ConditionsMap in HandledDecisionTypes rejected",
-			In: &authorization.SubjectAccessReview{
-				Spec: authorization.SubjectAccessReviewSpec{
-					AuthorizationOptions: &authorization.AuthorizationOptions{
-						HandledDecisionTypes: []authorization.ConditionsAwareDecisionType{
-							authorization.ConditionsAwareDecisionTypeAllow,
-							authorization.ConditionsAwareDecisionTypeDeny,
-							authorization.ConditionsAwareDecisionTypeNoOpinion,
-							authorization.ConditionsAwareDecisionTypeConditionsMap,
-						},
-					},
-				},
-			},
-			Out: &authorizationv1beta1.SubjectAccessReview{},
 			ExpectErr: enforceErr([]authorization.ConditionsAwareDecisionType{
 				authorization.ConditionsAwareDecisionTypeAllow,
 				authorization.ConditionsAwareDecisionTypeDeny,
@@ -332,185 +353,24 @@ func TestConversion(t *testing.T) {
 			}),
 		},
 		{
-			Name: "SubjectAccessReview: extra Union in HandledDecisionTypes rejected",
-			In: &authorization.SubjectAccessReview{
-				Spec: authorization.SubjectAccessReviewSpec{
-					AuthorizationOptions: &authorization.AuthorizationOptions{
-						HandledDecisionTypes: []authorization.ConditionsAwareDecisionType{
-							authorization.ConditionsAwareDecisionTypeAllow,
-							authorization.ConditionsAwareDecisionTypeDeny,
-							authorization.ConditionsAwareDecisionTypeNoOpinion,
-							authorization.ConditionsAwareDecisionTypeUnion,
-						},
-					},
+			Name: "unknown decision type rejected",
+			Mods: mods{
+				AuthorizationOptions: &authorization.AuthorizationOptions{
+					HandledDecisionTypes: []authorization.ConditionsAwareDecisionType{"Bogus"},
 				},
 			},
-			Out: &authorizationv1beta1.SubjectAccessReview{},
-			ExpectErr: enforceErr([]authorization.ConditionsAwareDecisionType{
-				authorization.ConditionsAwareDecisionTypeAllow,
-				authorization.ConditionsAwareDecisionTypeDeny,
-				authorization.ConditionsAwareDecisionTypeNoOpinion,
-				authorization.ConditionsAwareDecisionTypeUnion,
-			}),
-		},
-		{
-			Name: "SubjectAccessReview: unknown decision type rejected",
-			In: &authorization.SubjectAccessReview{
-				Spec: authorization.SubjectAccessReviewSpec{
-					AuthorizationOptions: &authorization.AuthorizationOptions{
-						HandledDecisionTypes: []authorization.ConditionsAwareDecisionType{
-							authorization.ConditionsAwareDecisionType("Bogus"),
-						},
-					},
-				},
-			},
-			Out: &authorizationv1beta1.SubjectAccessReview{},
-			ExpectErr: enforceErr([]authorization.ConditionsAwareDecisionType{
-				authorization.ConditionsAwareDecisionType("Bogus"),
-			}),
-		},
-		{
-			Name: "SelfSubjectAccessReview: empty HandledDecisionTypes fires the shared helper",
-			In: &authorization.SelfSubjectAccessReview{
-				Spec: authorization.SelfSubjectAccessReviewSpec{
-					AuthorizationOptions: &authorization.AuthorizationOptions{},
-				},
-			},
-			Out:       &authorizationv1beta1.SelfSubjectAccessReview{},
-			ExpectErr: enforceErr(nil),
-		},
-		{
-			Name: "LocalSubjectAccessReview: extra ConditionsMap fires the shared helper",
-			In: &authorization.LocalSubjectAccessReview{
-				Spec: authorization.SubjectAccessReviewSpec{
-					AuthorizationOptions: &authorization.AuthorizationOptions{
-						HandledDecisionTypes: []authorization.ConditionsAwareDecisionType{
-							authorization.ConditionsAwareDecisionTypeAllow,
-							authorization.ConditionsAwareDecisionTypeDeny,
-							authorization.ConditionsAwareDecisionTypeNoOpinion,
-							authorization.ConditionsAwareDecisionTypeConditionsMap,
-						},
-					},
-				},
-			},
-			Out: &authorizationv1beta1.LocalSubjectAccessReview{},
-			ExpectErr: enforceErr([]authorization.ConditionsAwareDecisionType{
-				authorization.ConditionsAwareDecisionTypeAllow,
-				authorization.ConditionsAwareDecisionTypeDeny,
-				authorization.ConditionsAwareDecisionTypeNoOpinion,
-				authorization.ConditionsAwareDecisionTypeConditionsMap,
-			}),
+			ExpectErr: enforceErr([]authorization.ConditionsAwareDecisionType{"Bogus"}),
 		},
 
-		// ---------- Error conversions: SubjectAccessReviewStatus ConditionalDecision matrix ----------
+		// ---------- Error conversion: any non-nil ConditionalDecision ----------
 		{
-			Name: "SubjectAccessReview: status Type=Deny inconsistent Allowed=true",
-			In: &authorization.SubjectAccessReview{
-				Status: authorization.SubjectAccessReviewStatus{
-					Allowed:             true,
-					Denied:              true,
-					ConditionalDecision: &authorization.ConditionsAwareDecision{Type: authorization.ConditionsAwareDecisionTypeDeny},
-				},
-			},
-			Out:       &authorizationv1beta1.SubjectAccessReview{},
-			ExpectErr: "inconsistent input object, got in.ConditionalDecision.Type=Deny, but in.Allowed=true (expected false) and in.Denied=true (expected true)",
-		},
-		{
-			Name: "SubjectAccessReview: status Type=Deny inconsistent Denied=false",
-			In: &authorization.SubjectAccessReview{
-				Status: authorization.SubjectAccessReviewStatus{
-					ConditionalDecision: &authorization.ConditionsAwareDecision{Type: authorization.ConditionsAwareDecisionTypeDeny},
-				},
-			},
-			Out:       &authorizationv1beta1.SubjectAccessReview{},
-			ExpectErr: "inconsistent input object, got in.ConditionalDecision.Type=Deny, but in.Allowed=false (expected false) and in.Denied=false (expected true)",
-		},
-		{
-			// Note: conversion.go:77 formats the NoOpinion arm with the string
-			// literal "Type=Allow"; this test encodes current behavior. If the
-			// source is corrected, this test must be updated to match.
-			Name: "SubjectAccessReview: status Type=NoOpinion inconsistent Allowed=true",
-			In: &authorization.SubjectAccessReview{
-				Status: authorization.SubjectAccessReviewStatus{
-					Allowed:             true,
-					ConditionalDecision: &authorization.ConditionsAwareDecision{Type: authorization.ConditionsAwareDecisionTypeNoOpinion},
-				},
-			},
-			Out:       &authorizationv1beta1.SubjectAccessReview{},
-			ExpectErr: "inconsistent input object, got in.ConditionalDecision.Type=Allow, but in.Allowed=true (expected false) and in.Denied=false (expected false)",
-		},
-		{
-			Name: "SubjectAccessReview: status Type=NoOpinion inconsistent Denied=true",
-			In: &authorization.SubjectAccessReview{
-				Status: authorization.SubjectAccessReviewStatus{
-					Denied:              true,
-					ConditionalDecision: &authorization.ConditionsAwareDecision{Type: authorization.ConditionsAwareDecisionTypeNoOpinion},
-				},
-			},
-			Out:       &authorizationv1beta1.SubjectAccessReview{},
-			ExpectErr: "inconsistent input object, got in.ConditionalDecision.Type=Allow, but in.Allowed=false (expected false) and in.Denied=true (expected false)",
-		},
-		{
-			Name: "SubjectAccessReview: status Type=Allow inconsistent Allowed=false",
-			In: &authorization.SubjectAccessReview{
-				Status: authorization.SubjectAccessReviewStatus{
-					ConditionalDecision: &authorization.ConditionsAwareDecision{Type: authorization.ConditionsAwareDecisionTypeAllow},
-				},
-			},
-			Out:       &authorizationv1beta1.SubjectAccessReview{},
-			ExpectErr: "inconsistent input object, got in.ConditionalDecision.Type=Allow, but in.Allowed=false (expected true) and in.Denied=false (expected false)",
-		},
-		{
-			Name: "SubjectAccessReview: status Type=Allow inconsistent Denied=true",
-			In: &authorization.SubjectAccessReview{
-				Status: authorization.SubjectAccessReviewStatus{
-					Allowed:             true,
-					Denied:              true,
-					ConditionalDecision: &authorization.ConditionsAwareDecision{Type: authorization.ConditionsAwareDecisionTypeAllow},
-				},
-			},
-			Out:       &authorizationv1beta1.SubjectAccessReview{},
-			ExpectErr: "inconsistent input object, got in.ConditionalDecision.Type=Allow, but in.Allowed=true (expected true) and in.Denied=true (expected false)",
-		},
-		{
-			Name: "SubjectAccessReview: status Type=ConditionsMap unrepresentable",
-			In: &authorization.SubjectAccessReview{
+			Name: "non-nil ConditionalDecision rejected",
+			Mods: mods{
 				Status: authorization.SubjectAccessReviewStatus{
 					ConditionalDecision: &authorization.ConditionsAwareDecision{Type: authorization.ConditionsAwareDecisionTypeConditionsMap},
 				},
 			},
-			Out:       &authorizationv1beta1.SubjectAccessReview{},
-			ExpectErr: "cannot convert SubjectAccessReviewStatus to v1beta1, v1beta1 does not support in.ConditionalDecision.Type=ConditionsMap",
-		},
-		{
-			Name: "SubjectAccessReview: status Type=Union unrepresentable",
-			In: &authorization.SubjectAccessReview{
-				Status: authorization.SubjectAccessReviewStatus{
-					ConditionalDecision: &authorization.ConditionsAwareDecision{Type: authorization.ConditionsAwareDecisionTypeUnion},
-				},
-			},
-			Out:       &authorizationv1beta1.SubjectAccessReview{},
-			ExpectErr: "cannot convert SubjectAccessReviewStatus to v1beta1, v1beta1 does not support in.ConditionalDecision.Type=Union",
-		},
-		{
-			Name: "SubjectAccessReview: status Type=\"\" falls into default arm",
-			In: &authorization.SubjectAccessReview{
-				Status: authorization.SubjectAccessReviewStatus{
-					ConditionalDecision: &authorization.ConditionsAwareDecision{},
-				},
-			},
-			Out:       &authorizationv1beta1.SubjectAccessReview{},
-			ExpectErr: "cannot convert SubjectAccessReviewStatus to v1beta1, v1beta1 does not support in.ConditionalDecision.Type=",
-		},
-		{
-			Name: "SubjectAccessReview: status Type=\"Bogus\" falls into default arm",
-			In: &authorization.SubjectAccessReview{
-				Status: authorization.SubjectAccessReviewStatus{
-					ConditionalDecision: &authorization.ConditionsAwareDecision{Type: authorization.ConditionsAwareDecisionType("Bogus")},
-				},
-			},
-			Out:       &authorizationv1beta1.SubjectAccessReview{},
-			ExpectErr: "cannot convert SubjectAccessReviewStatus to v1beta1, v1beta1 does not support in.ConditionalDecision.Type=Bogus",
+			ExpectErr: conditionalDecisionErr,
 		},
 	}
 
@@ -523,23 +383,27 @@ func TestConversion(t *testing.T) {
 	}
 
 	for _, tc := range testcases {
-		t.Run(tc.Name, func(t *testing.T) {
-			err := scheme.Convert(tc.In, tc.Out, nil)
-			if tc.ExpectErr != "" {
-				if err == nil {
-					t.Fatalf("expected error %q, got nil (out=%+v)", tc.ExpectErr, tc.Out)
+		for _, k := range allKinds {
+			t.Run(fmt.Sprintf("%s/%s", k, tc.Name), func(t *testing.T) {
+				in := buildIn(k, tc.Mods)
+				out := newOut(k)
+				err := scheme.Convert(in, out, nil)
+				if tc.ExpectErr != "" {
+					if err == nil {
+						t.Fatalf("expected error %q, got nil (out=%+v)", tc.ExpectErr, out)
+					}
+					if diff := cmp.Diff(tc.ExpectErr, err.Error()); diff != "" {
+						t.Fatalf("error mismatch (-want +got):\n%s", diff)
+					}
+					return
 				}
-				if diff := cmp.Diff(tc.ExpectErr, err.Error()); diff != "" {
-					t.Fatalf("error mismatch (-want +got):\n%s", diff)
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
 				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if diff := cmp.Diff(tc.ExpectOut, tc.Out); diff != "" {
-				t.Fatalf("output mismatch (-want +got):\n%s", diff)
-			}
-		})
+				if diff := cmp.Diff(buildExpected(k, tc.Mods), out); diff != "" {
+					t.Fatalf("output mismatch (-want +got):\n%s", diff)
+				}
+			})
+		}
 	}
 }
