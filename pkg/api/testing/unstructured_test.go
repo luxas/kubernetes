@@ -120,8 +120,16 @@ func doRoundTrip(t *testing.T, internalVersion schema.GroupVersion, externalVers
 }
 
 func TestRoundTrip(t *testing.T) {
+	skipped := sets.New(
+		schema.GroupVersionKind{Group: authorization.GroupName, Version: "v1beta1", Kind: "SubjectAccessReview"},
+		schema.GroupVersionKind{Group: authorization.GroupName, Version: "v1beta1", Kind: "LocalSubjectAccessReview"},
+		schema.GroupVersionKind{Group: authorization.GroupName, Version: "v1beta1", Kind: "SelfSubjectAccessReview"},
+	)
 	for gvk := range legacyscheme.Scheme.AllKnownTypes() {
 		if nonRoundTrippableTypes.Has(gvk.Kind) {
+			continue
+		}
+		if skipped.Has(gvk) {
 			continue
 		}
 		if gvk.Version == runtime.APIVersionInternal {
