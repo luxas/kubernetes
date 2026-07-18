@@ -1619,10 +1619,6 @@ authorizers:
 							t.Fatalf("expected request to be allowed, got error: %v", err)
 						}
 					} else {
-						if err == nil {
-							t.Fatalf("expected request to be denied, got success")
-						}
-						// TODO(luxas): I don't think we expect Unauthorized ever?
 						if !apierrors.IsForbidden(err) {
 							t.Fatalf("expected Forbidden error, got: %v", err)
 						}
@@ -1696,10 +1692,9 @@ authorizers:
 
 		// Configure the webhook: return a conditional decision for configmap SARs,
 		// NoOpinion for everything else (falls through to RBAC).
-		// TODO(luxas): Can we make this panic to make sure it's never called
 		webhookServer.handler.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
 			panic("should not be called")
-		} // acrEvaluateCEL(t, "example.com/opaque-cel-condition-type")
+		}
 
 		handledAll := []authorizationv1.ConditionsAwareDecisionType{
 			authorizationv1.ConditionsAwareDecisionTypeAllow,
@@ -1943,11 +1938,8 @@ authorizers:
 				userCfg := rest.CopyConfig(server.ClientConfig)
 				userCfg.Impersonate.UserName = "fold-get-deny-user"
 				_, err := clientset.NewForConfigOrDie(userCfg).CoreV1().ConfigMaps("test-ns").Get(context.TODO(), "fold-test-cm", metav1.GetOptions{})
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-				if !apierrors.IsForbidden(err) && !apierrors.IsUnauthorized(err) {
-					t.Fatalf("expected Forbidden or Unauthorized, got: %v", err)
+				if !apierrors.IsForbidden(err) {
+					t.Fatalf("expected Forbidden, got: %v", err)
 				}
 			})
 
@@ -2037,11 +2029,8 @@ authorizers:
 				userCfg := rest.CopyConfig(server.ClientConfig)
 				userCfg.Impersonate.UserName = "fold-sar-deny-no-rbac-user"
 				_, err := clientset.NewForConfigOrDie(userCfg).AuthorizationV1().SubjectAccessReviews().Create(context.TODO(), newSAR(), metav1.CreateOptions{})
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-				if !apierrors.IsForbidden(err) && !apierrors.IsUnauthorized(err) {
-					t.Fatalf("expected Forbidden or Unauthorized, got: %v", err)
+				if !apierrors.IsForbidden(err) {
+					t.Fatalf("expected Forbidden, got: %v", err)
 				}
 			})
 
@@ -2066,11 +2055,8 @@ authorizers:
 				userCfg := rest.CopyConfig(server.ClientConfig)
 				userCfg.Impersonate.UserName = userName
 				_, err = clientset.NewForConfigOrDie(userCfg).AuthorizationV1().SubjectAccessReviews().Create(context.TODO(), newSAR(), metav1.CreateOptions{})
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-				if !apierrors.IsForbidden(err) && !apierrors.IsUnauthorized(err) {
-					t.Fatalf("expected Forbidden or Unauthorized, got: %v", err)
+				if !apierrors.IsForbidden(err) {
+					t.Fatalf("expected Forbidden, got: %v", err)
 				}
 			})
 
@@ -2080,11 +2066,8 @@ authorizers:
 				userCfg := rest.CopyConfig(server.ClientConfig)
 				userCfg.Impersonate.UserName = "fold-sar-noop-no-rbac-user"
 				_, err := clientset.NewForConfigOrDie(userCfg).AuthorizationV1().SubjectAccessReviews().Create(context.TODO(), newSAR(), metav1.CreateOptions{})
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-				if !apierrors.IsForbidden(err) && !apierrors.IsUnauthorized(err) {
-					t.Fatalf("expected Forbidden or Unauthorized, got: %v", err)
+				if !apierrors.IsForbidden(err) {
+					t.Fatalf("expected Forbidden, got: %v", err)
 				}
 			})
 
