@@ -19,12 +19,14 @@ package conditionalauthorization
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -43,13 +45,20 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/apiserver/pkg/admission"
+	authorizationv1apiserver "k8s.io/apiserver/pkg/apis/authorization/v1"
+	"k8s.io/apiserver/pkg/authorization/authorizer"
 	"k8s.io/client-go/dynamic"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	kubeapiservertesting "k8s.io/kubernetes/cmd/kube-apiserver/app/testing"
+	authorizationapi "k8s.io/kubernetes/pkg/apis/authorization"
+	authorizationinternalv1 "k8s.io/kubernetes/pkg/apis/authorization/v1"
+	authorizationutil "k8s.io/kubernetes/pkg/registry/authorization/util"
 	"k8s.io/kubernetes/test/integration/authutil"
 	"k8s.io/kubernetes/test/integration/framework"
 	"k8s.io/utils/ptr"
@@ -252,15 +261,19 @@ authorizers:
 		name string
 		// user is the username that will be impersonated
 		user string
-		// webhookBehaviors configures the webhook for this test case.
-		// It is called before makeRequest to set the desired behavior.
-		// Multiple webhook behaviors can be specified to assert the same
-		// result for various webhook configurations (e.g. out-of-tree
-		// webhook evaluation vs in-tree CEL evaluation).
-		webhookBehaviors map[string]func(ws *webhookServerHandler)
+		// authorizers configures the per-variant webhook authorizer for this
+		// test case. Each entry becomes a subtest under tc.name; the map key
+		// is the variant name (used as a suffix on impersonated users and
+		// resource names to avoid cross-subtest cache/collision).
+		// Multiple entries can assert the same outcome under different
+		// webhook configurations (e.g. out-of-tree webhook evaluation vs
+		// in-tree CEL evaluation) — today only "using-webhook-only" is
+		// active; more variants will land when in-tree evaluation is
+		// re-enabled.
+		authorizers map[string]authorizer.Authorizer
 		// makeRequest creates a client with the given user and performs an API request.
 		// Returns an error if the request fails. The suffix parameter is derived from
-		// the webhook behavior name and must be used in resource names to avoid
+		// the variant name and must be used in resource names to avoid
 		// conflicts between subtests that share the same API server.
 		makeRequest func(t *testing.T, client *clientset.Clientset, suffix string) error
 		// expectAllowed is true if the request should be allowed
@@ -273,13 +286,10 @@ authorizers:
 		{
 			name: "unconditional allow from webhook",
 			user: "allow-user",
-			webhookBehaviors: map[string]func(ws *webhookServerHandler){
-				"": func(ws *webhookServerHandler) {
-					ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
-						sar.Status.Allowed = true
-						sar.Status.Reason = "unconditionally allowed"
-					}
-				},
+			authorizers: map[string]authorizer.Authorizer{
+				"": testAuthorizer(func(_ context.Context, _ authorizer.Attributes) authorizer.ConditionsAwareDecision {
+					return authorizer.ConditionsAwareDecisionAllow("unconditionally allowed", nil)
+				}),
 			},
 			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
@@ -292,14 +302,10 @@ authorizers:
 		{
 			name: "unconditional deny from webhook",
 			user: "deny-user",
-			webhookBehaviors: map[string]func(ws *webhookServerHandler){
-				"": func(ws *webhookServerHandler) {
-					ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
-						sar.Status.Allowed = false
-						sar.Status.Denied = true
-						sar.Status.Reason = "unconditionally denied"
-					}
-				},
+			authorizers: map[string]authorizer.Authorizer{
+				"": testAuthorizer(func(_ context.Context, _ authorizer.Attributes) authorizer.ConditionsAwareDecision {
+					return authorizer.ConditionsAwareDecisionDeny("unconditionally denied", nil)
+				}),
 			},
 			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
@@ -312,14 +318,10 @@ authorizers:
 		{
 			name: "webhook no-opinion falls through to RBAC allow",
 			user: "webhook-noop-rbac-user",
-			webhookBehaviors: map[string]func(ws *webhookServerHandler){
-				"": func(ws *webhookServerHandler) {
-					ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
-						// NoOpinion: neither allowed nor denied
-						sar.Status.Allowed = false
-						sar.Status.Denied = false
-					}
-				},
+			authorizers: map[string]authorizer.Authorizer{
+				"": testAuthorizer(func(_ context.Context, _ authorizer.Attributes) authorizer.ConditionsAwareDecision {
+					return authorizer.ConditionsAwareDecisionNoOpinion("", nil)
+				}),
 			},
 			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
@@ -343,20 +345,18 @@ authorizers:
 		{
 			name: "conditional allow - condition evaluates to allow",
 			user: "conditional-allow-user",
-			webhookBehaviors: celConditionalTestCases(func(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
-				sar.Status.ConditionalDecision = &authorizationv1.ConditionsAwareDecision{
-					Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
-					ConditionsMap: &authorizationv1.ConditionsMap{
-						AllowConditions: []authorizationv1.Condition{
-							{
-								ID:          "example.com/always-allow",
-								Condition:   "true",
-								Type:        conditionsType,
-								Description: "always allow condition",
-							},
+			authorizers: celConditionalAuthorizerVariants(func(_ authorizer.Attributes, conditionsType string) authorizer.ConditionsAwareDecision {
+				return authorizer.ConditionsAwareDecisionConditionsMap(
+					nil, nil,
+					[]authorizer.Condition{
+						authorizer.GenericCondition{
+							ID:          "example.com/always-allow",
+							Condition:   "true",
+							Type:        conditionsType,
+							Description: "always allow condition",
 						},
 					},
-				}
+				)
 			}),
 			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
@@ -372,28 +372,26 @@ authorizers:
 		{
 			name: "conditional deny - condition evaluates to deny",
 			user: "conditional-deny-user",
-			webhookBehaviors: celConditionalTestCases(func(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
-				sar.Status.ConditionalDecision = &authorizationv1.ConditionsAwareDecision{
-					Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
-					ConditionsMap: &authorizationv1.ConditionsMap{
-						DenyConditions: []authorizationv1.Condition{
-							{
-								ID:          "example.com/always-deny",
-								Condition:   "true",
-								Type:        conditionsType,
-								Description: "always deny condition",
-							},
-						},
-						AllowConditions: []authorizationv1.Condition{
-							{
-								ID:          "example.com/always-allow",
-								Condition:   "true",
-								Type:        conditionsType,
-								Description: "base allow condition",
-							},
+			authorizers: celConditionalAuthorizerVariants(func(_ authorizer.Attributes, conditionsType string) authorizer.ConditionsAwareDecision {
+				return authorizer.ConditionsAwareDecisionConditionsMap(
+					[]authorizer.Condition{
+						authorizer.GenericCondition{
+							ID:          "example.com/always-deny",
+							Condition:   "true",
+							Type:        conditionsType,
+							Description: "always deny condition",
 						},
 					},
-				}
+					nil,
+					[]authorizer.Condition{
+						authorizer.GenericCondition{
+							ID:          "example.com/always-allow",
+							Condition:   "true",
+							Type:        conditionsType,
+							Description: "base allow condition",
+						},
+					},
+				)
 			}),
 			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
@@ -406,20 +404,19 @@ authorizers:
 		{
 			name: "conditional no-opinion falls through to RBAC allow",
 			user: "conditional-noop-rbac-user",
-			webhookBehaviors: celConditionalTestCases(func(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
-				sar.Status.ConditionalDecision = &authorizationv1.ConditionsAwareDecision{
-					Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
-					ConditionsMap: &authorizationv1.ConditionsMap{
-						NoOpinionConditions: []authorizationv1.Condition{
-							{
-								ID:          "example.com/no-opinion",
-								Condition:   "true",
-								Type:        conditionsType,
-								Description: "no opinion condition",
-							},
+			authorizers: celConditionalAuthorizerVariants(func(_ authorizer.Attributes, conditionsType string) authorizer.ConditionsAwareDecision {
+				return authorizer.ConditionsAwareDecisionConditionsMap(
+					nil,
+					[]authorizer.Condition{
+						authorizer.GenericCondition{
+							ID:          "example.com/no-opinion",
+							Condition:   "true",
+							Type:        conditionsType,
+							Description: "no opinion condition",
 						},
 					},
-				}
+					nil,
+				)
 			}),
 			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
@@ -444,20 +441,18 @@ authorizers:
 		{
 			name: "cel allow by name pattern",
 			user: "cel-name-user",
-			webhookBehaviors: celConditionalTestCases(func(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
-				sar.Status.ConditionalDecision = &authorizationv1.ConditionsAwareDecision{
-					Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
-					ConditionsMap: &authorizationv1.ConditionsMap{
-						AllowConditions: []authorizationv1.Condition{
-							{
-								ID:          "example.com/allow-safe-prefix",
-								Condition:   `object.metadata.name.startsWith("safe-")`,
-								Type:        conditionsType,
-								Description: "only allow configmaps with safe- prefix",
-							},
+			authorizers: celConditionalAuthorizerVariants(func(_ authorizer.Attributes, conditionsType string) authorizer.ConditionsAwareDecision {
+				return authorizer.ConditionsAwareDecisionConditionsMap(
+					nil, nil,
+					[]authorizer.Condition{
+						authorizer.GenericCondition{
+							ID:          "example.com/allow-safe-prefix",
+							Condition:   `object.metadata.name.startsWith("safe-")`,
+							Type:        conditionsType,
+							Description: "only allow configmaps with safe- prefix",
 						},
 					},
-				}
+				)
 			}),
 			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
@@ -471,20 +466,18 @@ authorizers:
 		{
 			name: "cel deny by name pattern mismatch",
 			user: "cel-name-deny-user",
-			webhookBehaviors: celConditionalTestCases(func(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
-				sar.Status.ConditionalDecision = &authorizationv1.ConditionsAwareDecision{
-					Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
-					ConditionsMap: &authorizationv1.ConditionsMap{
-						AllowConditions: []authorizationv1.Condition{
-							{
-								ID:          "example.com/allow-safe-prefix",
-								Condition:   `object.metadata.name.startsWith("safe-")`,
-								Type:        conditionsType,
-								Description: "only allow configmaps with safe- prefix",
-							},
+			authorizers: celConditionalAuthorizerVariants(func(_ authorizer.Attributes, conditionsType string) authorizer.ConditionsAwareDecision {
+				return authorizer.ConditionsAwareDecisionConditionsMap(
+					nil, nil,
+					[]authorizer.Condition{
+						authorizer.GenericCondition{
+							ID:          "example.com/allow-safe-prefix",
+							Condition:   `object.metadata.name.startsWith("safe-")`,
+							Type:        conditionsType,
+							Description: "only allow configmaps with safe- prefix",
 						},
 					},
-				}
+				)
 			}),
 			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
@@ -497,30 +490,28 @@ authorizers:
 		{
 			name: "cel deny by label overrides allow",
 			user: "cel-label-deny-user",
-			webhookBehaviors: celConditionalTestCases(func(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
-				sar.Status.ConditionalDecision = &authorizationv1.ConditionsAwareDecision{
-					Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
-					ConditionsMap: &authorizationv1.ConditionsMap{
-						DenyConditions: []authorizationv1.Condition{
-							{
-								ID: "example.com/deny-restricted-label",
-								Condition: `has(object.metadata.labels) && ` +
-									`has(object.metadata.labels.restricted) && ` +
-									`object.metadata.labels.restricted == "true"`,
-								Type:        conditionsType,
-								Description: "deny restricted labels",
-							},
-						},
-						AllowConditions: []authorizationv1.Condition{
-							{
-								ID:          "example.com/allow-all",
-								Condition:   "true",
-								Type:        conditionsType,
-								Description: "base allow",
-							},
+			authorizers: celConditionalAuthorizerVariants(func(_ authorizer.Attributes, conditionsType string) authorizer.ConditionsAwareDecision {
+				return authorizer.ConditionsAwareDecisionConditionsMap(
+					[]authorizer.Condition{
+						authorizer.GenericCondition{
+							ID: "example.com/deny-restricted-label",
+							Condition: `has(object.metadata.labels) && ` +
+								`has(object.metadata.labels.restricted) && ` +
+								`object.metadata.labels.restricted == "true"`,
+							Type:        conditionsType,
+							Description: "deny restricted labels",
 						},
 					},
-				}
+					nil,
+					[]authorizer.Condition{
+						authorizer.GenericCondition{
+							ID:          "example.com/allow-all",
+							Condition:   "true",
+							Type:        conditionsType,
+							Description: "base allow",
+						},
+					},
+				)
 			}),
 			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
@@ -536,22 +527,20 @@ authorizers:
 		{
 			name: "cel allow by data content",
 			user: "cel-data-user",
-			webhookBehaviors: celConditionalTestCases(func(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
-				sar.Status.ConditionalDecision = &authorizationv1.ConditionsAwareDecision{
-					Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
-					ConditionsMap: &authorizationv1.ConditionsMap{
-						AllowConditions: []authorizationv1.Condition{
-							{
-								ID: "example.com/allow-approved-data",
-								Condition: `has(object.data) && ` +
-									`has(object.data.approved) && ` +
-									`object.data.approved == "yes"`,
-								Type:        conditionsType,
-								Description: "only allow configmaps with approved=yes in data",
-							},
+			authorizers: celConditionalAuthorizerVariants(func(_ authorizer.Attributes, conditionsType string) authorizer.ConditionsAwareDecision {
+				return authorizer.ConditionsAwareDecisionConditionsMap(
+					nil, nil,
+					[]authorizer.Condition{
+						authorizer.GenericCondition{
+							ID: "example.com/allow-approved-data",
+							Condition: `has(object.data) && ` +
+								`has(object.data.approved) && ` +
+								`object.data.approved == "yes"`,
+							Type:        conditionsType,
+							Description: "only allow configmaps with approved=yes in data",
 						},
 					},
-				}
+				)
 			}),
 			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
@@ -566,22 +555,20 @@ authorizers:
 		{
 			name: "cel deny by data content missing",
 			user: "cel-data-deny-user",
-			webhookBehaviors: celConditionalTestCases(func(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
-				sar.Status.ConditionalDecision = &authorizationv1.ConditionsAwareDecision{
-					Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
-					ConditionsMap: &authorizationv1.ConditionsMap{
-						AllowConditions: []authorizationv1.Condition{
-							{
-								ID: "example.com/allow-approved-data",
-								Condition: `has(object.data) && ` +
-									`has(object.data.approved) && ` +
-									`object.data.approved == "yes"`,
-								Type:        conditionsType,
-								Description: "only allow configmaps with approved=yes in data",
-							},
+			authorizers: celConditionalAuthorizerVariants(func(_ authorizer.Attributes, conditionsType string) authorizer.ConditionsAwareDecision {
+				return authorizer.ConditionsAwareDecisionConditionsMap(
+					nil, nil,
+					[]authorizer.Condition{
+						authorizer.GenericCondition{
+							ID: "example.com/allow-approved-data",
+							Condition: `has(object.data) && ` +
+								`has(object.data.approved) && ` +
+								`object.data.approved == "yes"`,
+							Type:        conditionsType,
+							Description: "only allow configmaps with approved=yes in data",
 						},
 					},
-				}
+				)
 			}),
 			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
@@ -595,28 +582,26 @@ authorizers:
 		{
 			name: "cel operation-aware deny update",
 			user: "cel-op-user",
-			webhookBehaviors: celConditionalTestCases(func(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
-				sar.Status.ConditionalDecision = &authorizationv1.ConditionsAwareDecision{
-					Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
-					ConditionsMap: &authorizationv1.ConditionsMap{
-						DenyConditions: []authorizationv1.Condition{
-							{
-								ID:          "example.com/deny-updates",
-								Condition:   `request.operation == "UPDATE"`,
-								Type:        conditionsType,
-								Description: "deny update operations",
-							},
-						},
-						AllowConditions: []authorizationv1.Condition{
-							{
-								ID:          "example.com/allow-creates",
-								Condition:   `request.operation == "CREATE"`,
-								Type:        conditionsType,
-								Description: "allow create operations",
-							},
+			authorizers: celConditionalAuthorizerVariants(func(_ authorizer.Attributes, conditionsType string) authorizer.ConditionsAwareDecision {
+				return authorizer.ConditionsAwareDecisionConditionsMap(
+					[]authorizer.Condition{
+						authorizer.GenericCondition{
+							ID:          "example.com/deny-updates",
+							Condition:   `request.operation == "UPDATE"`,
+							Type:        conditionsType,
+							Description: "deny update operations",
 						},
 					},
-				}
+					nil,
+					[]authorizer.Condition{
+						authorizer.GenericCondition{
+							ID:          "example.com/allow-creates",
+							Condition:   `request.operation == "CREATE"`,
+							Type:        conditionsType,
+							Description: "allow create operations",
+						},
+					},
+				)
 			}),
 			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				// Create should succeed (CEL allows CREATE)
@@ -638,36 +623,33 @@ authorizers:
 		{
 			name: "cel deny overrides allow and noopinion",
 			user: "cel-priority-user",
-			webhookBehaviors: celConditionalTestCases(func(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
-				sar.Status.ConditionalDecision = &authorizationv1.ConditionsAwareDecision{
-					Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
-					ConditionsMap: &authorizationv1.ConditionsMap{
-						DenyConditions: []authorizationv1.Condition{
-							{
-								ID:          "example.com/deny-all",
-								Condition:   "true",
-								Type:        conditionsType,
-								Description: "deny everything",
-							},
-						},
-						NoOpinionConditions: []authorizationv1.Condition{
-							{
-								ID:          "example.com/noop-all",
-								Condition:   "true",
-								Type:        conditionsType,
-								Description: "no opinion on everything",
-							},
-						},
-						AllowConditions: []authorizationv1.Condition{
-							{
-								ID:          "example.com/allow-all",
-								Condition:   "true",
-								Type:        conditionsType,
-								Description: "allow everything",
-							},
+			authorizers: celConditionalAuthorizerVariants(func(_ authorizer.Attributes, conditionsType string) authorizer.ConditionsAwareDecision {
+				return authorizer.ConditionsAwareDecisionConditionsMap(
+					[]authorizer.Condition{
+						authorizer.GenericCondition{
+							ID:          "example.com/deny-all",
+							Condition:   "true",
+							Type:        conditionsType,
+							Description: "deny everything",
 						},
 					},
-				}
+					[]authorizer.Condition{
+						authorizer.GenericCondition{
+							ID:          "example.com/noop-all",
+							Condition:   "true",
+							Type:        conditionsType,
+							Description: "no opinion on everything",
+						},
+					},
+					[]authorizer.Condition{
+						authorizer.GenericCondition{
+							ID:          "example.com/allow-all",
+							Condition:   "true",
+							Type:        conditionsType,
+							Description: "allow everything",
+						},
+					},
+				)
 			}),
 			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
@@ -680,30 +662,28 @@ authorizers:
 		{
 			name: "cel noopinion overrides allow",
 			user: "cel-noop-vs-allow-user",
-			webhookBehaviors: celConditionalTestCases(func(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
-				sar.Status.ConditionalDecision = &authorizationv1.ConditionsAwareDecision{
-					Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
-					ConditionsMap: &authorizationv1.ConditionsMap{
-						NoOpinionConditions: []authorizationv1.Condition{
-							{
-								ID: "example.com/noop-on-pending-review",
-								Condition: `has(object.metadata.labels) && ` +
-									`has(object.metadata.labels.review) && ` +
-									`object.metadata.labels.review == "pending"`,
-								Type:        conditionsType,
-								Description: "no opinion when review=pending label is present",
-							},
-						},
-						AllowConditions: []authorizationv1.Condition{
-							{
-								ID:          "example.com/allow-all",
-								Condition:   "true",
-								Type:        conditionsType,
-								Description: "allow everything",
-							},
+			authorizers: celConditionalAuthorizerVariants(func(_ authorizer.Attributes, conditionsType string) authorizer.ConditionsAwareDecision {
+				return authorizer.ConditionsAwareDecisionConditionsMap(
+					nil,
+					[]authorizer.Condition{
+						authorizer.GenericCondition{
+							ID: "example.com/noop-on-pending-review",
+							Condition: `has(object.metadata.labels) && ` +
+								`has(object.metadata.labels.review) && ` +
+								`object.metadata.labels.review == "pending"`,
+							Type:        conditionsType,
+							Description: "no opinion when review=pending label is present",
 						},
 					},
-				}
+					[]authorizer.Condition{
+						authorizer.GenericCondition{
+							ID:          "example.com/allow-all",
+							Condition:   "true",
+							Type:        conditionsType,
+							Description: "allow everything",
+						},
+					},
+				)
 			}),
 			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
@@ -1030,9 +1010,9 @@ authorizers:
 		// The authorizer returns version-specific CEL conditions that require
 		// the target CPU utilization to be at most 80%.
 		{
-			name:             "hpa v1 cpu utilization - allow",
-			user:             "hpa-cpu-allow-user",
-			webhookBehaviors: celConditionalTestCases(hpaCPUUtilizationSARHandler),
+			name:        "hpa v1 cpu utilization - allow",
+			user:        "hpa-cpu-allow-user",
+			authorizers: celConditionalAuthorizerVariants(hpaCPUUtilizationDecision),
 			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.AutoscalingV1().HorizontalPodAutoscalers("test-ns").Create(context.TODO(), &autoscalingv1.HorizontalPodAutoscaler{
 					ObjectMeta: metav1.ObjectMeta{Name: "hpa-v1-allow" + suffix},
@@ -1052,9 +1032,9 @@ authorizers:
 			expectAllowedWhenDisabled: new(false),
 		},
 		{
-			name:             "hpa v1 cpu utilization - deny",
-			user:             "hpa-cpu-deny-user",
-			webhookBehaviors: celConditionalTestCases(hpaCPUUtilizationSARHandler),
+			name:        "hpa v1 cpu utilization - deny",
+			user:        "hpa-cpu-deny-user",
+			authorizers: celConditionalAuthorizerVariants(hpaCPUUtilizationDecision),
 			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.AutoscalingV1().HorizontalPodAutoscalers("test-ns").Create(context.TODO(), &autoscalingv1.HorizontalPodAutoscaler{
 					ObjectMeta: metav1.ObjectMeta{Name: "hpa-v1-deny" + suffix},
@@ -1073,9 +1053,9 @@ authorizers:
 			expectAllowed: false,
 		},
 		{
-			name:             "hpa v2 cpu utilization - allow",
-			user:             "hpa-cpu-allow-user",
-			webhookBehaviors: celConditionalTestCases(hpaCPUUtilizationSARHandler),
+			name:        "hpa v2 cpu utilization - allow",
+			user:        "hpa-cpu-allow-user",
+			authorizers: celConditionalAuthorizerVariants(hpaCPUUtilizationDecision),
 			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.AutoscalingV2().HorizontalPodAutoscalers("test-ns").Create(context.TODO(), &autoscalingv2.HorizontalPodAutoscaler{
 					ObjectMeta: metav1.ObjectMeta{Name: "hpa-v2-allow" + suffix},
@@ -1106,9 +1086,9 @@ authorizers:
 			expectAllowedWhenDisabled: new(false),
 		},
 		{
-			name:             "hpa v2 cpu utilization - deny",
-			user:             "hpa-cpu-deny-user",
-			webhookBehaviors: celConditionalTestCases(hpaCPUUtilizationSARHandler),
+			name:        "hpa v2 cpu utilization - deny",
+			user:        "hpa-cpu-deny-user",
+			authorizers: celConditionalAuthorizerVariants(hpaCPUUtilizationDecision),
 			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				_, err := client.AutoscalingV2().HorizontalPodAutoscalers("test-ns").Create(context.TODO(), &autoscalingv2.HorizontalPodAutoscaler{
 					ObjectMeta: metav1.ObjectMeta{Name: "hpa-v2-deny" + suffix},
@@ -1138,9 +1118,9 @@ authorizers:
 			expectAllowed: false,
 		},
 		{
-			name:             "hpa v1 cpu utilization - update allowed",
-			user:             "hpa-cpu-allow-update-user",
-			webhookBehaviors: celConditionalTestCases(hpaCPUUtilizationSARHandler),
+			name:        "hpa v1 cpu utilization - update allowed",
+			user:        "hpa-cpu-allow-update-user",
+			authorizers: celConditionalAuthorizerVariants(hpaCPUUtilizationDecision),
 			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				// Create with 70% (allowed: 70 <= 80)
 				created, err := client.AutoscalingV1().HorizontalPodAutoscalers("test-ns").Create(context.TODO(), &autoscalingv1.HorizontalPodAutoscaler{
@@ -1167,9 +1147,9 @@ authorizers:
 			expectAllowedWhenDisabled: new(false),
 		},
 		{
-			name:             "hpa v1 cpu utilization - update denied",
-			user:             "hpa-cpu-deny-update-user",
-			webhookBehaviors: celConditionalTestCases(hpaCPUUtilizationSARHandler),
+			name:        "hpa v1 cpu utilization - update denied",
+			user:        "hpa-cpu-deny-update-user",
+			authorizers: celConditionalAuthorizerVariants(hpaCPUUtilizationDecision),
 			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				// Create with 70% (allowed: 70 <= 80)
 				created, err := client.AutoscalingV1().HorizontalPodAutoscalers("test-ns").Create(context.TODO(), &autoscalingv1.HorizontalPodAutoscaler{
@@ -1195,9 +1175,9 @@ authorizers:
 			expectAllowed: false,
 		},
 		{
-			name:             "hpa v2 cpu utilization - update allowed",
-			user:             "hpa-cpu-allow-update-v2-user",
-			webhookBehaviors: celConditionalTestCases(hpaCPUUtilizationSARHandler),
+			name:        "hpa v2 cpu utilization - update allowed",
+			user:        "hpa-cpu-allow-update-v2-user",
+			authorizers: celConditionalAuthorizerVariants(hpaCPUUtilizationDecision),
 			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				// Create with 70% (allowed: 70 <= 80)
 				created, err := client.AutoscalingV2().HorizontalPodAutoscalers("test-ns").Create(context.TODO(), &autoscalingv2.HorizontalPodAutoscaler{
@@ -1235,9 +1215,9 @@ authorizers:
 			expectAllowedWhenDisabled: new(false),
 		},
 		{
-			name:             "hpa v2 cpu utilization - update denied",
-			user:             "hpa-cpu-deny-update-v2-user",
-			webhookBehaviors: celConditionalTestCases(hpaCPUUtilizationSARHandler),
+			name:        "hpa v2 cpu utilization - update denied",
+			user:        "hpa-cpu-deny-update-v2-user",
+			authorizers: celConditionalAuthorizerVariants(hpaCPUUtilizationDecision),
 			makeRequest: func(t *testing.T, client *clientset.Clientset, suffix string) error {
 				// Create with 70% (allowed: 70 <= 80)
 				created, err := client.AutoscalingV2().HorizontalPodAutoscalers("test-ns").Create(context.TODO(), &autoscalingv2.HorizontalPodAutoscaler{
@@ -1279,9 +1259,9 @@ authorizers:
 		// The authorizer returns version-specific CEL conditions requiring replicas <= 10.
 		// For updates, both the old and new objects must satisfy the condition.
 		{
-			name:             "crd v1 replicas - create allowed",
-			user:             "alice-crd-v1-create-allow",
-			webhookBehaviors: celConditionalTestCases(crdReplicasSARHandler),
+			name:        "crd v1 replicas - create allowed",
+			user:        "alice-crd-v1-create-allow",
+			authorizers: celConditionalAuthorizerVariants(crdReplicasDecision),
 			makeRequest: func(t *testing.T, _ *clientset.Clientset, suffix string) error {
 				config := rest.CopyConfig(server.ClientConfig)
 				config.Impersonate.UserName = "alice-crd-v1-create-allow" + suffix
@@ -1309,9 +1289,9 @@ authorizers:
 			expectAllowedWhenDisabled: new(false),
 		},
 		{
-			name:             "crd v1 replicas - create denied",
-			user:             "alice-crd-v1-create-deny",
-			webhookBehaviors: celConditionalTestCases(crdReplicasSARHandler),
+			name:        "crd v1 replicas - create denied",
+			user:        "alice-crd-v1-create-deny",
+			authorizers: celConditionalAuthorizerVariants(crdReplicasDecision),
 			makeRequest: func(t *testing.T, _ *clientset.Clientset, suffix string) error {
 				config := rest.CopyConfig(server.ClientConfig)
 				config.Impersonate.UserName = "alice-crd-v1-create-deny" + suffix
@@ -1338,9 +1318,9 @@ authorizers:
 			expectAllowed: false,
 		},
 		{
-			name:             "crd v2 replicas.max - create allowed",
-			user:             "alice-crd-v2-create-allow",
-			webhookBehaviors: celConditionalTestCases(crdReplicasSARHandler),
+			name:        "crd v2 replicas.max - create allowed",
+			user:        "alice-crd-v2-create-allow",
+			authorizers: celConditionalAuthorizerVariants(crdReplicasDecision),
 			makeRequest: func(t *testing.T, _ *clientset.Clientset, suffix string) error {
 				config := rest.CopyConfig(server.ClientConfig)
 				config.Impersonate.UserName = "alice-crd-v2-create-allow" + suffix
@@ -1370,9 +1350,9 @@ authorizers:
 			expectAllowedWhenDisabled: new(false),
 		},
 		{
-			name:             "crd v2 replicas.max - create denied",
-			user:             "alice-crd-v2-create-deny",
-			webhookBehaviors: celConditionalTestCases(crdReplicasSARHandler),
+			name:        "crd v2 replicas.max - create denied",
+			user:        "alice-crd-v2-create-deny",
+			authorizers: celConditionalAuthorizerVariants(crdReplicasDecision),
 			makeRequest: func(t *testing.T, _ *clientset.Clientset, suffix string) error {
 				config := rest.CopyConfig(server.ClientConfig)
 				config.Impersonate.UserName = "alice-crd-v2-create-deny" + suffix
@@ -1401,9 +1381,9 @@ authorizers:
 			expectAllowed: false,
 		},
 		{
-			name:             "crd v1 replicas - update allowed",
-			user:             "alice-crd-v1-update-allow",
-			webhookBehaviors: celConditionalTestCases(crdReplicasSARHandler),
+			name:        "crd v1 replicas - update allowed",
+			user:        "alice-crd-v1-update-allow",
+			authorizers: celConditionalAuthorizerVariants(crdReplicasDecision),
 			makeRequest: func(t *testing.T, _ *clientset.Clientset, suffix string) error {
 				config := rest.CopyConfig(server.ClientConfig)
 				config.Impersonate.UserName = "alice-crd-v1-update-allow" + suffix
@@ -1438,9 +1418,9 @@ authorizers:
 			expectAllowedWhenDisabled: new(false),
 		},
 		{
-			name:             "crd v1 replicas - update denied",
-			user:             "alice-crd-v1-update-deny",
-			webhookBehaviors: celConditionalTestCases(crdReplicasSARHandler),
+			name:        "crd v1 replicas - update denied",
+			user:        "alice-crd-v1-update-deny",
+			authorizers: celConditionalAuthorizerVariants(crdReplicasDecision),
 			makeRequest: func(t *testing.T, _ *clientset.Clientset, suffix string) error {
 				config := rest.CopyConfig(server.ClientConfig)
 				config.Impersonate.UserName = "alice-crd-v1-update-deny" + suffix
@@ -1480,7 +1460,7 @@ authorizers:
 		/*{
 			name:             "crd v2 replicas.max - update allowed",
 			user:             "alice-crd-v2-update-allow",
-			webhookBehaviors: celConditionalTestCases(crdReplicasSARHandler),
+			authorizers:      celConditionalAuthorizerVariants(crdReplicasDecision),
 			makeRequest: func(t *testing.T, _ *clientset.Clientset, suffix string) error {
 				config := rest.CopyConfig(server.ClientConfig)
 				config.Impersonate.UserName = "alice-crd-v2-update-allow" + suffix
@@ -1521,9 +1501,9 @@ authorizers:
 			expectAllowedWhenDisabled: new(false),
 		},*/
 		{
-			name:             "crd v2 replicas.max - update denied",
-			user:             "alice-crd-v2-update-deny",
-			webhookBehaviors: celConditionalTestCases(crdReplicasSARHandler),
+			name:        "crd v2 replicas.max - update denied",
+			user:        "alice-crd-v2-update-deny",
+			authorizers: celConditionalAuthorizerVariants(crdReplicasDecision),
 			makeRequest: func(t *testing.T, _ *clientset.Clientset, suffix string) error {
 				config := rest.CopyConfig(server.ClientConfig)
 				config.Impersonate.UserName = "alice-crd-v2-update-deny" + suffix
@@ -1566,18 +1546,19 @@ authorizers:
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Support multiple webhook behaviors with the same assertions
-			for webhookBehaviorName, webhookBehavior := range tc.webhookBehaviors {
-				t.Run(webhookBehaviorName, func(t *testing.T) {
-					// Configure the webhook behavior for this test case
-					webhookBehavior(webhookServer.handler)
+			// Support multiple variant authorizers with the same assertions
+			for variantName, authz := range tc.authorizers {
+				t.Run(variantName, func(t *testing.T) {
+					// Install the authorizer for this variant. setAuthorizer
+					// registers a t.Cleanup that restores the previous state.
+					webhookServer.handler.setAuthorizer(t, authz)
 
-					// Compute the user name and resource suffix. Append the webhook
-					// behavior name so the webhook response cache (keyed on the SAR
+					// Compute the user name and resource suffix. Append the variant
+					// name so the webhook response cache (keyed on the SAR
 					// spec including user) doesn't return stale entries from a
 					// sibling subtest with a different webhook configuration.
 					userName := tc.user
-					suffix := webhookBehaviorName
+					suffix := variantName
 					if suffix != "" {
 						userName += "-" + suffix
 						suffix = "-" + suffix
@@ -1629,7 +1610,24 @@ authorizers:
 	}
 
 	if featureEnabled {
-		// The conditional allow-decision the parent webhook handler returns for configmap SARs.
+		// The internal conditional-allow decision that the test authorizer
+		// returns for configmap SARs. The webhook mock serializes this via
+		// SerializeConditionsAwareDecision on the way out.
+		internalConditionalAllow := authorizer.ConditionsAwareDecisionConditionsMap(
+			nil, nil,
+			[]authorizer.Condition{
+				authorizer.GenericCondition{
+					ID:          "example.com/allow-safe-prefix",
+					Condition:   `object.metadata.name.startsWith("safe-")`,
+					Type:        opaqueCELConditionType,
+					Description: "only allow configmaps with safe- prefix",
+				},
+			},
+		)
+		// The expected v1 form after a JSON round-trip through the API server.
+		// Empty condition slices come back as nil (not empty slices), so we
+		// leave DenyConditions/NoOpinionConditions unset here — matching the
+		// wire shape.
 		conditionalAllowDecision := &authorizationv1.ConditionsAwareDecision{
 			Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
 			ConditionsMap: &authorizationv1.ConditionsMap{
@@ -1637,14 +1635,25 @@ authorizers:
 					{
 						ID:          "example.com/allow-safe-prefix",
 						Condition:   `object.metadata.name.startsWith("safe-")`,
-						Type:        "example.com/opaque-cel-condition-type",
+						Type:        opaqueCELConditionType,
 						Description: "only allow configmaps with safe- prefix",
 					},
 				},
 			},
 		}
 
-		// The conditional deny-decision the "conditional deny" test row's sarHandler installs.
+		// The internal conditional-deny decision the "conditional deny" test
+		// row's authorizer returns.
+		internalConditionalDeny := authorizer.ConditionsAwareDecisionConditionsMap(
+			[]authorizer.Condition{
+				authorizer.GenericCondition{
+					ID:        "example.com/deny-sensitive-label",
+					Condition: `has(object.metadata.labels) && has(object.metadata.labels.sensitive)`,
+					Type:      opaqueCELConditionType,
+				},
+			},
+			nil, nil,
+		)
 		conditionalDenyDecision := &authorizationv1.ConditionsAwareDecision{
 			Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
 			ConditionsMap: &authorizationv1.ConditionsMap{
@@ -1652,7 +1661,7 @@ authorizers:
 					{
 						ID:        "example.com/deny-sensitive-label",
 						Condition: `has(object.metadata.labels) && has(object.metadata.labels.sensitive)`,
-						Type:      "example.com/opaque-cel-condition-type",
+						Type:      opaqueCELConditionType,
 					},
 				},
 			},
@@ -1689,12 +1698,6 @@ authorizers:
 
 		expectedConditionalAllowDecision := expectedUnion(*conditionalAllowDecision)
 		expectedConditionalDenyDecision := expectedUnion(*conditionalDenyDecision)
-
-		// Configure the webhook: return a conditional decision for configmap SARs,
-		// NoOpinion for everything else (falls through to RBAC).
-		webhookServer.handler.acrHandler = func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
-			panic("should not be called")
-		}
 
 		handledAll := []authorizationv1.ConditionsAwareDecisionType{
 			authorizationv1.ConditionsAwareDecisionTypeAllow,
@@ -1778,34 +1781,41 @@ authorizers:
 			{"LocalSubjectAccessReview", sendLocalSAR},
 		}
 
+		// configmapAuthorizer wraps a per-case decision producer so it only fires
+		// for the "configmaps" resource; other resources (e.g. the SAR polls made
+		// by test setup) fall through to NoOpinion.
+		configmapAuthorizer := func(produce func() authorizer.ConditionsAwareDecision) authorizer.Authorizer {
+			return testAuthorizer(func(_ context.Context, a authorizer.Attributes) authorizer.ConditionsAwareDecision {
+				if a.GetResource() != "configmaps" {
+					return authorizer.ConditionsAwareDecisionNoOpinion("", nil)
+				}
+				return produce()
+			})
+		}
+
 		cases := []struct {
 			name string
 			// user is to distinguish the cases from each other, otherwise cached responses are returned as the spec is otherwise shared between all cases
 			user                    string
-			sarHandler              func(*authorizationv1.SubjectAccessReview)
+			authz                   authorizer.Authorizer
 			wantConditionalStatus   authorizationv1.SubjectAccessReviewStatus
 			wantUnconditionalStatus authorizationv1.SubjectAccessReviewStatus
 		}{
 			{
 				name: "conditional allow",
 				user: "conditional-allow-user",
-				sarHandler: func(sar *authorizationv1.SubjectAccessReview) {
-					if sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "configmaps" {
-						sar.Status.ConditionalDecision = conditionalAllowDecision
-					}
-				},
+				authz: configmapAuthorizer(func() authorizer.ConditionsAwareDecision {
+					return internalConditionalAllow
+				}),
 				wantConditionalStatus:   authorizationv1.SubjectAccessReviewStatus{ConditionalDecision: expectedConditionalAllowDecision},
 				wantUnconditionalStatus: wantMismatchStatus,
 			},
 			{
 				name: "unconditional allow",
 				user: "unconditional-allow-user",
-				sarHandler: func(sar *authorizationv1.SubjectAccessReview) {
-					if sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "configmaps" {
-						sar.Status.Allowed = true
-						sar.Status.Reason = "unconditionally allowed"
-					}
-				},
+				authz: configmapAuthorizer(func() authorizer.ConditionsAwareDecision {
+					return authorizer.ConditionsAwareDecisionAllow("unconditionally allowed", nil)
+				}),
 				wantConditionalStatus: authorizationv1.SubjectAccessReviewStatus{
 					Allowed: true,
 					Reason:  "conditional-webhook: {unconditionally allowed}",
@@ -1818,13 +1828,9 @@ authorizers:
 			{
 				name: "unconditional deny",
 				user: "unconditional-deny-user",
-				sarHandler: func(sar *authorizationv1.SubjectAccessReview) {
-					if sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "configmaps" {
-						sar.Status.Allowed = false
-						sar.Status.Denied = true
-						sar.Status.Reason = "unconditionally denied"
-					}
-				},
+				authz: configmapAuthorizer(func() authorizer.ConditionsAwareDecision {
+					return authorizer.ConditionsAwareDecisionDeny("unconditionally denied", nil)
+				}),
 				wantConditionalStatus: authorizationv1.SubjectAccessReviewStatus{
 					Denied: true,
 					Reason: "conditional-webhook: {unconditionally denied}",
@@ -1837,11 +1843,9 @@ authorizers:
 			{
 				name: "conditional deny",
 				user: "conditional-deny-user",
-				sarHandler: func(sar *authorizationv1.SubjectAccessReview) {
-					if sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "configmaps" {
-						sar.Status.ConditionalDecision = conditionalDenyDecision
-					}
-				},
+				authz: configmapAuthorizer(func() authorizer.ConditionsAwareDecision {
+					return internalConditionalDeny
+				}),
 				wantConditionalStatus: authorizationv1.SubjectAccessReviewStatus{
 					ConditionalDecision: expectedConditionalDenyDecision,
 				},
@@ -1854,12 +1858,11 @@ authorizers:
 
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
-				if tc.sarHandler == nil {
-					t.Fatal("sarHandler is required")
+				if tc.authz == nil {
+					t.Fatal("authz is required")
 				}
 
-				webhookServer.handler.sarHandler = tc.sarHandler
-				t.Cleanup(func() { webhookServer.handler.sarHandler = nil })
+				webhookServer.handler.setAuthorizer(t, tc.authz)
 
 				variants := []struct {
 					name       string
@@ -1914,6 +1917,11 @@ authorizers:
 		// The webhook returns a conditional decision, but Authorize() is called, not
 		// ConditionsAwareAuthorize(), so the fold-down logic in Authorize() applies.
 		t.Run("fold down for non-admission verb (GET configmap)", func(t *testing.T) {
+			// Install a NoOpinion default so SAR polls done by helpers like
+			// GrantUserAuthorization pass through to RBAC. Inner subtests
+			// override this and restore it via setAuthorizer's stacked cleanup.
+			webhookServer.handler.setAuthorizer(t, noOpinionAuthorizer)
+
 			// Pre-create a ConfigMap as admin for the GET tests.
 			if _, err := adminClient.CoreV1().ConfigMaps("test-ns").Create(context.TODO(), &corev1.ConfigMap{
 				ObjectMeta: metav1.ObjectMeta{Name: "fold-test-cm"},
@@ -1923,18 +1931,19 @@ authorizers:
 
 			// Conditional with Deny condition → fold to Deny → 403, even without RBAC.
 			t.Run("conditional with deny condition folds to deny", func(t *testing.T) {
-				webhookServer.handler.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
-					if sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "configmaps" {
-						sar.Status.ConditionalDecision = &authorizationv1.ConditionsAwareDecision{
-							Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
-							ConditionsMap: &authorizationv1.ConditionsMap{
-								DenyConditions: []authorizationv1.Condition{{
-									ID: "example.com/deny-all", Condition: "true", Type: "example.com/opaque",
-								}},
-							},
-						}
+				webhookServer.handler.setAuthorizer(t, testAuthorizer(func(_ context.Context, a authorizer.Attributes) authorizer.ConditionsAwareDecision {
+					if a.GetResource() != "configmaps" {
+						return authorizer.ConditionsAwareDecisionNoOpinion("", nil)
 					}
-				}
+					return authorizer.ConditionsAwareDecisionConditionsMap(
+						[]authorizer.Condition{
+							authorizer.GenericCondition{
+								ID: "example.com/deny-all", Condition: "true", Type: "example.com/opaque",
+							},
+						},
+						nil, nil,
+					)
+				}))
 				userCfg := rest.CopyConfig(server.ClientConfig)
 				userCfg.Impersonate.UserName = "fold-get-deny-user"
 				_, err := clientset.NewForConfigOrDie(userCfg).CoreV1().ConfigMaps("test-ns").Get(context.TODO(), "fold-test-cm", metav1.GetOptions{})
@@ -1945,10 +1954,9 @@ authorizers:
 
 			// Conditional without Deny → fold to NoOpinion → RBAC allows → 200.
 			t.Run("conditional without deny folds to no-opinion, RBAC allows", func(t *testing.T) {
-				// Reset sarHandler to nil first so that the SAR polling inside
-				// GrantUserAuthorization (which checks "get configmaps") is not
-				// intercepted by the previous sub-test's conditional-Deny handler.
-				webhookServer.handler.sarHandler = nil
+				// The outer NoOpinion default is still in effect here, so the
+				// SAR polling inside GrantUserAuthorization ("get configmaps")
+				// passes through to RBAC as intended.
 				userName := "fold-get-noop-rbac-user"
 				authutil.GrantUserAuthorization(t, t.Context(), adminClient, userName,
 					rbacv1.PolicyRule{
@@ -1957,18 +1965,19 @@ authorizers:
 						Resources: []string{"configmaps"},
 					},
 				)
-				webhookServer.handler.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
-					if sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "configmaps" {
-						sar.Status.ConditionalDecision = &authorizationv1.ConditionsAwareDecision{
-							Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
-							ConditionsMap: &authorizationv1.ConditionsMap{
-								AllowConditions: []authorizationv1.Condition{{
-									ID: "example.com/allow-all", Condition: "true", Type: "example.com/opaque",
-								}},
-							},
-						}
+				webhookServer.handler.setAuthorizer(t, testAuthorizer(func(_ context.Context, a authorizer.Attributes) authorizer.ConditionsAwareDecision {
+					if a.GetResource() != "configmaps" {
+						return authorizer.ConditionsAwareDecisionNoOpinion("", nil)
 					}
-				}
+					return authorizer.ConditionsAwareDecisionConditionsMap(
+						nil, nil,
+						[]authorizer.Condition{
+							authorizer.GenericCondition{
+								ID: "example.com/allow-all", Condition: "true", Type: "example.com/opaque",
+							},
+						},
+					)
+				}))
 				userCfg := rest.CopyConfig(server.ClientConfig)
 				userCfg.Impersonate.UserName = userName
 				_, err := clientset.NewForConfigOrDie(userCfg).CoreV1().ConfigMaps("test-ns").Get(context.TODO(), "fold-test-cm", metav1.GetOptions{})
@@ -1982,6 +1991,11 @@ authorizers:
 		// so conditionalRequestClassifier returns false → regular Authorize() path).
 		// Tests all four combinations of fold outcome × RBAC state.
 		t.Run("fold down for SubjectAccessReview create (excluded from admission)", func(t *testing.T) {
+			// Install a NoOpinion default so SAR polls done by helpers like
+			// GrantUserAuthorization pass through to RBAC. Inner subtests
+			// override this and restore it via setAuthorizer's stacked cleanup.
+			webhookServer.handler.setAuthorizer(t, noOpinionAuthorizer)
+
 			// newSAR returns a minimal SAR payload to use in each sub-test.
 			newSAR := func() *authorizationv1.SubjectAccessReview {
 				return &authorizationv1.SubjectAccessReview{
@@ -1995,37 +2009,39 @@ authorizers:
 				}
 			}
 
-			// setConditionalForSARCreate installs a sarHandler that returns the given
-			// conditional decision when the webhook is asked to authorize a SAR create,
-			// and NoOpinion for all other resources.
-			setConditionalForSARCreate := func(decision *authorizationv1.ConditionsAwareDecision) {
-				webhookServer.handler.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
-					if sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "subjectaccessreviews" {
-						sar.Status.ConditionalDecision = decision
+			// setConditionalForSARCreate installs an authorizer that returns the
+			// given conditional decision when the webhook is asked to authorize
+			// a SAR create, and NoOpinion for all other resources.
+			setConditionalForSARCreate := func(t *testing.T, decision authorizer.ConditionsAwareDecision) {
+				t.Helper()
+				webhookServer.handler.setAuthorizer(t, testAuthorizer(func(_ context.Context, a authorizer.Attributes) authorizer.ConditionsAwareDecision {
+					if a.GetResource() != "subjectaccessreviews" {
+						return authorizer.ConditionsAwareDecisionNoOpinion("", nil)
 					}
-				}
+					return decision
+				}))
 			}
 
-			conditionalWithDeny := &authorizationv1.ConditionsAwareDecision{
-				Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
-				ConditionsMap: &authorizationv1.ConditionsMap{
-					DenyConditions: []authorizationv1.Condition{{
+			conditionalWithDeny := authorizer.ConditionsAwareDecisionConditionsMap(
+				[]authorizer.Condition{
+					authorizer.GenericCondition{
 						ID: "example.com/deny-all", Condition: "true", Type: "example.com/opaque",
-					}},
+					},
 				},
-			}
-			conditionalWithoutDeny := &authorizationv1.ConditionsAwareDecision{
-				Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
-				ConditionsMap: &authorizationv1.ConditionsMap{
-					AllowConditions: []authorizationv1.Condition{{
+				nil, nil,
+			)
+			conditionalWithoutDeny := authorizer.ConditionsAwareDecisionConditionsMap(
+				nil, nil,
+				[]authorizer.Condition{
+					authorizer.GenericCondition{
 						ID: "example.com/allow-all", Condition: "true", Type: "example.com/opaque",
-					}},
+					},
 				},
-			}
+			)
 
 			// Case 1: fold to Deny (has Deny condition), no RBAC → 403.
 			t.Run("fold to deny, no RBAC", func(t *testing.T) {
-				setConditionalForSARCreate(conditionalWithDeny)
+				setConditionalForSARCreate(t, conditionalWithDeny)
 				userCfg := rest.CopyConfig(server.ClientConfig)
 				userCfg.Impersonate.UserName = "fold-sar-deny-no-rbac-user"
 				_, err := clientset.NewForConfigOrDie(userCfg).AuthorizationV1().SubjectAccessReviews().Create(context.TODO(), newSAR(), metav1.CreateOptions{})
@@ -2039,11 +2055,8 @@ authorizers:
 			t.Run("fold to deny, RBAC allows SAR creates", func(t *testing.T) {
 				userName := "fold-sar-deny-with-rbac-user"
 
-				// Reset sarHandler to nil first so that the SAR polling inside
-				// GrantUserAuthorization (which checks "create subjectaccessreviews") is not
-				// intercepted by the previous sub-test's webhook authorizer handler.
-				webhookServer.handler.sarHandler = nil
-				// When this function returns, userName can successfully create SARs
+				// The outer NoOpinion default is still in effect during the SAR
+				// polling inside GrantUserAuthorization.
 				authutil.GrantUserAuthorization(t, t.Context(), adminClient, userName,
 					rbacv1.PolicyRule{
 						Verbs:     []string{"create"},
@@ -2051,7 +2064,7 @@ authorizers:
 						Resources: []string{"subjectaccessreviews"},
 					},
 				)
-				setConditionalForSARCreate(conditionalWithDeny)
+				setConditionalForSARCreate(t, conditionalWithDeny)
 				userCfg := rest.CopyConfig(server.ClientConfig)
 				userCfg.Impersonate.UserName = userName
 				_, err = clientset.NewForConfigOrDie(userCfg).AuthorizationV1().SubjectAccessReviews().Create(context.TODO(), newSAR(), metav1.CreateOptions{})
@@ -2062,7 +2075,7 @@ authorizers:
 
 			// Case 3: fold to NoOpinion (no Deny condition), no RBAC → 403.
 			t.Run("fold to no-opinion, no RBAC", func(t *testing.T) {
-				setConditionalForSARCreate(conditionalWithoutDeny)
+				setConditionalForSARCreate(t, conditionalWithoutDeny)
 				userCfg := rest.CopyConfig(server.ClientConfig)
 				userCfg.Impersonate.UserName = "fold-sar-noop-no-rbac-user"
 				_, err := clientset.NewForConfigOrDie(userCfg).AuthorizationV1().SubjectAccessReviews().Create(context.TODO(), newSAR(), metav1.CreateOptions{})
@@ -2074,10 +2087,6 @@ authorizers:
 			// Case 4: fold to NoOpinion (no Deny condition), RBAC allows SAR creates → 200.
 			// NoOpinion passes to the next authorizer in the chain, where RBAC allows.
 			t.Run("fold to no-opinion, RBAC allows SAR creates", func(t *testing.T) {
-				// Reset the sarHandler to no-op so that the SAR polling inside
-				// GrantUserAuthorization is not affected by the previous test's handler.
-				// Then install the conditional handler only after RBAC is ready.
-				webhookServer.handler.sarHandler = nil
 				userName := "fold-sar-noop-with-rbac-user"
 				authutil.GrantUserAuthorization(t, t.Context(), adminClient, userName,
 					rbacv1.PolicyRule{
@@ -2086,7 +2095,7 @@ authorizers:
 						Resources: []string{"subjectaccessreviews"},
 					},
 				)
-				setConditionalForSARCreate(conditionalWithoutDeny)
+				setConditionalForSARCreate(t, conditionalWithoutDeny)
 				userCfg := rest.CopyConfig(server.ClientConfig)
 				userCfg.Impersonate.UserName = userName
 				_, err := clientset.NewForConfigOrDie(userCfg).AuthorizationV1().SubjectAccessReviews().Create(context.TODO(), newSAR(), metav1.CreateOptions{})
@@ -2129,19 +2138,19 @@ func compoundAuthzSARHandler(matchResource string) func(sar *authorizationv1.Sub
 }
 */
 
-// hpaCPUUtilizationSARHandler returns a processSAR function for use with
-// celConditionalTestCases. It sets CEL conditions on HPA SARs that require
-// CPU utilization to be at most 80%. The CEL expression is version-specific:
-// for v1 it checks spec.targetCPUUtilizationPercentage, for v2 it iterates
-// spec.metrics to find the CPU resource metric and checks averageUtilization.
-// For updates, both the old and new objects must satisfy the condition.
-func hpaCPUUtilizationSARHandler(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
-	if sar.Spec.ResourceAttributes == nil || sar.Spec.ResourceAttributes.Resource != "horizontalpodautoscalers" {
-		return
+// hpaCPUUtilizationDecision is a decisionFunc for HPA CPU-utilization-based
+// tests. It emits a ConditionsMap that only allows HPAs whose CPU utilization
+// is at most 80%. The CEL expression is version-specific: for v1 it checks
+// spec.targetCPUUtilizationPercentage, for v2 it iterates spec.metrics to
+// find the CPU resource metric and checks averageUtilization. For updates,
+// both the old and new objects must satisfy the condition.
+func hpaCPUUtilizationDecision(a authorizer.Attributes, conditionsType string) authorizer.ConditionsAwareDecision {
+	if a.GetResource() != "horizontalpodautoscalers" {
+		return authorizer.ConditionsAwareDecisionNoOpinion("", nil)
 	}
 
 	var objectCondition, oldObjectCondition string
-	switch sar.Spec.ResourceAttributes.Version {
+	switch a.GetAPIVersion() {
 	case "v1":
 		objectCondition = `has(object.spec.targetCPUUtilizationPercentage) && object.spec.targetCPUUtilizationPercentage <= 80`
 		oldObjectCondition = `has(oldObject.spec.targetCPUUtilizationPercentage) && oldObject.spec.targetCPUUtilizationPercentage <= 80`
@@ -2165,43 +2174,41 @@ func hpaCPUUtilizationSARHandler(sar *authorizationv1.SubjectAccessReview, condi
 	}
 
 	var condition string
-	switch sar.Spec.ResourceAttributes.Verb {
+	switch a.GetVerb() {
 	case "create":
 		condition = objectCondition
 	case "update":
 		condition = objectCondition + " && " + oldObjectCondition
 	default:
-		return
+		return authorizer.ConditionsAwareDecisionNoOpinion("", nil)
 	}
 
-	sar.Status.ConditionalDecision = &authorizationv1.ConditionsAwareDecision{
-		Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
-		ConditionsMap: &authorizationv1.ConditionsMap{
-			AllowConditions: []authorizationv1.Condition{
-				{
-					ID:          "example.com/limit-cpu-utilization",
-					Condition:   condition,
-					Type:        conditionsType,
-					Description: "only allow HPAs with CPU utilization at most 80%",
-				},
+	return authorizer.ConditionsAwareDecisionConditionsMap(
+		nil, nil,
+		[]authorizer.Condition{
+			authorizer.GenericCondition{
+				ID:          "example.com/limit-cpu-utilization",
+				Condition:   condition,
+				Type:        conditionsType,
+				Description: "only allow HPAs with CPU utilization at most 80%",
 			},
 		},
-	}
+	)
 }
 
-// crdReplicasSARHandler returns a processSAR function for use with
-// celConditionalTestCases. It sets CEL conditions on ScalableWidget SARs that
-// require replicas to be at most 10. The CEL expression is version-specific:
-// for v1 it checks spec.replicas (integer), for v2 it checks spec.replicas.max
-// (integer nested in object). For updates, both the old and new objects must
-// satisfy the condition.
-func crdReplicasSARHandler(sar *authorizationv1.SubjectAccessReview, conditionsType string) {
-	if sar.Spec.ResourceAttributes == nil || sar.Spec.ResourceAttributes.Resource != "scalablewidgets" {
-		return
+// crdReplicasDecision is a decisionFunc for the ScalableWidget CRD test cases.
+// It emits a ConditionsMap that only allows updates/creates whose replicas is
+// at most 10. The CEL expression is version-specific: for v1 it checks
+// spec.replicas (integer), for v2 it checks spec.replicas.max (integer nested
+// in an object). For updates, both old and new objects must satisfy the
+// condition.
+func crdReplicasDecision(a authorizer.Attributes, conditionsType string) authorizer.ConditionsAwareDecision {
+	if a.GetResource() != "scalablewidgets" {
+		return authorizer.ConditionsAwareDecisionNoOpinion("", nil)
 	}
 
 	var objectCondition, oldObjectCondition string
-	switch sar.Spec.ResourceAttributes.Version {
+	switch a.GetAPIVersion() {
 	case "v1":
 		objectCondition = `has(object.spec.replicas) && object.spec.replicas <= 10`
 		oldObjectCondition = `has(oldObject.spec.replicas) && oldObject.spec.replicas <= 10`
@@ -2209,108 +2216,55 @@ func crdReplicasSARHandler(sar *authorizationv1.SubjectAccessReview, conditionsT
 		objectCondition = `has(object.spec.replicas) && has(object.spec.replicas.max) && object.spec.replicas.max <= 10`
 		oldObjectCondition = `has(oldObject.spec.replicas) && has(oldObject.spec.replicas.max) && oldObject.spec.replicas.max <= 10`
 	default:
-		return
+		return authorizer.ConditionsAwareDecisionNoOpinion("", nil)
 	}
 
 	var condition string
-	switch sar.Spec.ResourceAttributes.Verb {
+	switch a.GetVerb() {
 	case "create":
 		condition = objectCondition
 	case "update":
 		condition = objectCondition + " && " + oldObjectCondition
 	default:
-		return
+		return authorizer.ConditionsAwareDecisionNoOpinion("", nil)
 	}
 
-	sar.Status.ConditionalDecision = &authorizationv1.ConditionsAwareDecision{
-		Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
-		ConditionsMap: &authorizationv1.ConditionsMap{
-			AllowConditions: []authorizationv1.Condition{
-				{
-					ID:          "example.com/limit-replicas",
-					Condition:   condition,
-					Type:        conditionsType,
-					Description: "only allow if replicas <= 10",
-				},
+	return authorizer.ConditionsAwareDecisionConditionsMap(
+		nil, nil,
+		[]authorizer.Condition{
+			authorizer.GenericCondition{
+				ID:          "example.com/limit-replicas",
+				Condition:   condition,
+				Type:        conditionsType,
+				Description: "only allow if replicas <= 10",
 			},
 		},
-	}
+	)
 }
 
-// acrEvaluateCEL returns an ACR handler that reads conditions from the ACR
-// request, verifies the conditions type, evaluates CEL expressions against the
-// write request objects, and sets the response.
-func acrEvaluateCEL(t *testing.T, expectedConditionsType string) func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
-	return func(acr *authorizationv1alpha1.AuthorizationConditionsReview) {
-		if acr.Request.Decision.Type != authorizationv1.ConditionsAwareDecisionTypeConditionsMap {
-			t.Fatalf("expected ConditionsMap decision to evaluate, got %q", acr.Request.Decision.Type)
-		}
-		conditionsMap := acr.Request.Decision.ConditionsMap
-		if conditionsMap == nil {
-			t.Fatalf("expected ConditionsMap in ACR to be non-nil")
-		}
-		checkType := func(cond authorizationv1.Condition) {
-			if cond.Type != expectedConditionsType {
-				t.Fatalf("expected condition type %q, got %q for condition %q", expectedConditionsType, cond.Type, cond.ID)
-			}
-		}
-		for _, cond := range conditionsMap.DenyConditions {
-			checkType(cond)
-		}
-		for _, cond := range conditionsMap.NoOpinionConditions {
-			checkType(cond)
-		}
-		for _, cond := range conditionsMap.AllowConditions {
-			checkType(cond)
-		}
-		decisionType := celEvaluateConditions(t, acr.Request.AdmissionRequest, conditionsMap)
-		// The webhook client rejects the response when Response.UID does not match the
-		// UID the apiserver put on Request.AdmissionRequest, so echo it back here.
-		var uid types.UID
-		if acr.Request.AdmissionRequest != nil {
-			uid = acr.Request.AdmissionRequest.UID
-		}
-		acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
-			UID: uid,
-			Decision: authorizationv1.ConditionsAwareDecision{
-				Type: decisionType,
-			},
-		}
-		// TODO(luxas): Add Reason and EvaluateError here so we can assert them in the SAR tests
-		switch decisionType {
-		case authorizationv1.ConditionsAwareDecisionTypeDeny:
-			acr.Response.Decision.Deny = &authorizationv1.UnconditionalDecision{}
-		case authorizationv1.ConditionsAwareDecisionTypeNoOpinion:
-			acr.Response.Decision.NoOpinion = &authorizationv1.UnconditionalDecision{}
-		case authorizationv1.ConditionsAwareDecisionTypeAllow:
-			acr.Response.Decision.Allow = &authorizationv1.UnconditionalDecision{}
-		}
-	}
-}
+// The condition Type installed on all in-tree "using-webhook-only" variants.
+// This tells the apiserver to consult the webhook for evaluation, as the
+// built-in CEL evaluator does not know how to handle this opaque type.
+const opaqueCELConditionType = "example.com/opaque-cel-condition-type"
 
-// celConditionalTestCases creates three webhook behavior variants for the same
-// conditional authorization test, asserting the same outcome regardless of
-// whether conditions are evaluated out-of-tree (via the webhook) or in-tree
-// (via the built-in CEL evaluator):
-//
-//   - "using-webhook-only": conditions use an opaque type that only the webhook
-//     can evaluate. Verifies the out-of-tree evaluation path.
-//   - "in-process-eval-only": conditions use "k8s.io/authorization-cel" so the
-//     built-in evaluator handles them. The ACR handler is set to panic if called,
-//     verifying that the webhook is NOT consulted.
-//   - "if-in-process-fails-call-webhook": conditions use "k8s.io/authorization-cel"
-//     but are prefixed with invalid syntax so in-tree evaluation fails. Verifies
-//     that the kube-apiserver falls back to the webhook, which strips the prefix
-//     and evaluates successfully.
-func celConditionalTestCases(processSAR func(sar *authorizationv1.SubjectAccessReview, conditionsType string)) map[string]func(*webhookServerHandler) {
-	return map[string]func(*webhookServerHandler){
-		// When the condition type is opaque, the webhook should be called to resolve the condition.
-		"using-webhook-only": func(ws *webhookServerHandler) {
-			ws.sarHandler = func(sar *authorizationv1.SubjectAccessReview) {
-				processSAR(sar, "example.com/opaque-cel-condition-type")
-			}
-			ws.acrHandler = acrEvaluateCEL(ws.t, "example.com/opaque-cel-condition-type")
-		},
+// decisionFunc returns an internal ConditionsAwareDecision for the given
+// authorizer.Attributes and a caller-provided conditions type. It is the
+// building block for constructing test authorizers.
+type decisionFunc func(a authorizer.Attributes, conditionsType string) authorizer.ConditionsAwareDecision
+
+// celConditionalAuthorizerVariants returns a map of variant-name -> Authorizer
+// for a conditional-authorization test case. Today only the out-of-tree
+// ("using-webhook-only") variant is active; when in-tree CEL evaluation lands
+// upstream, additional variants (in-process-eval-only,
+// if-in-process-fails-call-webhook) can be added here.
+func celConditionalAuthorizerVariants(fn decisionFunc) map[string]authorizer.Authorizer {
+	return map[string]authorizer.Authorizer{
+		// When the condition type is opaque, the webhook must be called to
+		// resolve the condition — the apiserver has no built-in evaluator
+		// for it and delegates via AuthorizationConditionsReview.
+		"using-webhook-only": testAuthorizer(func(_ context.Context, a authorizer.Attributes) authorizer.ConditionsAwareDecision {
+			return fn(a, opaqueCELConditionType)
+		}),
 		// TODO(luxas): Reactivate this when we support in-tree evaluation.
 		// When the condition type is k8s.io/authorization-cel, in-tree evaluation handles it.
 		/*"in-process-eval-only": func(ws *webhookServerHandler) {
@@ -2358,11 +2312,85 @@ type webhookServer struct {
 	handler *webhookServerHandler
 }
 
+// webhookServerHandler serves SubjectAccessReview and
+// AuthorizationConditionsReview requests. Both endpoints route through the
+// currently installed authorizer.Authorizer: the SAR path calls
+// ConditionsAwareAuthorize and serializes the resulting ConditionsAwareDecision
+// into the SAR status; the ACR path calls EvaluateConditions on the same
+// authorizer to fold a previously-issued conditional decision against the
+// newly-available admission data.
 type webhookServerHandler struct {
-	t          *testing.T
-	sarHandler func(sar *authorizationv1.SubjectAccessReview)
-	acrHandler func(acr *authorizationv1alpha1.AuthorizationConditionsReview)
+	t *testing.T
+
+	mu    sync.Mutex
+	authz authorizer.Authorizer
 }
+
+// setAuthorizer swaps in the authorizer to be used by the SAR and ACR handlers
+// and registers a t.Cleanup to restore the previous authorizer when the test
+// (or subtest) that installed it exits. This makes overlapping subtests
+// naturally stack: an outer setAuthorizer establishes the default, an inner
+// one temporarily overrides it, and the inner cleanup restores the outer.
+//
+// Passing nil is allowed and useful when the test needs to explicitly clear
+// the authorizer. Any SAR/ACR request that arrives while the authorizer is
+// nil is served by forgotToSetAuthorizer, which fails closed with a Deny +
+// evaluation error so a forgotten test setup is loud rather than silent.
+func (h *webhookServerHandler) setAuthorizer(t *testing.T, a authorizer.Authorizer) {
+	t.Helper()
+	h.mu.Lock()
+	prev := h.authz
+	h.authz = a
+	h.mu.Unlock()
+	t.Cleanup(func() {
+		h.mu.Lock()
+		h.authz = prev
+		h.mu.Unlock()
+	})
+}
+
+// getAuthorizer returns the currently installed authorizer, or the
+// forgotToSetAuthorizer if none is set — never nil.
+func (h *webhookServerHandler) getAuthorizer() authorizer.Authorizer {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.authz == nil {
+		return forgotToSetAuthorizer
+	}
+	return h.authz
+}
+
+// forgotToSetAuthorizer is the fail-closed default returned by getAuthorizer
+// when no per-test authorizer has been installed. It surfaces the mistake as
+// a Deny with an obvious evaluation error rather than silently passing SAR
+// polls with NoOpinion.
+var forgotToSetAuthorizer authorizer.Authorizer = forgotAuthorizer{}
+
+type forgotAuthorizer struct{}
+
+func (forgotAuthorizer) errMsg() error {
+	return errors.New("forgot to set authorizer in integration test")
+}
+
+func (a forgotAuthorizer) Authorize(_ context.Context, _ authorizer.Attributes) (authorizer.Decision, string, error) {
+	return authorizer.DecisionDeny, "", a.errMsg()
+}
+
+func (a forgotAuthorizer) ConditionsAwareAuthorize(_ context.Context, _ authorizer.Attributes) authorizer.ConditionsAwareDecision {
+	return authorizer.ConditionsAwareDecisionDeny("", a.errMsg())
+}
+
+func (a forgotAuthorizer) EvaluateConditions(_ context.Context, _ authorizer.ConditionsAwareDecision, _ authorizer.ConditionsData) (authorizer.Decision, string, error) {
+	return authorizer.DecisionDeny, "", a.errMsg()
+}
+
+// noOpinionAuthorizer is a NoOpinion-for-everything authorizer. It's used in
+// setup phases (e.g. around SAR polls done by GrantUserAuthorization) where a
+// test needs the webhook to stay out of the way while still having a
+// non-forgotAuthorizer default installed.
+var noOpinionAuthorizer authorizer.Authorizer = testAuthorizer(func(_ context.Context, _ authorizer.Attributes) authorizer.ConditionsAwareDecision {
+	return authorizer.ConditionsAwareDecisionNoOpinion("", nil)
+})
 
 func newWebhookServer(t *testing.T) *webhookServer {
 	handler := &webhookServerHandler{t: t}
@@ -2390,7 +2418,7 @@ func (h *webhookServerHandler) serveSAR(w http.ResponseWriter, req *http.Request
 	}
 	defer func() { _ = req.Body.Close() }()
 
-	h.handleSAR(w, body)
+	h.handleSAR(req.Context(), w, body)
 }
 
 func (h *webhookServerHandler) serveACR(w http.ResponseWriter, req *http.Request) {
@@ -2407,10 +2435,10 @@ func (h *webhookServerHandler) serveACR(w http.ResponseWriter, req *http.Request
 	}
 	defer func() { _ = req.Body.Close() }()
 
-	h.handleACR(w, body)
+	h.handleACR(req.Context(), w, body)
 }
 
-func (h *webhookServerHandler) handleSAR(w http.ResponseWriter, body []byte) {
+func (h *webhookServerHandler) handleSAR(ctx context.Context, w http.ResponseWriter, body []byte) {
 	sar := &authorizationv1.SubjectAccessReview{}
 	if err := json.Unmarshal(body, sar); err != nil {
 		h.t.Errorf("failed to unmarshal SubjectAccessReview: %v", err)
@@ -2425,10 +2453,14 @@ func (h *webhookServerHandler) handleSAR(w http.ResponseWriter, body []byte) {
 		safeResourceAttr(sar, func(ra *authorizationv1.ResourceAttributes) string { return ra.Namespace }),
 	)
 
-	// TODO(luxas): Make this always required, so we don't slip adding it in.
-	if h.sarHandler != nil {
-		h.sarHandler(sar)
+	attrs, err := sarSpecToAttributes(sar.Spec)
+	if err != nil {
+		h.t.Errorf("failed to convert SAR spec to Attributes: %v", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
+	decision := h.getAuthorizer().ConditionsAwareAuthorize(ctx, attrs)
+	applyDecisionToSAR(sar, decision)
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(sar); err != nil {
@@ -2436,18 +2468,48 @@ func (h *webhookServerHandler) handleSAR(w http.ResponseWriter, body []byte) {
 	}
 }
 
-func (h *webhookServerHandler) handleACR(w http.ResponseWriter, body []byte) {
+func (h *webhookServerHandler) handleACR(ctx context.Context, w http.ResponseWriter, body []byte) {
 	acr := &authorizationv1alpha1.AuthorizationConditionsReview{}
 	if err := json.Unmarshal(body, acr); err != nil {
 		h.t.Errorf("failed to unmarshal AuthorizationConditionsReview: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if acr.Request == nil {
+		h.t.Errorf("ACR request payload has nil Request")
+		http.Error(w, "nil ACR request", http.StatusBadRequest)
+		return
+	}
 
-	// h.t.Logf("ACR request: decision conditions count=%d", len(acr.Request.Decision.Conditions))
+	// Deserialize the wire decision into the internal ConditionsAwareDecision
+	// and delegate evaluation to the same authorizer that issued it. The
+	// authorizer's EvaluateConditions is the canonical entry point: it can
+	// e.g. dispatch on condition Type, and for the testAuthorizer used here
+	// it routes into ConditionsMap.Evaluate with a CEL-based evaluator.
+	internalDecision := authorizationv1apiserver.DeserializeConditionsAwareDecision(
+		acr.Request.Decision,
+		func(err error) authorizer.ConditionsAwareDecision {
+			return authorizer.ConditionsAwareDecisionDeny("failed closed", err)
+		},
+	)
 
-	if h.acrHandler != nil {
-		h.acrHandler(acr)
+	data, err := admissionRequestToAttributes(acr.Request.AdmissionRequest)
+	if err != nil {
+		h.t.Errorf("failed to build admission attributes: %v", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	decision, reason, err := h.getAuthorizer().EvaluateConditions(ctx, internalDecision, data)
+
+	evaluated := authorizer.ConditionsAwareDecisionFromParts(decision, reason, err)
+
+	var uid types.UID
+	if acr.Request.AdmissionRequest != nil {
+		uid = acr.Request.AdmissionRequest.UID
+	}
+	acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
+		UID:      uid,
+		Decision: authorizationv1apiserver.SerializeConditionsAwareDecision(evaluated),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -2463,95 +2525,195 @@ func safeResourceAttr(sar *authorizationv1.SubjectAccessReview, fn func(*authori
 	return "<non-resource>"
 }
 
-// celEvaluateConditions evaluates CEL conditions from a serialized decision
-// against the objects in the write request. It follows the condition precedence:
-// Deny > NoOpinion > Allow (matching EvaluateConditionSet semantics).
-// Returns (allowed, denied).
-func celEvaluateConditions(t *testing.T, req *admissionv1.AdmissionRequest, conditionsMap *authorizationv1.ConditionsMap) authorizationv1.ConditionsAwareDecisionType {
-	t.Helper()
-
-	if conditionsMap == nil || (len(conditionsMap.DenyConditions)+len(conditionsMap.NoOpinionConditions)+len(conditionsMap.AllowConditions)) == 0 {
-		t.Fatal("expected a non-empty ConditionsMap in celEvaluateConditions")
+// sarSpecToAttributes converts a v1 SubjectAccessReviewSpec into
+// authorizer.Attributes by round-tripping through the internal SAR spec and
+// invoking the shared registry helper. This keeps the mapping in sync with
+// how the real apiserver constructs Attributes for the SAR endpoints.
+func sarSpecToAttributes(spec authorizationv1.SubjectAccessReviewSpec) (authorizer.AttributesRecord, error) {
+	var internal authorizationapi.SubjectAccessReviewSpec
+	if err := authorizationinternalv1.Convert_v1_SubjectAccessReviewSpec_To_authorization_SubjectAccessReviewSpec(&spec, &internal, nil); err != nil {
+		return authorizer.AttributesRecord{}, fmt.Errorf("convert SAR spec: %w", err)
 	}
+	return authorizationutil.AuthorizationAttributesFrom(internal), nil
+}
 
-	env, err := cel.NewEnv(
-		cel.Variable("object", cel.DynType),
-		cel.Variable("oldObject", cel.DynType),
-		cel.Variable("request", cel.DynType),
-	)
+// applyDecisionToSAR writes an internal ConditionsAwareDecision to a v1 SAR's
+// Status. Unconditional decisions go to Allowed/Denied/Reason/EvaluationError;
+// conditional decisions go to ConditionalDecision.
+func applyDecisionToSAR(sar *authorizationv1.SubjectAccessReview, decision authorizer.ConditionsAwareDecision) {
+	var errString string
+	if err := decision.Error(); err != nil {
+		errString = err.Error()
+	}
+	switch {
+	case decision.IsAllow():
+		sar.Status.Allowed = true
+		sar.Status.Denied = false
+		sar.Status.Reason = decision.Reason()
+		sar.Status.EvaluationError = errString
+	case decision.IsDeny():
+		sar.Status.Allowed = false
+		sar.Status.Denied = true
+		sar.Status.Reason = decision.Reason()
+		sar.Status.EvaluationError = errString
+	case decision.IsNoOpinion():
+		sar.Status.Allowed = false
+		sar.Status.Denied = false
+		sar.Status.Reason = decision.Reason()
+		sar.Status.EvaluationError = errString
+	default: // ConditionsMap / Union
+		sar.Status.ConditionalDecision = new(authorizationv1apiserver.SerializeConditionsAwareDecision(decision))
+	}
+}
+
+// testAuthorizer implements authorizer.Authorizer by delegating
+// ConditionsAwareAuthorize to the wrapped func. EvaluateConditions folds a
+// ConditionsMap decision by running each condition through the CEL evaluator
+// — matching the semantics of the opaque-condition-type test variant.
+type testAuthorizer func(ctx context.Context, a authorizer.Attributes) authorizer.ConditionsAwareDecision
+
+var _ authorizer.Authorizer = testAuthorizer(nil)
+
+func (f testAuthorizer) ConditionsAwareAuthorize(ctx context.Context, a authorizer.Attributes) authorizer.ConditionsAwareDecision {
+	return f(ctx, a)
+}
+
+func (f testAuthorizer) Authorize(ctx context.Context, a authorizer.Attributes) (authorizer.Decision, string, error) {
+	d := f(ctx, a)
+	switch {
+	case d.IsAllow():
+		return authorizer.DecisionAllow, d.Reason(), d.Error()
+	case d.IsDeny():
+		return authorizer.DecisionDeny, d.Reason(), d.Error()
+	case d.IsNoOpinion():
+		return authorizer.DecisionNoOpinion, d.Reason(), d.Error()
+	default:
+		return d.FailureDecision(), "failed closed", nil
+	}
+}
+
+func (f testAuthorizer) EvaluateConditions(ctx context.Context, decision authorizer.ConditionsAwareDecision, data authorizer.ConditionsData) (authorizer.Decision, string, error) {
+	if !decision.IsConditionsMap() {
+		return decision.FailureDecision(), "", fmt.Errorf("testAuthorizer.EvaluateConditions: expected ConditionsMap decision, got %s", decision.String())
+	}
+	return decision.ConditionsMap().Evaluate(ctx, data, celEvaluateCondition)
+}
+
+// admissionRequestToAttributes builds an admission.Attributes value (which
+// also satisfies authorizer.ConditionsData) from the admissionv1 request
+// embedded in the AuthorizationConditionsReview. Object and OldObject are
+// decoded from their RawExtension bytes into *unstructured.Unstructured so
+// the CEL evaluator can walk them as maps.
+func admissionRequestToAttributes(req *admissionv1.AdmissionRequest) (admission.Attributes, error) {
+	if req == nil {
+		return admission.NewAttributesRecord(nil, nil, schema.GroupVersionKind{}, "", "", schema.GroupVersionResource{}, "", "", nil, false, nil), nil
+	}
+	obj, err := unmarshalUnstructured(req.Object.Raw)
 	if err != nil {
-		t.Fatalf("failed to create CEL env: %v", err)
+		return nil, fmt.Errorf("unmarshal Object: %w", err)
 	}
-
-	// Deserialize object and oldObject from RawExtension JSON
-	var objectMap map[string]any
-	if len(req.Object.Raw) > 0 {
-		if err := json.Unmarshal(req.Object.Raw, &objectMap); err != nil {
-			t.Fatalf("failed to unmarshal object: %v", err)
-		}
+	oldObj, err := unmarshalUnstructured(req.OldObject.Raw)
+	if err != nil {
+		return nil, fmt.Errorf("unmarshal OldObject: %w", err)
 	}
+	kind := schema.GroupVersionKind{Group: req.Kind.Group, Version: req.Kind.Version, Kind: req.Kind.Kind}
+	resource := schema.GroupVersionResource{Group: req.Resource.Group, Version: req.Resource.Version, Resource: req.Resource.Resource}
+	return admission.NewAttributesRecord(
+		obj, oldObj,
+		kind,
+		req.Namespace, req.Name,
+		resource, req.SubResource,
+		admission.Operation(req.Operation),
+		nil,   // operationOptions — not exposed to CEL
+		false, // dryRun
+		nil,   // userInfo — not exposed to CEL
+	), nil
+}
 
-	var oldObjectMap map[string]any
-	if len(req.OldObject.Raw) > 0 {
-		if err := json.Unmarshal(req.OldObject.Raw, &oldObjectMap); err != nil {
-			t.Fatalf("failed to unmarshal oldObject: %v", err)
-		}
+// unmarshalUnstructured decodes a RawExtension payload into an
+// *unstructured.Unstructured, returning nil (not an error) for empty input.
+func unmarshalUnstructured(raw []byte) (runtime.Object, error) {
+	if len(raw) == 0 {
+		return nil, nil
 	}
+	u := &unstructured.Unstructured{}
+	if err := json.Unmarshal(raw, &u.Object); err != nil {
+		return nil, err
+	}
+	return u, nil
+}
 
-	requestMap := map[string]any{
-		// Expose only previously-unseen data for now.
-		"operation": string(req.Operation),
+// celEnvOnce lazily builds a package-scoped CEL environment matching the one
+// used previously by celEvaluateConditions.
+var (
+	celEnvOnce sync.Once
+	celEnv     *cel.Env
+	celEnvErr  error
+)
+
+func getCELEnv() (*cel.Env, error) {
+	celEnvOnce.Do(func() {
+		celEnv, celEnvErr = cel.NewEnv(
+			cel.Variable("object", cel.DynType),
+			cel.Variable("oldObject", cel.DynType),
+			cel.Variable("request", cel.DynType),
+		)
+	})
+	return celEnv, celEnvErr
+}
+
+// celEvaluateCondition is the EvaluateConditionFunc passed to
+// authorizer.ConditionsMap.Evaluate. It compiles and evaluates a single CEL
+// condition against the object/oldObject/request variables derived from the
+// admission request.
+func celEvaluateCondition(_ context.Context, cond authorizer.Condition, data authorizer.ConditionsData) (bool, error) {
+	env, err := getCELEnv()
+	if err != nil {
+		return false, fmt.Errorf("build CEL env: %w", err)
 	}
 
 	vars := map[string]any{
-		"object":    objectMap,
-		"oldObject": oldObjectMap,
-		"request":   requestMap,
+		"object":    unstructuredContent(data.GetObject()),
+		"oldObject": unstructuredContent(data.GetOldObject()),
+		"request": map[string]any{
+			"operation": string(data.GetOperation()),
+		},
 	}
-
-	// Phase 1: Deny conditions
-	for _, cond := range conditionsMap.DenyConditions {
-		if evalCEL(t, env, cond.Condition, vars) {
-			return authorizationv1.ConditionsAwareDecisionTypeDeny
-		}
-	}
-
-	// Phase 2: NoOpinion conditions
-	for _, cond := range conditionsMap.NoOpinionConditions {
-		if evalCEL(t, env, cond.Condition, vars) {
-			return authorizationv1.ConditionsAwareDecisionTypeNoOpinion
-		}
-	}
-
-	// Phase 3: Allow conditions
-	for _, cond := range conditionsMap.AllowConditions {
-		if evalCEL(t, env, cond.Condition, vars) {
-			return authorizationv1.ConditionsAwareDecisionTypeAllow
-		}
-	}
-
-	// Default: NoOpinion
-	return authorizationv1.ConditionsAwareDecisionTypeNoOpinion
+	return evalCEL(env, cond.GetCondition(), vars)
 }
 
-// evalCEL compiles and evaluates a single CEL expression, returning true/false.
-func evalCEL(t *testing.T, env *cel.Env, expr string, vars map[string]any) bool {
-	t.Helper()
+// unstructuredContent extracts the map form of an object built by
+// admissionRequestToAttributes. Returns nil when the object is absent.
+func unstructuredContent(obj runtime.Object) map[string]any {
+	if obj == nil {
+		return nil
+	}
+	u, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		return nil
+	}
+	return u.Object
+}
+
+// evalCEL compiles and evaluates a single CEL expression, returning its
+// boolean result. Any compile/eval/type error is returned so callers of
+// ConditionsMap.Evaluate can surface it via the decision.
+func evalCEL(env *cel.Env, expr string, vars map[string]any) (bool, error) {
 	ast, issues := env.Compile(expr)
 	if issues != nil && issues.Err() != nil {
-		t.Fatalf("CEL compile error for %q: %v", expr, issues.Err())
+		return false, fmt.Errorf("CEL compile error for %q: %w", expr, issues.Err())
 	}
 	prg, err := env.Program(ast)
 	if err != nil {
-		t.Fatalf("CEL program error for %q: %v", expr, err)
+		return false, fmt.Errorf("CEL program error for %q: %w", expr, err)
 	}
 	out, _, err := prg.Eval(vars)
 	if err != nil {
-		t.Fatalf("CEL eval error for %q: %v", expr, err)
+		return false, fmt.Errorf("CEL eval error for %q: %w", expr, err)
 	}
 	result, ok := out.Value().(bool)
 	if !ok {
-		t.Fatalf("CEL expression %q did not return bool, got %T", expr, out.Value())
+		return false, fmt.Errorf("CEL expression %q did not return bool, got %T", expr, out.Value())
 	}
-	return result
+	return result, nil
 }
