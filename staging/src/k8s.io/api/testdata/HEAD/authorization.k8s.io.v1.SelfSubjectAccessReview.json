@@ -81,8 +81,10 @@
       "path": "pathValue",
       "verb": "verbValue"
     },
-    "conditionalAuthorization": {
-      "enabled": true
+    "authorizationOptions": {
+      "handledDecisionTypes": [
+        "handledDecisionTypesValue"
+      ]
     }
   },
   "status": {
@@ -94,33 +96,15 @@
       "type": "typeValue",
       "deny": {
         "reason": "reasonValue",
-        "evaluationError": "evaluationErrorValue",
-        "auditAnnotations": {
-          "auditAnnotationsKey": "auditAnnotationsValue"
-        },
-        "warnings": [
-          "warningsValue"
-        ]
+        "evaluationError": "evaluationErrorValue"
       },
       "noOpinion": {
         "reason": "reasonValue",
-        "evaluationError": "evaluationErrorValue",
-        "auditAnnotations": {
-          "auditAnnotationsKey": "auditAnnotationsValue"
-        },
-        "warnings": [
-          "warningsValue"
-        ]
+        "evaluationError": "evaluationErrorValue"
       },
       "allow": {
         "reason": "reasonValue",
-        "evaluationError": "evaluationErrorValue",
-        "auditAnnotations": {
-          "auditAnnotationsKey": "auditAnnotationsValue"
-        },
-        "warnings": [
-          "warningsValue"
-        ]
+        "evaluationError": "evaluationErrorValue"
       },
       "conditionsMap": {
         "denyConditions": [

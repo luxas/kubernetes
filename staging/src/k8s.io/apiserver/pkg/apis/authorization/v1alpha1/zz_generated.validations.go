@@ -33,6 +33,7 @@ import (
 	safe "k8s.io/apimachinery/pkg/api/safe"
 	validate "k8s.io/apimachinery/pkg/api/validate"
 	runtime "k8s.io/apimachinery/pkg/runtime"
+	types "k8s.io/apimachinery/pkg/types"
 	field "k8s.io/apimachinery/pkg/util/validation/field"
 	v1 "k8s.io/apiserver/pkg/apis/authorization/v1"
 )
@@ -137,7 +138,34 @@ func Validate_AuthorizationConditionsResponse(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *authorizationv1alpha1.AuthorizationConditionsResponse) (errs field.ErrorList) {
 
-	// field authorizationv1alpha1.AuthorizationConditionsResponse.UID has no validation
+	{ // field authorizationv1alpha1.AuthorizationConditionsResponse.UID
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *types.UID,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *authorizationv1alpha1.AuthorizationConditionsResponse) *types.UID {
+				return &oldObj.UID
+			})
+		errs = append(errs, fn(fldPath.Child("uid"), &obj.UID, oldVal, oldObj != nil)...)
+	}
 
 	{ // field authorizationv1alpha1.AuthorizationConditionsResponse.Decision
 		fn := func(

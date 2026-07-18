@@ -33,8 +33,6 @@ metadata:
   selfLink: selfLinkValue
   uid: uidValue
 spec:
-  conditionalAuthorization:
-    enabled: true
   nonResourceAttributes:
     path: pathValue
     verb: verbValue
@@ -62,49 +60,6 @@ spec:
     version: versionValue
 status:
   allowed: true
-  conditionalDecision:
-    allow:
-      auditAnnotations:
-        auditAnnotationsKey: auditAnnotationsValue
-      evaluationError: evaluationErrorValue
-      reason: reasonValue
-      warnings:
-      - warningsValue
-    conditionsMap:
-      allowConditions:
-      - condition: conditionValue
-        description: descriptionValue
-        id: idValue
-        type: typeValue
-      denyConditions:
-      - condition: conditionValue
-        description: descriptionValue
-        id: idValue
-        type: typeValue
-      noOpinionConditions:
-      - condition: conditionValue
-        description: descriptionValue
-        id: idValue
-        type: typeValue
-    deny:
-      auditAnnotations:
-        auditAnnotationsKey: auditAnnotationsValue
-      evaluationError: evaluationErrorValue
-      reason: reasonValue
-      warnings:
-      - warningsValue
-    noOpinion:
-      auditAnnotations:
-        auditAnnotationsKey: auditAnnotationsValue
-      evaluationError: evaluationErrorValue
-      reason: reasonValue
-      warnings:
-      - warningsValue
-    type: typeValue
-    union:
-    - authorizerName: authorizerNameValue
-      decision:
-        type: ""
   denied: true
   evaluationError: evaluationErrorValue
   reason: reasonValue

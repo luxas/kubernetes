@@ -3319,6 +3319,23 @@
       },
       "type": "object"
     },
+    "io.k8s.api.authorization.v1.AuthorizationOptions": {
+      "description": "AuthorizationOptions contains options for specifying the client's authorization abilities.",
+      "properties": {
+        "handledDecisionTypes": {
+          "description": "handledDecisionTypes specifies what decision types the client can handle in the context it is in. Currently valid values are: - [Allow, Deny, NoOpinion] (for conditions-unaware clients) or - [Allow, Deny, NoOpinion, ConditionsMap, Union] (for conditions-aware clients) If the authorizer would like to return conditions, but the client does not opt in to handle those here, . the authorizer must fail closed to a safe unconditional decision (Deny if any Deny conditions were present, otherwise NoOpinion). Order does not matter in this slice; set semantics should be used. The server should intersect this set with its own supported decision types, and call the authorizer either in conditions-aware or -unaware mode based on that intersection. Note that this intersection is done outside of the normal validation phase, the server should make sure the set intersection is correct after normal validation (hence the k8s:opaqueType) tag is used to not fail validation on server-unsupported ConditionsAwareDecisionTypes in version skew scenarios.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-kubernetes-list-type": "set"
+        }
+      },
+      "required": [
+        "handledDecisionTypes"
+      ],
+      "type": "object"
+    },
     "io.k8s.api.authorization.v1.Condition": {
       "description": "Condition represents a single authorization condition to be evaluated against data available later in the request chain, e.g. objects available in admission.",
       "properties": {
@@ -3341,19 +3358,6 @@
       },
       "required": [
         "id"
-      ],
-      "type": "object"
-    },
-    "io.k8s.api.authorization.v1.ConditionalAuthorizationOptions": {
-      "description": "ConditionalAuthorizationOptions contains options for requesting conditional authorization.",
-      "properties": {
-        "enabled": {
-          "description": "enabled specifies whether the client supports conditions or not.",
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "enabled"
       ],
       "type": "object"
     },
@@ -3687,9 +3691,9 @@
     "io.k8s.api.authorization.v1.SelfSubjectAccessReviewSpec": {
       "description": "SelfSubjectAccessReviewSpec is a description of the access request.  Exactly one of resourceAttributes and nonResourceAttributes must be set",
       "properties": {
-        "conditionalAuthorization": {
-          "$ref": "#/definitions/io.k8s.api.authorization.v1.ConditionalAuthorizationOptions",
-          "description": "conditionalAuthorization contains options for requesting conditional authorization. If the field is unset, conditional authorization is not supported, and only Allow/Deny/NoOpinion is returned. If the field is set, conditional authorization is supported, any of Allow/Deny/NoOpinion/ConditionsMap/Union decisions may be returned. Requires the ConditionalAuthorization feature to be enabled."
+        "authorizationOptions": {
+          "$ref": "#/definitions/io.k8s.api.authorization.v1.AuthorizationOptions",
+          "description": "authorizationOptions contains options for specifying the client's authorization abilities. Requires the ConditionalAuthorization feature to be enabled."
         },
         "nonResourceAttributes": {
           "$ref": "#/definitions/io.k8s.api.authorization.v1.NonResourceAttributes",
@@ -3787,9 +3791,9 @@
     "io.k8s.api.authorization.v1.SubjectAccessReviewSpec": {
       "description": "SubjectAccessReviewSpec is a description of the access request.  Exactly one of resourceAttributes and nonResourceAttributes must be set",
       "properties": {
-        "conditionalAuthorization": {
-          "$ref": "#/definitions/io.k8s.api.authorization.v1.ConditionalAuthorizationOptions",
-          "description": "conditionalAuthorization contains options for requesting conditional authorization. If the field is unset, conditional authorization is not supported, and only Allow/Deny/NoOpinion is returned. If the field is set, conditional authorization is supported, any of Allow/Deny/NoOpinion/ConditionsMap/Union decisions may be returned. Requires the ConditionalAuthorization feature to be enabled."
+        "authorizationOptions": {
+          "$ref": "#/definitions/io.k8s.api.authorization.v1.AuthorizationOptions",
+          "description": "authorizationOptions contains options for specifying the client's authorization abilities. Requires the ConditionalAuthorization feature to be enabled."
         },
         "extra": {
           "additionalProperties": {
@@ -3895,13 +3899,6 @@
     "io.k8s.api.authorization.v1.UnconditionalDecision": {
       "description": "UnconditionalDecision represents the data associated with an unconditional decision.",
       "properties": {
-        "auditAnnotations": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "description": "auditAnnotations is an unstructured key value map set by an authorizer (e.g. policy=temporary-break-glass), that is eventually added as additional context to the audit log for this request. The authorizerName in the union will be prepended to the annotation key, and joined through \":\", e.g. \"kubernetes.io/webhook:example.com/custom:policy=temporary-break-glass\".",
-          "type": "object"
-        },
         "evaluationError": {
           "description": "evaluationError is an indication that some error occurred during the authorization check. It is entirely possible to get an error and be able to continue determine authorization status in spite of it. For instance, RBAC can be missing a role, but enough roles are still present and bound to reason about the request.",
           "type": "string"
@@ -3909,14 +3906,6 @@
         "reason": {
           "description": "reason is optional. It indicates why a request was allowed or denied.",
           "type": "string"
-        },
-        "warnings": {
-          "description": "warnings is a list of warning messages to return to the requesting API client. Warning messages describe a problem the client making the API request should correct or be aware of. Limit warnings to 120 characters if possible. Warnings over 256 characters and large numbers of warnings may be truncated.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "x-kubernetes-list-type": "atomic"
         }
       },
       "type": "object"

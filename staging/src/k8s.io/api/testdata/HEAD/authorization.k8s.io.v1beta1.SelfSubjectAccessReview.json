@@ -80,82 +80,12 @@
     "nonResourceAttributes": {
       "path": "pathValue",
       "verb": "verbValue"
-    },
-    "conditionalAuthorization": {
-      "enabled": true
     }
   },
   "status": {
     "allowed": true,
     "denied": true,
     "reason": "reasonValue",
-    "evaluationError": "evaluationErrorValue",
-    "conditionalDecision": {
-      "type": "typeValue",
-      "deny": {
-        "reason": "reasonValue",
-        "evaluationError": "evaluationErrorValue",
-        "auditAnnotations": {
-          "auditAnnotationsKey": "auditAnnotationsValue"
-        },
-        "warnings": [
-          "warningsValue"
-        ]
-      },
-      "noOpinion": {
-        "reason": "reasonValue",
-        "evaluationError": "evaluationErrorValue",
-        "auditAnnotations": {
-          "auditAnnotationsKey": "auditAnnotationsValue"
-        },
-        "warnings": [
-          "warningsValue"
-        ]
-      },
-      "allow": {
-        "reason": "reasonValue",
-        "evaluationError": "evaluationErrorValue",
-        "auditAnnotations": {
-          "auditAnnotationsKey": "auditAnnotationsValue"
-        },
-        "warnings": [
-          "warningsValue"
-        ]
-      },
-      "conditionsMap": {
-        "denyConditions": [
-          {
-            "id": "idValue",
-            "condition": "conditionValue",
-            "type": "typeValue",
-            "description": "descriptionValue"
-          }
-        ],
-        "noOpinionConditions": [
-          {
-            "id": "idValue",
-            "condition": "conditionValue",
-            "type": "typeValue",
-            "description": "descriptionValue"
-          }
-        ],
-        "allowConditions": [
-          {
-            "id": "idValue",
-            "condition": "conditionValue",
-            "type": "typeValue",
-            "description": "descriptionValue"
-          }
-        ]
-      },
-      "union": [
-        {
-          "authorizerName": "authorizerNameValue",
-          "decision": {
-            "type": ""
-          }
-        }
-      ]
-    }
+    "evaluationError": "evaluationErrorValue"
   }
 }

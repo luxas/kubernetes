@@ -88,12 +88,8 @@ request:
       username: usernameValue
   decision:
     allow:
-      auditAnnotations:
-        auditAnnotationsKey: auditAnnotationsValue
       evaluationError: evaluationErrorValue
       reason: reasonValue
-      warnings:
-      - warningsValue
     conditionsMap:
       allowConditions:
       - condition: conditionValue
@@ -111,19 +107,11 @@ request:
         id: idValue
         type: typeValue
     deny:
-      auditAnnotations:
-        auditAnnotationsKey: auditAnnotationsValue
       evaluationError: evaluationErrorValue
       reason: reasonValue
-      warnings:
-      - warningsValue
     noOpinion:
-      auditAnnotations:
-        auditAnnotationsKey: auditAnnotationsValue
       evaluationError: evaluationErrorValue
       reason: reasonValue
-      warnings:
-      - warningsValue
     type: typeValue
     union:
     - authorizerName: authorizerNameValue
@@ -132,12 +120,8 @@ request:
 response:
   decision:
     allow:
-      auditAnnotations:
-        auditAnnotationsKey: auditAnnotationsValue
       evaluationError: evaluationErrorValue
       reason: reasonValue
-      warnings:
-      - warningsValue
     conditionsMap:
       allowConditions:
       - condition: conditionValue
@@ -155,19 +139,11 @@ response:
         id: idValue
         type: typeValue
     deny:
-      auditAnnotations:
-        auditAnnotationsKey: auditAnnotationsValue
       evaluationError: evaluationErrorValue
       reason: reasonValue
-      warnings:
-      - warningsValue
     noOpinion:
-      auditAnnotations:
-        auditAnnotationsKey: auditAnnotationsValue
       evaluationError: evaluationErrorValue
       reason: reasonValue
-      warnings:
-      - warningsValue
     type: typeValue
     union:
     - authorizerName: authorizerNameValue

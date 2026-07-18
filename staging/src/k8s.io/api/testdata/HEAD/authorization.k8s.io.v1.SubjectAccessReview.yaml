@@ -33,8 +33,9 @@ metadata:
   selfLink: selfLinkValue
   uid: uidValue
 spec:
-  conditionalAuthorization:
-    enabled: true
+  authorizationOptions:
+    handledDecisionTypes:
+    - handledDecisionTypesValue
   extra:
     extraKey:
     - extraValue
@@ -71,12 +72,8 @@ status:
   allowed: true
   conditionalDecision:
     allow:
-      auditAnnotations:
-        auditAnnotationsKey: auditAnnotationsValue
       evaluationError: evaluationErrorValue
       reason: reasonValue
-      warnings:
-      - warningsValue
     conditionsMap:
       allowConditions:
       - condition: conditionValue
@@ -94,19 +91,11 @@ status:
         id: idValue
         type: typeValue
     deny:
-      auditAnnotations:
-        auditAnnotationsKey: auditAnnotationsValue
       evaluationError: evaluationErrorValue
       reason: reasonValue
-      warnings:
-      - warningsValue
     noOpinion:
-      auditAnnotations:
-        auditAnnotationsKey: auditAnnotationsValue
       evaluationError: evaluationErrorValue
       reason: reasonValue
-      warnings:
-      - warningsValue
     type: typeValue
     union:
     - authorizerName: authorizerNameValue

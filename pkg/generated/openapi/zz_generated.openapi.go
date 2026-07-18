@@ -14076,7 +14076,7 @@ func schema_k8sio_api_authorization_v1alpha1_AuthorizationConditionsResponse(ref
 						},
 					},
 				},
-				Required: []string{"decision"},
+				Required: []string{"uid", "decision"},
 			},
 		},
 		Dependencies: []string{

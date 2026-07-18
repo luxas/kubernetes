@@ -169,6 +169,9 @@ func init() {
 				{ErrorType: "FieldValueInvalid", Origin: "format=k8s-long-name"},
 				{ErrorType: "FieldValueRequired"},
 			},
+			"response.uid": {
+				{ErrorType: "FieldValueRequired"},
+			},
 		},
 	)
 }
