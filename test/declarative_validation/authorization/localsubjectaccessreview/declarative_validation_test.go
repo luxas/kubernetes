@@ -22,14 +22,15 @@ import (
 	"context"
 	"testing"
 
+	authorizationv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	authorizationvalidation "k8s.io/apiserver/pkg/apis/authorization/validation"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	apitesting "k8s.io/kubernetes/pkg/api/testing"
 	"k8s.io/kubernetes/pkg/apis/authorization"
-	authorizationvalidation "k8s.io/kubernetes/pkg/apis/authorization/validation"
 )
 
 func TestDeclarativeValidate(t *testing.T) {
@@ -68,7 +69,11 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 		t.Run(k, func(t *testing.T) {
 			apitesting.VerifyValidationEquivalenceFunc(t, ctx, &tc.obj, func(ctx context.Context, obj runtime.Object) field.ErrorList {
 				sar := obj.(*authorization.LocalSubjectAccessReview)
-				return authorizationvalidation.ValidateLocalSubjectAccessReviewCreate(ctx, legacyscheme.Scheme, sar)
+				sarV1 := &authorizationv1.LocalSubjectAccessReview{}
+				if err := legacyscheme.Scheme.Convert(sar, sarV1, nil); err != nil {
+					return field.ErrorList{field.InternalError(nil, err)}
+				}
+				return authorizationvalidation.ValidateLocalSubjectAccessReviewCreate(ctx, legacyscheme.Scheme, sarV1)
 			}, tc.expectedErrs)
 		})
 	}
