@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 
+	authorizationv1 "k8s.io/api/authorization/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/operation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -27,12 +28,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apiserver/pkg/registry/rest"
-	authorizationapi "k8s.io/kubernetes/pkg/apis/authorization"
 )
 
 // ValidateSubjectAccessReviewSpec validates a SubjectAccessReviewSpec and returns an
 // ErrorList with any errors.
-func ValidateSubjectAccessReviewSpec(spec authorizationapi.SubjectAccessReviewSpec, fldPath *field.Path) field.ErrorList {
+func ValidateSubjectAccessReviewSpec(spec authorizationv1.SubjectAccessReviewSpec, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 	if spec.ResourceAttributes != nil && spec.NonResourceAttributes != nil {
 		allErrs = append(allErrs, field.Invalid(fldPath, spec.NonResourceAttributes, `exactly one of nonResourceAttributes or resourceAttributes must be specified`).WithOrigin("union").MarkCoveredByDeclarative())
@@ -50,7 +50,7 @@ func ValidateSubjectAccessReviewSpec(spec authorizationapi.SubjectAccessReviewSp
 
 // ValidateSelfSubjectAccessReviewSpec validates a SelfSubjectAccessReviewSpec and returns an
 // ErrorList with any errors.
-func ValidateSelfSubjectAccessReviewSpec(spec authorizationapi.SelfSubjectAccessReviewSpec, fldPath *field.Path) field.ErrorList {
+func ValidateSelfSubjectAccessReviewSpec(spec authorizationv1.SelfSubjectAccessReviewSpec, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 	if spec.ResourceAttributes != nil && spec.NonResourceAttributes != nil {
 		allErrs = append(allErrs, field.Invalid(fldPath, spec.NonResourceAttributes, `exactly one of nonResourceAttributes or resourceAttributes must be specified`).WithOrigin("union").MarkCoveredByDeclarative())
@@ -65,7 +65,7 @@ func ValidateSelfSubjectAccessReviewSpec(spec authorizationapi.SelfSubjectAccess
 
 // ValidateSubjectAccessReview validates a SubjectAccessReview and returns an
 // ErrorList with any errors.
-func ValidateSubjectAccessReview(sar *authorizationapi.SubjectAccessReview) field.ErrorList {
+func ValidateSubjectAccessReview(sar *authorizationv1.SubjectAccessReview) field.ErrorList {
 	allErrs := ValidateSubjectAccessReviewSpec(sar.Spec, field.NewPath("spec"))
 	objectMetaShallowCopy := sar.ObjectMeta
 	objectMetaShallowCopy.ManagedFields = nil
@@ -77,7 +77,7 @@ func ValidateSubjectAccessReview(sar *authorizationapi.SubjectAccessReview) fiel
 
 // ValidateSelfSubjectAccessReview validates a SelfSubjectAccessReview and returns an
 // ErrorList with any errors.
-func ValidateSelfSubjectAccessReview(sar *authorizationapi.SelfSubjectAccessReview) field.ErrorList {
+func ValidateSelfSubjectAccessReview(sar *authorizationv1.SelfSubjectAccessReview) field.ErrorList {
 	allErrs := ValidateSelfSubjectAccessReviewSpec(sar.Spec, field.NewPath("spec"))
 	objectMetaShallowCopy := sar.ObjectMeta
 	objectMetaShallowCopy.ManagedFields = nil
@@ -89,7 +89,7 @@ func ValidateSelfSubjectAccessReview(sar *authorizationapi.SelfSubjectAccessRevi
 
 // ValidateLocalSubjectAccessReview validates a LocalSubjectAccessReview and returns an
 // ErrorList with any errors.
-func ValidateLocalSubjectAccessReview(sar *authorizationapi.LocalSubjectAccessReview) field.ErrorList {
+func ValidateLocalSubjectAccessReview(sar *authorizationv1.LocalSubjectAccessReview) field.ErrorList {
 	allErrs := ValidateSubjectAccessReviewSpec(sar.Spec, field.NewPath("spec"))
 
 	objectMetaShallowCopy := sar.ObjectMeta
@@ -109,7 +109,7 @@ func ValidateLocalSubjectAccessReview(sar *authorizationapi.LocalSubjectAccessRe
 	return allErrs
 }
 
-func validateResourceAttributes(resourceAttributes *authorizationapi.ResourceAttributes, fldPath *field.Path) field.ErrorList {
+func validateResourceAttributes(resourceAttributes *authorizationv1.ResourceAttributes, fldPath *field.Path) field.ErrorList {
 	if resourceAttributes == nil {
 		return nil
 	}
@@ -121,7 +121,7 @@ func validateResourceAttributes(resourceAttributes *authorizationapi.ResourceAtt
 	return allErrs
 }
 
-func validateFieldSelectorAttributes(selector *authorizationapi.FieldSelectorAttributes, fldPath *field.Path) field.ErrorList {
+func validateFieldSelectorAttributes(selector *authorizationv1.FieldSelectorAttributes, fldPath *field.Path) field.ErrorList {
 	if selector == nil {
 		return nil
 	}
@@ -143,7 +143,7 @@ func validateFieldSelectorAttributes(selector *authorizationapi.FieldSelectorAtt
 	return allErrs
 }
 
-func validateLabelSelectorAttributes(selector *authorizationapi.LabelSelectorAttributes, fldPath *field.Path) field.ErrorList {
+func validateLabelSelectorAttributes(selector *authorizationv1.LabelSelectorAttributes, fldPath *field.Path) field.ErrorList {
 	if selector == nil {
 		return nil
 	}
@@ -167,7 +167,7 @@ func validateLabelSelectorAttributes(selector *authorizationapi.LabelSelectorAtt
 
 // ValidateSubjectAccessReviewCreate is the single composition of handwritten and declarative
 // SubjectAccessReview validation.
-func ValidateSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.Scheme, sar *authorizationapi.SubjectAccessReview) field.ErrorList {
+func ValidateSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.Scheme, sar *authorizationv1.SubjectAccessReview) field.ErrorList {
 	errs := ValidateSubjectAccessReview(sar)
 	dv := rest.DeclarativeValidation{Scheme: scheme}
 	return dv.ValidateDeclaratively(ctx, sar, nil, errs, operation.Create, rest.DeclarativeValidationConfig{})
@@ -175,7 +175,7 @@ func ValidateSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.Sche
 
 // ValidateSelfSubjectAccessReviewCreate is the single composition of handwritten and declarative
 // SelfSubjectAccessReview validation.
-func ValidateSelfSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.Scheme, sar *authorizationapi.SelfSubjectAccessReview) field.ErrorList {
+func ValidateSelfSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.Scheme, sar *authorizationv1.SelfSubjectAccessReview) field.ErrorList {
 	errs := ValidateSelfSubjectAccessReview(sar)
 	dv := rest.DeclarativeValidation{Scheme: scheme}
 	return dv.ValidateDeclaratively(ctx, sar, nil, errs, operation.Create, rest.DeclarativeValidationConfig{})
@@ -183,7 +183,7 @@ func ValidateSelfSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.
 
 // ValidateLocalSubjectAccessReviewCreate is the single composition of handwritten and declarative
 // LocalSubjectAccessReview validation.
-func ValidateLocalSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.Scheme, sar *authorizationapi.LocalSubjectAccessReview) field.ErrorList {
+func ValidateLocalSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.Scheme, sar *authorizationv1.LocalSubjectAccessReview) field.ErrorList {
 	errs := ValidateLocalSubjectAccessReview(sar)
 	dv := rest.DeclarativeValidation{Scheme: scheme}
 	return dv.ValidateDeclaratively(ctx, sar, nil, errs, operation.Create, rest.DeclarativeValidationConfig{})
