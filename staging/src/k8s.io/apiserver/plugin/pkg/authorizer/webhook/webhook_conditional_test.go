@@ -35,8 +35,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
-	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	authorizationcel "k8s.io/apiserver/pkg/authorization/cel"
+	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	genericfeatures "k8s.io/apiserver/pkg/features"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	webhookutil "k8s.io/apiserver/pkg/util/webhook"
@@ -102,7 +102,6 @@ func (fakeConditionsData) GetKind() schema.GroupVersionKind    { return schema.G
 func (fakeConditionsData) GetUserInfo() user.Info {
 	return &user.DefaultInfo{Name: "alice"}
 }
-func (fakeConditionsData) AddAnnotation(_, _ string) error { return nil }
 
 // newTestWebhookAuthorizer creates a WebhookAuthorizer with fake clients for testing.
 func newTestWebhookAuthorizer(
