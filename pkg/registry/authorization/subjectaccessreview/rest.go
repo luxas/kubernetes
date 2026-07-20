@@ -23,6 +23,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	genericfeatures "k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/registry/rest"
@@ -33,11 +34,11 @@ import (
 )
 
 type REST struct {
-	authorizer authorizer.UnconditionalAuthorizer
+	authorizer authorizer.Authorizer
 	scheme     *runtime.Scheme
 }
 
-func NewREST(authorizer authorizer.UnconditionalAuthorizer, scheme *runtime.Scheme) *REST {
+func NewREST(authorizer authorizer.Authorizer, scheme *runtime.Scheme) *REST {
 	return &REST{authorizer, scheme}
 }
 
@@ -88,14 +89,26 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	}
 
 	authorizationAttributes := authorizationutil.AuthorizationAttributesFrom(subjectAccessReview.Spec)
-	decision, reason, evaluationErr := r.authorizer.Authorize(ctx, authorizationAttributes)
 
-	subjectAccessReview.Status = authorizationapi.SubjectAccessReviewStatus{
-		Allowed: (decision == authorizer.DecisionAllow),
-		Denied:  (decision == authorizer.DecisionDeny),
-		Reason:  reason,
+	// Only activate Conditional Authorization if both the server and client supports it
+	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) && subjectAccessReview.Spec.AuthorizationOptions.SupportsConditionalAuthorization() {
+		conditionsAwareDecision := r.authorizer.ConditionsAwareAuthorize(ctx, authorizationAttributes)
+		subjectAccessReview.Status = authorizationutil.ConditionsAwareDecisionToSARStatus(ctx, authorizationAttributes, conditionsAwareDecision)
+
+	} else if subjectAccessReview.Spec.AuthorizationOptions.SupportsUnconditionalAuthorization() {
+		// conditions-unaware flow, feature gate is off or client does not support conditions
+		decision, reason, evaluationErr := r.authorizer.Authorize(ctx, authorizationAttributes)
+
+		subjectAccessReview.Status = authorizationapi.SubjectAccessReviewStatus{
+			Allowed:         (decision == authorizer.DecisionAllow),
+			Denied:          (decision == authorizer.DecisionDeny),
+			Reason:          reason,
+			EvaluationError: authorizationutil.BuildEvaluationError(evaluationErr, authorizationAttributes),
+		}
+	} else {
+		// the HandledDecisionTypes was neither [Allow, ConditionsMap, Deny, NoOpinion, Union] or [Allow, Deny, NoOpinion], reject it.
+		return nil, apierrors.NewBadRequest(fmt.Sprintf("unsupported client-handled decision types: %v", sets.List(subjectAccessReview.Spec.AuthorizationOptions.GetHandledDecisionTypes())))
 	}
-	subjectAccessReview.Status.EvaluationError = authorizationutil.BuildEvaluationError(evaluationErr, authorizationAttributes)
 
 	return subjectAccessReview, nil
 }
