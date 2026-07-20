@@ -46,9 +46,6 @@ func Register(plugins *admission.Plugins) {
 	})
 }
 
-// TODO(luxas): Add an integration test that it's not possible to intercept SAR or ACR using this admission controller
-// TODO(luxas): Should VAP-related objects be added to the exclusion list for conditions? Most likely yes.
-
 var _ admission.Interface = &conditionsEnforcer{}
 var _ admission.ValidationInterface = &conditionsEnforcer{}
 var _ genericadmissioninit.WantsFeatures = &conditionsEnforcer{}
