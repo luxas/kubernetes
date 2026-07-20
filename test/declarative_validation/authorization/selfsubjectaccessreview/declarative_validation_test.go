@@ -116,10 +116,19 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 		"spec.authorizationOptions.handledDecisionTypes duplicate": {
 			v1Only:                         true,
 			enableConditionalAuthorization: true,
+			// Include ConditionsMap/Union so the v1 -> v1beta1 conversion fails
+			// closed (v1beta1 rejects non-unconditional AuthorizationOptions),
+			// letting the equivalence sweep skip v1beta1 via
+			// WithIgnoreObjectConversionErrors instead of comparing this v1-only
+			// Duplicate against v1beta1's empty result.
 			obj: mkSelfSAR(setConditionalAuthorization(&authorization.AuthorizationOptions{
 				HandledDecisionTypes: []authorization.ConditionsAwareDecisionType{
 					authorization.ConditionsAwareDecisionTypeAllow,
 					authorization.ConditionsAwareDecisionTypeAllow,
+					authorization.ConditionsAwareDecisionTypeDeny,
+					authorization.ConditionsAwareDecisionTypeNoOpinion,
+					authorization.ConditionsAwareDecisionTypeConditionsMap,
+					authorization.ConditionsAwareDecisionTypeUnion,
 				},
 			})),
 			expectedErrs: field.ErrorList{

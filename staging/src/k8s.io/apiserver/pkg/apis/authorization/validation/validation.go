@@ -94,9 +94,13 @@ func ValidateSelfSubjectAccessReviewSpec(spec authorizationv1.SelfSubjectAccessR
 // ErrorList with any errors.
 func validateAuthorizationOptions(ao *authorizationv1.AuthorizationOptions, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
-	if !sets.New(ao.HandledDecisionTypes...).IsSuperset(authorizationv1.UnconditionalAuthorizationDecisionTypes()) {
-		allErrs = append(allErrs, field.Invalid(fldPath.Child("handledDecisionTypes"), ao.HandledDecisionTypes, "set must at least contain {Allow, Deny, NoOpinion}"))
+	// Only run the validation for HandledDecisionTypes when it is set, declarative validation already covers the "handledDecisionTypes is required case"
+	if len(ao.HandledDecisionTypes) != 0 {
+		if !sets.New(ao.HandledDecisionTypes...).IsSuperset(authorizationv1.UnconditionalAuthorizationDecisionTypes()) {
+			allErrs = append(allErrs, field.Invalid(fldPath.Child("handledDecisionTypes"), ao.HandledDecisionTypes, "set must at least contain {Allow, Deny, NoOpinion}"))
+		}
 	}
+
 	return allErrs
 }
 
@@ -365,6 +369,7 @@ func validateDomainPrefixSeparator(fldPath *field.Path, key string) field.ErrorL
 		return nil
 	}
 	if len(strings.Split(key, "/")) != 2 {
+		return field.ErrorList{field.Invalid(fldPath, key, `must be a domain-prefixed key (such as "acme.io/foo")`)}
 	}
 	return nil
 }

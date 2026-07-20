@@ -376,7 +376,7 @@ func TestValidateSARSpec(t *testing.T) {
 				},
 			},
 		},
-		msg: `spec.authorizationOptions.handledDecisionTypes: Invalid value: ["Allow", "Deny"]: set must at least contain {Allow, Deny, NoOpinion}`,
+		msg: `spec.authorizationOptions.handledDecisionTypes: Invalid value: ["Allow","Deny"]: set must at least contain {Allow, Deny, NoOpinion}`,
 	}}
 
 	for _, c := range errorCases {
@@ -485,7 +485,7 @@ func TestValidateSelfSAR(t *testing.T) {
 				},
 			},
 		},
-		msg: `spec.authorizationOptions.handledDecisionTypes: Invalid value: ["Allow", "Deny"]: set must at least contain {Allow, Deny, NoOpinion}`,
+		msg: `spec.authorizationOptions.handledDecisionTypes: Invalid value: ["Allow","Deny"]: set must at least contain {Allow, Deny, NoOpinion}`,
 	}}
 
 	for _, c := range errorCases {

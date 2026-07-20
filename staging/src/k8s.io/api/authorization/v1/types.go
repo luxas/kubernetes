@@ -411,7 +411,7 @@ type AuthorizationOptions struct {
 	// +k8s:listType=set
 	// +k8s:required
 	// +required
-	// +k8s:opaqueType
+	// +k8s:eachVal=+k8s:opaqueType
 	HandledDecisionTypes []ConditionsAwareDecisionType `json:"handledDecisionTypes" protobuf:"bytes,1,rep,name=handledDecisionTypes"`
 }
 
