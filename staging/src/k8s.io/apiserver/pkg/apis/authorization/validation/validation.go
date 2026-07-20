@@ -27,6 +27,7 @@ import (
 	metav1validation "k8s.io/apimachinery/pkg/apis/meta/v1/validation"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
 )
 
@@ -165,26 +166,58 @@ func validateLabelSelectorAttributes(selector *authorizationv1.LabelSelectorAttr
 	return allErrs
 }
 
+func withRequestInfo(parent context.Context, version, resource string) context.Context {
+	return request.WithRequestInfo(parent, &request.RequestInfo{
+		// Fields read by staging/src/k8s.io/apiserver/pkg/registry/rest/validate.go func requestInfo
+		APIGroup:    authorizationv1.GroupName,
+		APIVersion:  version,
+		Subresource: "",
+		// Other fields that might or might not be used in the future, that are aligned with what would be populated by the WithRequestInfo HTTP filter
+		IsResourceRequest: true,
+		Path:              fmt.Sprintf("/apis/%s/%s/%s", authorizationv1.GroupName, version, resource),
+		Verb:              "create",
+		Resource:          resource,
+	})
+}
+
 // ValidateSubjectAccessReviewCreate is the single composition of handwritten and declarative
 // SubjectAccessReview validation.
-func ValidateSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.Scheme, sar *authorizationv1.SubjectAccessReview) field.ErrorList {
+// version is _just_ the version part of the GroupVersion, for instance, "v1", "v1beta1" or "v1alpha1", and controls what versioned
+// validations will be applied (as they might differ between different API versions).
+// Usually, this is implicitly derived from the RequestInfo in the context. However, here it is set explicitly, as:
+//   - though the validated object is supplied in v1 (treated as the external "hub") version, the original, user-supplied object might have been in another version (e.g. v1beta1)
+//   - not all callers might be in the API server with RequestInfo already set up properly (e.g. webhook authorizers that want to perform proper validation),
+//     and thus does taking the version as an explicit parameter this dependency explicit.
+func ValidateSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.Scheme, sar *authorizationv1.SubjectAccessReview, version string) field.ErrorList {
 	errs := ValidateSubjectAccessReview(sar)
 	dv := rest.DeclarativeValidation{Scheme: scheme}
-	return dv.ValidateDeclaratively(ctx, sar, nil, errs, operation.Create, rest.DeclarativeValidationConfig{})
+	return dv.ValidateDeclaratively(withRequestInfo(ctx, version, "subjectaccessreviews"), sar, nil, errs, operation.Create, rest.DeclarativeValidationConfig{})
 }
 
 // ValidateSelfSubjectAccessReviewCreate is the single composition of handwritten and declarative
 // SelfSubjectAccessReview validation.
-func ValidateSelfSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.Scheme, sar *authorizationv1.SelfSubjectAccessReview) field.ErrorList {
+// version is _just_ the version part of the GroupVersion, for instance, "v1", "v1beta1" or "v1alpha1", and controls what versioned
+// validations will be applied (as they might differ between different API versions).
+// Usually, this is implicitly derived from the RequestInfo in the context. However, here it is set explicitly, as:
+//   - though the validated object is supplied in v1 (treated as the external "hub") version, the original, user-supplied object might have been in another version (e.g. v1beta1)
+//   - not all callers might be in the API server with RequestInfo already set up properly (e.g. webhook authorizers that want to perform proper validation),
+//     and thus does taking the version as an explicit parameter this dependency explicit.
+func ValidateSelfSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.Scheme, sar *authorizationv1.SelfSubjectAccessReview, version string) field.ErrorList {
 	errs := ValidateSelfSubjectAccessReview(sar)
 	dv := rest.DeclarativeValidation{Scheme: scheme}
-	return dv.ValidateDeclaratively(ctx, sar, nil, errs, operation.Create, rest.DeclarativeValidationConfig{})
+	return dv.ValidateDeclaratively(withRequestInfo(ctx, version, "selfsubjectaccessreviews"), sar, nil, errs, operation.Create, rest.DeclarativeValidationConfig{})
 }
 
 // ValidateLocalSubjectAccessReviewCreate is the single composition of handwritten and declarative
 // LocalSubjectAccessReview validation.
-func ValidateLocalSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.Scheme, sar *authorizationv1.LocalSubjectAccessReview) field.ErrorList {
+// version is _just_ the version part of the GroupVersion, for instance, "v1", "v1beta1" or "v1alpha1", and controls what versioned
+// validations will be applied (as they might differ between different API versions).
+// Usually, this is implicitly derived from the RequestInfo in the context. However, here it is set explicitly, as:
+//   - though the validated object is supplied in v1 (treated as the external "hub") version, the original, user-supplied object might have been in another version (e.g. v1beta1)
+//   - not all callers might be in the API server with RequestInfo already set up properly (e.g. webhook authorizers that want to perform proper validation),
+//     and thus does taking the version as an explicit parameter this dependency explicit.
+func ValidateLocalSubjectAccessReviewCreate(ctx context.Context, scheme *runtime.Scheme, sar *authorizationv1.LocalSubjectAccessReview, version string) field.ErrorList {
 	errs := ValidateLocalSubjectAccessReview(sar)
 	dv := rest.DeclarativeValidation{Scheme: scheme}
-	return dv.ValidateDeclaratively(ctx, sar, nil, errs, operation.Create, rest.DeclarativeValidationConfig{})
+	return dv.ValidateDeclaratively(withRequestInfo(ctx, version, "localsubjectaccessreviews"), sar, nil, errs, operation.Create, rest.DeclarativeValidationConfig{})
 }
