@@ -844,6 +844,7 @@ type subjectAccessReviewV1beta1ClientGW struct {
 
 func (t *subjectAccessReviewV1beta1ClientGW) Create(ctx context.Context, subjectAccessReview *authorizationv1.SubjectAccessReview, _ metav1.CreateOptions) (*authorizationv1.SubjectAccessReview, int, error) {
 	var statusCode int
+	// TODO(luxas): We can now convert directly from v1 -> v1beta1 through auto-generated k8s.io/apiserver/pkg/apis/authorization conversions.
 	v1beta1Spec, err := v1SpecToV1beta1Spec(&subjectAccessReview.Spec)
 	if err != nil {
 		return subjectAccessReview, http.StatusBadRequest, err
