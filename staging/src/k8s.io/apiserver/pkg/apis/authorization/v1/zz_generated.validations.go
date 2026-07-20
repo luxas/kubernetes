@@ -118,10 +118,6 @@ func Validate_AuthorizationOptions(
 			if e := validate.ValSliceUnique(ctx, op, fldPath, obj, oldObj, validate.DirectEqual); len(e) != 0 {
 				errs = append(errs, e...)
 			}
-			// iterate the list and call the type's validation function
-			if e := validate.EachValSliceVal(ctx, op, fldPath, obj, oldObj, validate.DirectEqual, nil, Validate_ConditionsAwareDecisionType); len(e) != 0 {
-				errs = append(errs, e...)
-			}
 			return
 		}
 		oldVal := safe.Field(oldObj,
