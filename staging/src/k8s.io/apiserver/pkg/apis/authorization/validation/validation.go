@@ -306,7 +306,6 @@ func ValidateAuthorizationConditionsResponse(resp *authorizationv1alpha1.Authori
 // is marked CoveredByDeclarative so the equivalence check treats them as one.
 func ValidateConditionsAwareDecision(decision *authorizationv1.ConditionsAwareDecision, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
-	// TODO(luxas): Do we need to validate the unionDiscriminator beta marker here too?
 	if decision.ConditionsMap != nil {
 		allErrs = append(allErrs, ValidateConditionsMap(decision.ConditionsMap, fldPath.Child("conditionsMap"))...)
 	}
