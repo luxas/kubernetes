@@ -73,7 +73,7 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 				if err := legacyscheme.Scheme.Convert(sar, sarV1, nil); err != nil {
 					return field.ErrorList{field.InternalError(nil, err)}
 				}
-				return authorizationvalidation.ValidateLocalSubjectAccessReviewCreate(ctx, legacyscheme.Scheme, sarV1)
+				return authorizationvalidation.ValidateLocalSubjectAccessReviewCreate(ctx, legacyscheme.Scheme, sarV1, apiVersion)
 			}, tc.expectedErrs)
 		})
 	}
