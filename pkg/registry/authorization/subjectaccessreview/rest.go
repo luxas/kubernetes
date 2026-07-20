@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	authorizationvalidation "k8s.io/apiserver/pkg/apis/authorization/validation"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
+	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
 	authorizationapi "k8s.io/kubernetes/pkg/apis/authorization"
 	authorizationutil "k8s.io/kubernetes/pkg/registry/authorization/util"
@@ -66,6 +67,11 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		return nil, apierrors.NewBadRequest(fmt.Sprintf("not a SubjectAccessReview: %#v", obj))
 	}
 
+	ri, ok := genericapirequest.RequestInfoFrom(ctx)
+	if !ok {
+		return nil, apierrors.NewBadRequest("expected a RequestInfo in the context")
+	}
+
 	// The hand-written validations are written only once, for the most recent external API version, so that also k8s.io/apiserver
 	// importers can make use of the validations.
 	subjectAccessReviewV1 := &authorizationv1.SubjectAccessReview{}
@@ -73,7 +79,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		return nil, fmt.Errorf("unexpected, could not convert internal SubjectAccessReview to v1: %w", err)
 	}
 
-	if errs := authorizationvalidation.ValidateSubjectAccessReviewCreate(ctx, r.scheme, subjectAccessReviewV1); len(errs) > 0 {
+	if errs := authorizationvalidation.ValidateSubjectAccessReviewCreate(ctx, r.scheme, subjectAccessReviewV1, ri.APIVersion); len(errs) > 0 {
 		return nil, apierrors.NewInvalid(authorizationapi.Kind(subjectAccessReview.Kind), "", errs)
 	}
 
