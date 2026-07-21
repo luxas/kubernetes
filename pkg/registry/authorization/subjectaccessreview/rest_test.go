@@ -431,7 +431,9 @@ func TestCreate(t *testing.T) {
 		},
 		"handledTypes=[Allow] only": {
 			// Gate off: options cleared → default unconditional → Allowed:true.
-			// Gate on: intersection {Allow} matches neither supported set → 400.
+			// Gate on: imperative validation rejects a set that does not include
+			// {Allow, Deny, NoOpinion} before REST's own dispatch can fall
+			// through to its "unsupported client-handled decision types" branch.
 			spec: func() authorizationapi.SubjectAccessReviewSpec {
 				s := baseResourceSpec()
 				s.AuthorizationOptions = &authorizationapi.AuthorizationOptions{
@@ -446,11 +448,13 @@ func TestCreate(t *testing.T) {
 				attrs:  baseResourceAttrs,
 				status: unconditionalAllowStatus,
 			},
-			assertFeatureOn: &assertions{err: "unsupported client-handled decision types: [Allow]"},
+			assertFeatureOn: &assertions{err: `.authorization.k8s.io "" is invalid: spec.authorizationOptions.handledDecisionTypes: Invalid value: ["Allow"]: set must at least contain {Allow, Deny, NoOpinion}`},
 		},
 		"handledTypes=[Allow,ConditionsMap] partial conditional set": {
 			// Gate off: options cleared → default unconditional → Allowed:true.
-			// Gate on: partial set matches neither supported set → 400.
+			// Gate on: imperative validation rejects a set that does not include
+			// {Allow, Deny, NoOpinion} before REST's own dispatch can fall
+			// through to its "unsupported client-handled decision types" branch.
 			spec: func() authorizationapi.SubjectAccessReviewSpec {
 				s := baseResourceSpec()
 				s.AuthorizationOptions = &authorizationapi.AuthorizationOptions{
@@ -466,7 +470,7 @@ func TestCreate(t *testing.T) {
 				attrs:  baseResourceAttrs,
 				status: unconditionalAllowStatus,
 			},
-			assertFeatureOn: &assertions{err: "unsupported client-handled decision types: [Allow ConditionsMap]"},
+			assertFeatureOn: &assertions{err: `.authorization.k8s.io "" is invalid: spec.authorizationOptions.handledDecisionTypes: Invalid value: ["Allow","ConditionsMap"]: set must at least contain {Allow, Deny, NoOpinion}`},
 		},
 		"handledTypes=[] (empty slice)": {
 			// Gate off: options cleared before validation → succeeds → Allowed:true.
