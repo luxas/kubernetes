@@ -524,8 +524,6 @@ type WebhookConfiguration struct {
 	// conditionsReview defines the configuration for evaluating authorization
 	// conditions via AuthorizationConditionsReview. When set, enables
 	// conditional authorization support for this webhook authorizer.
-	// The conditions review endpoint is reached via the given context
-	// within the same kubeconfig file specified in connectionInfo.
 	// +optional
 	ConditionsReview *ConditionsReviewConfiguration `json:"conditionsReview,omitempty"`
 }
@@ -533,15 +531,20 @@ type WebhookConfiguration struct {
 // ConditionsReviewConfiguration configures the connection to the conditions
 // review endpoint for conditional authorization.
 type ConditionsReviewConfiguration struct {
-	// kubeConfigContextName is the name of the context within the webhook's
-	// kubeconfig file to use for conditions review requests.
-	// Required.
-	KubeConfigContextName string `json:"kubeConfigContextName"`
-
 	// version is the API version of AuthorizationConditionsReview to use.
 	// Valid values: v1alpha1
 	// Required.
 	Version string `json:"version"`
+
+	// kubeConfigContextName is the name of the context within the webhook's kubeconfig
+	// kubeconfig file to use for conditions review requests.
+	// Can only be specified when connectionInfo.type = KubeConfigFile.
+	// If unset and connectionInfo.type = KubeConfigFile, the default kubeconfig
+	// context is used, which means the API server sends both SubjectAccessReview and
+	// AuthorizationConditionsReview payloads to the same HTTP endpoint, and the
+	// caller must distinguish between these through TypeMeta information.
+	// Optional.
+	KubeConfigContextName string `json:"kubeConfigContextName"`
 }
 
 type WebhookConnectionInfo struct {
