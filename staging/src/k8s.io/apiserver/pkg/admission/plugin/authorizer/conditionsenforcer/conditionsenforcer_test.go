@@ -19,6 +19,7 @@ package conditionsenforcer
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -39,7 +40,6 @@ import (
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	"k8s.io/apiserver/pkg/endpoints/filters"
 	"k8s.io/apiserver/pkg/endpoints/handlers"
-	"k8s.io/apiserver/pkg/endpoints/handlers/responsewriters"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	genericfeatures "k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/registry/rest"
@@ -89,7 +89,7 @@ type conditionsAwareFakeAuthorizer struct {
 }
 
 func (f *conditionsAwareFakeAuthorizer) Authorize(ctx context.Context, a authorizer.Attributes) (authorizer.Decision, string, error) {
-	return f.ConditionsAwareAuthorize(ctx, a).UnconditionalParts()
+	return f.ConditionsAwareAuthorize(ctx, a).UnconditionalParts(true)
 }
 
 func (f *conditionsAwareFakeAuthorizer) ConditionsAwareAuthorize(_ context.Context, _ authorizer.Attributes) authorizer.ConditionsAwareDecision {
@@ -259,63 +259,6 @@ func setupConditionsEnforcer(t *testing.T) admission.Interface {
 	return plugin
 }
 
-func withCompoundAuthorization(handler http.Handler, compoundAuthorizer authorizer.Authorizer, s runtime.NegotiatedSerializer) http.Handler {
-	if compoundAuthorizer == nil {
-		return handler
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		ctx := req.Context()
-		attrs, err := filters.GetAuthorizerAttributes(ctx)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if !utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
-			decision, reason, err := compoundAuthorizer.Authorize(ctx, attrs)
-			if decision == authorizer.DecisionAllow {
-				handler.ServeHTTP(w, req)
-				return
-			}
-			if err != nil {
-				responsewriters.InternalError(w, req, err)
-				return
-			}
-			responsewriters.Forbidden(attrs, w, req, reason, s)
-			return
-		}
-		conditionsAwareDecision := compoundAuthorizer.ConditionsAwareAuthorize(ctx, attrs)
-		isUnconditionallyAllowed := conditionsAwareDecision.IsAllow()
-		reason := conditionsAwareDecision.Reason()
-		err = conditionsAwareDecision.Error()
-
-		if !isUnconditionallyAllowed && conditionsAwareDecision.PossibleDecisions().Has(authorizer.DecisionAllow) {
-			var evalDecision authorizer.Decision
-			evalDecision, reason, err = compoundAuthorizer.EvaluateConditions(ctx, conditionsAwareDecision, nil)
-			isUnconditionallyAllowed = evalDecision == authorizer.DecisionAllow
-		}
-
-		if isUnconditionallyAllowed {
-			// No audit annotation here, as there still one more enforcement to do
-			handler.ServeHTTP(w, req)
-			return
-		}
-
-		if err != nil {
-			audit.AddAuditAnnotation(ctx, filters.ReasonAnnotationKey, filters.ReasonError)
-			responsewriters.InternalError(w, req, err)
-			return
-		}
-
-		audit.AddAuditAnnotations(ctx,
-			filters.DecisionAnnotationKey, filters.DecisionForbid,
-			filters.ReasonAnnotationKey, reason)
-		responsewriters.Forbidden(attrs, w, req, reason, s)
-		// return
-	})
-}
-
-// ---------- tests ----------
-
 func TestConditionsEnforcerEndToEnd(t *testing.T) {
 	classifierAlwaysTrue := filters.ConditionalAuthorizationRequestClassifier(func(_ authorizer.Attributes) bool { return true })
 	classifierAlwaysFalse := filters.ConditionalAuthorizationRequestClassifier(func(_ authorizer.Attributes) bool { return false })
@@ -324,6 +267,18 @@ func TestConditionsEnforcerEndToEnd(t *testing.T) {
 		return authorizer.ConditionsAwareDecisionConditionsMap(
 			nil, nil,
 			[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/c1", Condition: "object.metadata.name == 'test-pod'", Type: "example.com/cel"}},
+		)
+	}
+
+	// makeCondMapMixedDecision registers both an allow- and a deny-condition, so
+	// PossibleDecisions() == {Allow, Deny, NoOpinion}. Use this when the test needs
+	// EvaluateConditions to legitimately return Deny — the enforcer's invariant
+	// check rejects a Deny outcome unless Deny was declared possible up-front.
+	makeCondMapMixedDecision := func() authorizer.ConditionsAwareDecision {
+		return authorizer.ConditionsAwareDecisionConditionsMap(
+			[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/deny", Condition: "object.metadata.name == 'bad'", Type: "example.com/cel"}},
+			nil,
+			[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/allow", Condition: "object.metadata.name == 'test-pod'", Type: "example.com/cel"}},
 		)
 	}
 
@@ -337,7 +292,6 @@ func TestConditionsEnforcerEndToEnd(t *testing.T) {
 	tests := []struct {
 		name                       string
 		authorizer                 authorizer.Authorizer
-		compoundAuthorizer         authorizer.Authorizer
 		conditionalAuthzClassifier filters.ConditionalAuthorizationRequestClassifier
 		disabled                   expectedOutcome
 		enabled                    expectedOutcome
@@ -349,16 +303,29 @@ func TestConditionsEnforcerEndToEnd(t *testing.T) {
 			enabled:    expectedOutcome{statusCode: http.StatusOK, updated: true, decisionAnnotation: "allow", reasonAnnotation: "allowed"},
 		},
 		{
-			name:       "unconditional deny is rejected at auth filter",
+			name:       "unconditional deny is rejected at the auth filter",
 			authorizer: fakeAuthorizer{authorizer.DecisionDeny, "denied", nil},
 			disabled:   expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "denied"},
 			enabled:    expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "denied"},
 		},
 		{
-			name:       "no opinion without error is forbidden",
+			name:       "unconditional deny with error yields internal error at the auth filter",
+			authorizer: fakeAuthorizer{authorizer.DecisionDeny, "denied", errors.New("unexpected")},
+			// TODO(luxas): Is it really expected to not add the decisionAnnotation?
+			disabled: expectedOutcome{statusCode: http.StatusInternalServerError, reasonAnnotation: "internal error"},
+			enabled:  expectedOutcome{statusCode: http.StatusInternalServerError, reasonAnnotation: "internal error"},
+		},
+		{
+			name:       "no opinion without error is forbidden at the auth filter",
 			authorizer: fakeAuthorizer{authorizer.DecisionNoOpinion, "no match", nil},
 			disabled:   expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "no match"},
 			enabled:    expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "no match"},
+		},
+		{
+			name:       "no opinion with error yields internal error at the auth filter",
+			authorizer: fakeAuthorizer{authorizer.DecisionNoOpinion, "no match", errors.New("unexpected")},
+			disabled:   expectedOutcome{statusCode: http.StatusInternalServerError, reasonAnnotation: "internal error"},
+			enabled:    expectedOutcome{statusCode: http.StatusInternalServerError, reasonAnnotation: "internal error"},
 		},
 		{
 			name: "conditional allow + classifier true + eval allows => update succeeds",
@@ -375,17 +342,60 @@ func TestConditionsEnforcerEndToEnd(t *testing.T) {
 			enabled: expectedOutcome{statusCode: http.StatusOK, updated: true, decisionAnnotation: "allow", reasonAnnotation: "conditions met"},
 		},
 		{
-			name: "conditional allow + classifier true + eval denies => admission rejects",
+			name: "conditional allow + classifier true + eval no opinion => admission rejects",
 			authorizer: &conditionsAwareFakeAuthorizer{
 				makeDecision: makeCondMapAllowDecision,
 				evalConditions: func(_ context.Context, _ authorizer.ConditionsAwareDecision, _ authorizer.ConditionsData) (authorizer.Decision, string, error) {
-					return authorizer.DecisionDeny, "conditions not met", nil
+					return authorizer.DecisionNoOpinion, "conditions not met", nil
 				},
 			},
 			conditionalAuthzClassifier: classifierAlwaysTrue,
-			disabled:                   expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed: tried to return conditional decision to conditions-unaware authorizer"},
+			// gate off: condMap constructor fail-closes to Deny (deny effect present) => forbidden
+			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed: tried to return conditional decision to conditions-unaware authorizer"},
 			// gate on: auth filter lets through, conditions eval to deny => forbidden from admission
 			enabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "conditions not met"},
+		},
+		{
+			name: "conditional allow + classifier true + eval no opinion with error => admission rejects",
+			authorizer: &conditionsAwareFakeAuthorizer{
+				makeDecision: makeCondMapAllowDecision,
+				evalConditions: func(_ context.Context, _ authorizer.ConditionsAwareDecision, _ authorizer.ConditionsData) (authorizer.Decision, string, error) {
+					return authorizer.DecisionNoOpinion, "", errors.New("unexpected error")
+				},
+			},
+			conditionalAuthzClassifier: classifierAlwaysTrue,
+			// gate off: condMap constructor fail-closes to Deny (deny effect present) => forbidden
+			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed: tried to return conditional decision to conditions-unaware authorizer"},
+			// gate on: auth filter lets through, conditions eval to deny => forbidden from admission
+			enabled: expectedOutcome{statusCode: http.StatusInternalServerError, reasonAnnotation: "internal error"},
+		},
+		{
+			name: "conditional + classifier true + eval denies => admission rejects",
+			authorizer: &conditionsAwareFakeAuthorizer{
+				makeDecision: makeCondMapMixedDecision,
+				evalConditions: func(_ context.Context, _ authorizer.ConditionsAwareDecision, _ authorizer.ConditionsData) (authorizer.Decision, string, error) {
+					return authorizer.DecisionDeny, "deny condition matched", nil
+				},
+			},
+			conditionalAuthzClassifier: classifierAlwaysTrue,
+			// gate off: condMap constructor fail-closes to Deny (deny effect present) => forbidden
+			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed: tried to return conditional decision to conditions-unaware authorizer"},
+			// gate on: auth filter lets through, conditions eval to deny => forbidden from admission
+			enabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "deny condition matched"},
+		},
+		{
+			name: "conditional + classifier true + eval denies with error => admission rejects",
+			authorizer: &conditionsAwareFakeAuthorizer{
+				makeDecision: makeCondMapMixedDecision,
+				evalConditions: func(_ context.Context, _ authorizer.ConditionsAwareDecision, _ authorizer.ConditionsData) (authorizer.Decision, string, error) {
+					return authorizer.DecisionDeny, "failed closed", errors.New("unexpected error")
+				},
+			},
+			conditionalAuthzClassifier: classifierAlwaysTrue,
+			// gate off: condMap constructor fail-closes to Deny (deny effect present) => forbidden
+			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed: tried to return conditional decision to conditions-unaware authorizer"},
+			// gate on: auth filter lets through, conditions eval to deny => forbidden from admission
+			enabled: expectedOutcome{statusCode: http.StatusInternalServerError, reasonAnnotation: "internal error"},
 		},
 		{
 			name: "conditional allow + classifier true + eval allows (based on versioned object inspection) => update succeeds",
@@ -434,66 +444,26 @@ func TestConditionsEnforcerEndToEnd(t *testing.T) {
 			disabled:                   expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed: tried to return conditional decision to conditions-unaware authorizer"},
 			enabled:                    expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed: tried to return conditional decision to conditions-unaware authorizer"},
 		},
-		// Make sure all registered conditional decisions in the context are enforced
 		{
-			name: "conditional (=> allow) + compound conditional (=> allow) => update succeeds",
+			// Exercises the enforcer's invariant check: an allow-only ConditionsMap has
+			// PossibleDecisions == {Allow, NoOpinion}. If EvaluateConditions returns
+			// Deny anyway, the enforcer folds the outcome to the FailureDecision
+			// (NoOpinion here — no deny effect declared) and surfaces an internal
+			// error explaining the invariant violation.
+			name: "conditional allow + eval returns impossible Deny => internal error",
 			authorizer: &conditionsAwareFakeAuthorizer{
 				makeDecision: makeCondMapAllowDecision,
 				evalConditions: func(_ context.Context, _ authorizer.ConditionsAwareDecision, _ authorizer.ConditionsData) (authorizer.Decision, string, error) {
-					return authorizer.DecisionAllow, "conditions met", nil
-				},
-			},
-			compoundAuthorizer: &conditionsAwareFakeAuthorizer{
-				makeDecision: makeCondMapAllowDecision,
-				evalConditions: func(_ context.Context, _ authorizer.ConditionsAwareDecision, _ authorizer.ConditionsData) (authorizer.Decision, string, error) {
-					return authorizer.DecisionAllow, "conditions met", nil
+					return authorizer.DecisionDeny, "should be ignored", nil
 				},
 			},
 			conditionalAuthzClassifier: classifierAlwaysTrue,
-			// gate off: condMap constructor fail-closes => forbidden
+			// gate off: condMap constructor fail-closes to NoOpinion (no deny effect) => forbidden at filter
 			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed: tried to return conditional decision to conditions-unaware authorizer"},
-			// gate on: auth filter lets through, both conditions eval to allow
-			enabled: expectedOutcome{statusCode: http.StatusOK, updated: true, decisionAnnotation: "allow", reasonAnnotation: "conditions met"},
-		},
-		{
-			name: "conditional (=> allow) + compound conditional (=> deny) => denied",
-			authorizer: &conditionsAwareFakeAuthorizer{
-				makeDecision: makeCondMapAllowDecision,
-				evalConditions: func(_ context.Context, _ authorizer.ConditionsAwareDecision, _ authorizer.ConditionsData) (authorizer.Decision, string, error) {
-					return authorizer.DecisionAllow, "authorization conditions met", nil
-				},
-			},
-			compoundAuthorizer: &conditionsAwareFakeAuthorizer{
-				makeDecision: makeCondMapAllowDecision,
-				evalConditions: func(_ context.Context, _ authorizer.ConditionsAwareDecision, _ authorizer.ConditionsData) (authorizer.Decision, string, error) {
-					return authorizer.DecisionDeny, "compound conditions not met", nil
-				},
-			},
-			conditionalAuthzClassifier: classifierAlwaysTrue,
-			// gate off: condMap constructor fail-closes => forbidden
-			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed: tried to return conditional decision to conditions-unaware authorizer"},
-			// gate on: auth filter lets through, but the compound conditions deny the request
-			enabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "compound conditions not met"},
-		},
-		{
-			name: "conditional (=> deny) + compound conditional (=> allow) => denied",
-			authorizer: &conditionsAwareFakeAuthorizer{
-				makeDecision: makeCondMapAllowDecision,
-				evalConditions: func(_ context.Context, _ authorizer.ConditionsAwareDecision, _ authorizer.ConditionsData) (authorizer.Decision, string, error) {
-					return authorizer.DecisionDeny, "authorization conditions not met", nil
-				},
-			},
-			compoundAuthorizer: &conditionsAwareFakeAuthorizer{
-				makeDecision: makeCondMapAllowDecision,
-				evalConditions: func(_ context.Context, _ authorizer.ConditionsAwareDecision, _ authorizer.ConditionsData) (authorizer.Decision, string, error) {
-					return authorizer.DecisionAllow, "compound conditions met", nil
-				},
-			},
-			conditionalAuthzClassifier: classifierAlwaysTrue,
-			// gate off: condMap constructor fail-closes => forbidden
-			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed: tried to return conditional decision to conditions-unaware authorizer"},
-			// gate on: auth filter lets through, but the compound conditions deny the request
-			enabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "authorization conditions not met"},
+			// gate on: auth filter lets through, enforcer's invariant check rejects the
+			// out-of-set Deny and returns InternalError with the "internal error"
+			// audit reason.
+			enabled: expectedOutcome{statusCode: http.StatusInternalServerError, reasonAnnotation: filters.ReasonError},
 		},
 	}
 
@@ -521,9 +491,9 @@ func TestConditionsEnforcerEndToEnd(t *testing.T) {
 					// Wire up: WithRequestInfo -> WithAuthorization (with conditions support) -> UpdateResource
 					var handler http.Handler = innerHandler
 
-					// Compound authorization only enabled if tt.compoundAuthorizer != nil
-					handler = withCompoundAuthorization(handler, tt.compoundAuthorizer, testCodecs)
+					// TODO(luxas): Wire up conditions support for compound authorization for update -> create requests here as well using the real filter.
 
+					// TODO(luxas): Could we use the real BuildHandlerChain here?
 					if mode.gate {
 						// This test is exercising the conditions-enforcer admission plugin, so mark
 						// the enforcer as enabled in the WithConditionsAwareAuthorization dispatch.

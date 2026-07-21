@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 
 	batch "k8s.io/api/batch/v1"
@@ -358,6 +359,11 @@ func TestWithAuthorization(t *testing.T) {
 		decisionAnnotation   string
 		reasonAnnotation     string
 		conditionalInContext bool
+		// conditionalAnnotation is the expected value of the
+		// "authorization.k8s.io/is-conditional-decision" audit annotation. Set to
+		// "true" for the conditional-allow filter path; "" means the annotation
+		// must not be present.
+		conditionalAnnotation string
 	}
 
 	tests := []struct {
@@ -377,10 +383,11 @@ func TestWithAuthorization(t *testing.T) {
 			name:       "allow",
 			authorizer: fakeAuthorizer{authorizer.DecisionAllow, "RBAC: allowed", nil},
 			disabled:   expectedOutcome{statusCode: http.StatusOK, handlerCalled: true, decisionAnnotation: DecisionAllow, reasonAnnotation: "RBAC: allowed"},
-			// gate on: withConditionsAwareAuthorization delegates audit annotations on the
-			// allow path (both unconditional and conditional) to the AuthorizationConditionsEnforcer
-			// admission plugin, which is not in this filter-only test chain.
-			enabled: expectedOutcome{statusCode: http.StatusOK, handlerCalled: true},
+			// gate on: the filter sets the allow decision/reason annotations up front on
+			// the unconditional-allow path (mirroring withAuthorization), so downstream
+			// handling can rely on them being present even if a later step short-circuits
+			// before the AuthorizationConditionsEnforcer plugin runs.
+			enabled: expectedOutcome{statusCode: http.StatusOK, handlerCalled: true, decisionAnnotation: DecisionAllow, reasonAnnotation: "RBAC: allowed"},
 		},
 		{
 			name:       "deny",
@@ -408,8 +415,11 @@ func TestWithAuthorization(t *testing.T) {
 			conditionalAuthzClassifier: classifierAlwaysTrue,
 			// gate off: condMap constructor fail-closes to NoOpinion (no deny effect) => forbidden
 			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: DecisionForbid, reasonAnnotation: "failed closed: tried to return conditional decision to conditions-unaware authorizer"},
-			// gate on: CanBecomeAllowed=true, classifier=true => conditional path
-			enabled: expectedOutcome{statusCode: http.StatusOK, handlerCalled: true, conditionalInContext: true},
+			// gate on: CanBecomeAllowed=true, classifier=true => conditional path. The filter
+			// records "is-conditional-decision=true" so downstream audit consumers can tell
+			// the request was authorized conditionally even if a later hop errors out before
+			// the AuthorizationConditionsEnforcer plugin sets the final decision annotations.
+			enabled: expectedOutcome{statusCode: http.StatusOK, handlerCalled: true, conditionalInContext: true, conditionalAnnotation: "true"},
 		},
 		{
 			name: "conditional allow + classifier false",
@@ -503,28 +513,17 @@ func TestWithAuthorization(t *testing.T) {
 					recorder := httptest.NewRecorder()
 					handler.ServeHTTP(recorder, req)
 
-					if recorder.Code != mode.want.statusCode {
-						t.Errorf("status code = %d, want %d", recorder.Code, mode.want.statusCode)
-					}
-					if handlerCalled != mode.want.handlerCalled {
-						t.Errorf("handler called = %v, want %v", handlerCalled, mode.want.handlerCalled)
-					}
-
 					ae := audit.AuditContextFrom(req.Context())
-					annotation, ok := ae.GetEventAnnotation(DecisionAnnotationKey)
-					if mode.want.decisionAnnotation != "" && !ok {
-						t.Errorf("decision annotation not found, expected %q", mode.want.decisionAnnotation)
-					} else if annotation != mode.want.decisionAnnotation {
-						t.Errorf("decision annotation = %q, want %q", annotation, mode.want.decisionAnnotation)
+					got := expectedOutcome{
+						statusCode:           recorder.Code,
+						handlerCalled:        handlerCalled,
+						conditionalInContext: gotConditionalDecision,
 					}
-					annotation, ok = ae.GetEventAnnotation(ReasonAnnotationKey)
-					if mode.want.reasonAnnotation != "" && !ok {
-						t.Errorf("reason annotation not found, expected %q", mode.want.reasonAnnotation)
-					} else if annotation != mode.want.reasonAnnotation {
-						t.Errorf("reason annotation = %q, want %q", annotation, mode.want.reasonAnnotation)
-					}
-					if mode.want.conditionalInContext != gotConditionalDecision {
-						t.Errorf("conditional decision in context = %v, want %v", gotConditionalDecision, mode.want.conditionalInContext)
+					got.decisionAnnotation, _ = ae.GetEventAnnotation(DecisionAnnotationKey)
+					got.reasonAnnotation, _ = ae.GetEventAnnotation(ReasonAnnotationKey)
+					got.conditionalAnnotation, _ = ae.GetEventAnnotation(isConditionalAuthorizationKey)
+					if diff := cmp.Diff(mode.want, got, cmp.AllowUnexported(expectedOutcome{})); diff != "" {
+						t.Errorf("outcome mismatch (-want +got):\n%s", diff)
 					}
 				})
 			}

@@ -22,6 +22,7 @@ import (
 	"io"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apiserver/pkg/admission"
 	genericadmissioninit "k8s.io/apiserver/pkg/admission/initializer"
 	"k8s.io/apiserver/pkg/audit"
@@ -79,10 +80,26 @@ func (c *conditionsEnforcer) Validate(ctx context.Context, a admission.Attribute
 		return nil
 	}
 
-	authz, decisionToEnforce, ok := request.ConditionallyAuthorizedDecisionFrom(ctx)
+	authz, possiblyConditionalDecision, ok := request.ConditionallyAuthorizedDecisionFrom(ctx)
 	if !ok {
 		// If there no decision in the context, WithConditionsAwareAuthorization was not used, and thus there is nothing to enforce.
 		return nil
+	}
+
+	switch {
+	// Guard against bad inputs
+	case possiblyConditionalDecision.IsDeny(), possiblyConditionalDecision.IsNoOpinion(), !possiblyConditionalDecision.PossibleDecisions().Has(authorizer.DecisionAllow):
+		audit.AddAuditAnnotation(ctx, filters.ReasonAnnotationKey, filters.ReasonError)
+		return apierrors.NewInternalError(fmt.Errorf("did not expect conditional decision %s to be attached to the RequestInfo context, only Allow or conditional allow", possiblyConditionalDecision.String()))
+	// If the request was previously unconditionally Allowed, nothing needed here.
+	// WithConditionsAwareAuthorization already sets the allowed audit annotation.
+	case possiblyConditionalDecision.IsAllow():
+		return nil
+	case possiblyConditionalDecision.IsConditionsMap(), possiblyConditionalDecision.IsUnion():
+		// continue below
+	default:
+		audit.AddAuditAnnotation(ctx, filters.ReasonAnnotationKey, filters.ReasonError)
+		return apierrors.NewInternalError(fmt.Errorf("did not expect conditional decision %s to be attached to the RequestInfo context, only Allow or conditional allow", possiblyConditionalDecision.String()))
 	}
 
 	// TODO(luxas): This should be admission.NewVersionedAttributes when it correctly overrides GetOldObject()
@@ -91,12 +108,14 @@ func (c *conditionsEnforcer) Validate(ctx context.Context, a admission.Attribute
 		return fmt.Errorf("failed to convert objects to request version: %w", err)
 	}
 
-	var decision authorizer.Decision
-	var reason string
-	if decisionToEnforce.IsUnconditional() {
-		decision, reason, err = decisionToEnforce.UnconditionalParts()
-	} else {
-		decision, reason, err = authz.EvaluateConditions(ctx, decisionToEnforce, versionedAttributes)
+	// Call the original authorizer back with the admission data
+	decision, reason, err := authz.EvaluateConditions(ctx, possiblyConditionalDecision, versionedAttributes)
+
+	// Enforce the evaluated decision to only evaluate to something that is beforehand possible
+	if !possiblyConditionalDecision.PossibleDecisions().Has(decision) {
+		decision = possiblyConditionalDecision.FailureDecision()
+		reason = "failed closed"
+		err = fmt.Errorf("authorizer tried to return %s from EvaluateConditions, but the possible outcomes were %v", decision.String(), sets.List(possiblyConditionalDecision.PossibleDecisions()))
 	}
 
 	// The code flow here should exactly match filters.WithAuthorization.
