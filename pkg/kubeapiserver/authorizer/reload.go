@@ -36,6 +36,7 @@ import (
 	authorizationmetrics "k8s.io/apiserver/pkg/authorization/metrics"
 	"k8s.io/apiserver/pkg/authorization/union"
 	"k8s.io/apiserver/pkg/server/options/authorizationconfig/metrics"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/apiserver/pkg/util/filesystem"
 	webhookutil "k8s.io/apiserver/pkg/util/webhook"
 	"k8s.io/apiserver/plugin/pkg/authorizer/webhook"
@@ -180,16 +181,18 @@ func (r *reloadableAuthorizerResolver) newForConfig(authzConfig *authzconfig.Aut
 			}
 			var conditionsReviewConfig *rest.Config
 			var conditionsReviewVersion string
-			if cr := configuredAuthorizer.Webhook.ConditionsReview; cr != nil {
-				conditionsReviewConfig, err = webhookutil.LoadKubeconfigWithContext(
-					*configuredAuthorizer.Webhook.ConnectionInfo.KubeConfigFile,
-					cr.KubeConfigContextName,
-					r.initialConfig.CustomDial,
-				)
-				if err != nil {
-					return nil, nil, fmt.Errorf("failed to load conditions review kubeconfig context %q: %w", cr.KubeConfigContextName, err)
+			if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
+				if cr := configuredAuthorizer.Webhook.ConditionsReview; cr != nil {
+					conditionsReviewConfig, err = webhookutil.LoadKubeconfigWithContext(
+						*configuredAuthorizer.Webhook.ConnectionInfo.KubeConfigFile,
+						cr.KubeConfigContextName,
+						r.initialConfig.CustomDial,
+					)
+					if err != nil {
+						return nil, nil, fmt.Errorf("failed to load conditions review kubeconfig context %q: %w", cr.KubeConfigContextName, err)
+					}
+					conditionsReviewVersion = cr.Version
 				}
-				conditionsReviewVersion = cr.Version
 			}
 
 			webhookAuthorizer, err := webhook.New(sarClientConfig,
