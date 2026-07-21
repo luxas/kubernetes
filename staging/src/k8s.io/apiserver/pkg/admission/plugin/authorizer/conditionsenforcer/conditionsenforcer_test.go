@@ -337,7 +337,7 @@ func TestConditionsEnforcerEndToEnd(t *testing.T) {
 			},
 			conditionalAuthzClassifier: classifierAlwaysTrue,
 			// gate off: condMap constructor fail-closes => forbidden
-			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed: tried to return conditional decision to conditions-unaware authorizer"},
+			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed from conditional decision (with possible outcomes [Allow NoOpinion]) to NoOpinion during unconditional authorization"},
 			// gate on: auth filter lets through, conditions eval to allow => update succeeds
 			enabled: expectedOutcome{statusCode: http.StatusOK, updated: true, decisionAnnotation: "allow", reasonAnnotation: "conditions met"},
 		},
@@ -351,7 +351,7 @@ func TestConditionsEnforcerEndToEnd(t *testing.T) {
 			},
 			conditionalAuthzClassifier: classifierAlwaysTrue,
 			// gate off: condMap constructor fail-closes to Deny (deny effect present) => forbidden
-			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed: tried to return conditional decision to conditions-unaware authorizer"},
+			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed from conditional decision (with possible outcomes [Allow NoOpinion]) to NoOpinion during unconditional authorization"},
 			// gate on: auth filter lets through, conditions eval to deny => forbidden from admission
 			enabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "conditions not met"},
 		},
@@ -365,7 +365,7 @@ func TestConditionsEnforcerEndToEnd(t *testing.T) {
 			},
 			conditionalAuthzClassifier: classifierAlwaysTrue,
 			// gate off: condMap constructor fail-closes to Deny (deny effect present) => forbidden
-			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed: tried to return conditional decision to conditions-unaware authorizer"},
+			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed from conditional decision (with possible outcomes [Allow NoOpinion]) to NoOpinion during unconditional authorization"},
 			// gate on: auth filter lets through, conditions eval to deny => forbidden from admission
 			enabled: expectedOutcome{statusCode: http.StatusInternalServerError, reasonAnnotation: "internal error"},
 		},
@@ -379,7 +379,7 @@ func TestConditionsEnforcerEndToEnd(t *testing.T) {
 			},
 			conditionalAuthzClassifier: classifierAlwaysTrue,
 			// gate off: condMap constructor fail-closes to Deny (deny effect present) => forbidden
-			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed: tried to return conditional decision to conditions-unaware authorizer"},
+			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed from conditional decision (with possible outcomes [Deny Allow NoOpinion]) to Deny during unconditional authorization"},
 			// gate on: auth filter lets through, conditions eval to deny => forbidden from admission
 			enabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "deny condition matched"},
 		},
@@ -393,7 +393,7 @@ func TestConditionsEnforcerEndToEnd(t *testing.T) {
 			},
 			conditionalAuthzClassifier: classifierAlwaysTrue,
 			// gate off: condMap constructor fail-closes to Deny (deny effect present) => forbidden
-			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed: tried to return conditional decision to conditions-unaware authorizer"},
+			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed from conditional decision (with possible outcomes [Deny Allow NoOpinion]) to Deny during unconditional authorization"},
 			// gate on: auth filter lets through, conditions eval to deny => forbidden from admission
 			enabled: expectedOutcome{statusCode: http.StatusInternalServerError, reasonAnnotation: "internal error"},
 		},
@@ -421,7 +421,7 @@ func TestConditionsEnforcerEndToEnd(t *testing.T) {
 			},
 			conditionalAuthzClassifier: classifierAlwaysTrue,
 			// gate off: condMap constructor fail-closes => forbidden
-			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed: tried to return conditional decision to conditions-unaware authorizer"},
+			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed from conditional decision (with possible outcomes [Allow NoOpinion]) to NoOpinion during unconditional authorization"},
 			// gate on: auth filter lets through, conditions eval to allow => update succeeds
 			enabled: expectedOutcome{statusCode: http.StatusOK, updated: true, decisionAnnotation: "allow", reasonAnnotation: "ok"},
 		},
@@ -431,9 +431,9 @@ func TestConditionsEnforcerEndToEnd(t *testing.T) {
 				makeDecision: makeCondMapAllowDecision,
 			},
 			conditionalAuthzClassifier: classifierAlwaysFalse,
-			disabled:                   expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed: tried to return conditional decision to conditions-unaware authorizer"},
+			disabled:                   expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed from conditional decision (with possible outcomes [Allow NoOpinion]) to NoOpinion during unconditional authorization"},
 			// gate on: classifier rejects => forbidden
-			enabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed: tried to return conditional decision to conditions-unaware authorizer"},
+			enabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed from conditional decision (with possible outcomes [Allow NoOpinion]) to NoOpinion during unconditional authorization"},
 		},
 		{
 			name: "conditional allow + classifier nil => forbidden at auth filter",
@@ -441,8 +441,8 @@ func TestConditionsEnforcerEndToEnd(t *testing.T) {
 				makeDecision: makeCondMapAllowDecision,
 			},
 			conditionalAuthzClassifier: nil,
-			disabled:                   expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed: tried to return conditional decision to conditions-unaware authorizer"},
-			enabled:                    expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed: tried to return conditional decision to conditions-unaware authorizer"},
+			disabled:                   expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed from conditional decision (with possible outcomes [Allow NoOpinion]) to NoOpinion during unconditional authorization"},
+			enabled:                    expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed from conditional decision (with possible outcomes [Allow NoOpinion]) to NoOpinion during unconditional authorization"},
 		},
 		{
 			// Exercises the enforcer's invariant check: an allow-only ConditionsMap has
@@ -459,7 +459,7 @@ func TestConditionsEnforcerEndToEnd(t *testing.T) {
 			},
 			conditionalAuthzClassifier: classifierAlwaysTrue,
 			// gate off: condMap constructor fail-closes to NoOpinion (no deny effect) => forbidden at filter
-			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed: tried to return conditional decision to conditions-unaware authorizer"},
+			disabled: expectedOutcome{statusCode: http.StatusForbidden, decisionAnnotation: "forbid", reasonAnnotation: "failed closed from conditional decision (with possible outcomes [Allow NoOpinion]) to NoOpinion during unconditional authorization"},
 			// gate on: auth filter lets through, enforcer's invariant check rejects the
 			// out-of-set Deny and returns InternalError with the "internal error"
 			// audit reason.
