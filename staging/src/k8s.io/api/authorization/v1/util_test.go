@@ -16,6 +16,7 @@ limitations under the License.
 
 package v1
 
+// NOTE: This file MUST be kept in sync with pkg/apis/authorization/util_test.go
 import (
 	"testing"
 
