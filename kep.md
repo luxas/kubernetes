@@ -18,8 +18,8 @@
 - [Proposal](#proposal)
   - [Technical Requirements](#technical-requirements)
   - [Core interface changes](#core-interface-changes)
-  - [Condition and ConditionSet data model](#condition-and-conditionset-data-model)
-  - [Computing a concrete decision from a ConditionSet](#computing-a-concrete-decision-from-a-conditionset)
+  - [Condition and ConditionsMap data model](#condition-and-conditionsmap-data-model)
+  - [Computing a concrete decision from a ConditionsMap](#computing-a-concrete-decision-from-a-conditionsmap)
   - [Computing a concrete decision from a conditional authorization chain](#computing-a-concrete-decision-from-a-conditional-authorization-chain)
   - [<code>AuthorizationConditionsEnforcer</code> admission controller](#authorizationconditionsenforcer-admission-controller)
   - [Changes to <code>(Self)SubjectAccessReview</code>](#changes-to-selfsubjectaccessreview)
@@ -379,7 +379,7 @@ whenever a conditional decision is returned. However, instead of the
 authorizer returning the set of conditions to Kubernetes, one could
 imagine two other methods, as follows:
 
-1. The authorizer does not return a ConditionSet, but relies on Kubernetes to
+1. The authorizer does not return a `ConditionsMap`, but relies on Kubernetes to
    send an `AdmissionReview` to the authorizer whenever a conditional decision
    was made. The authorizer then re-evaluates all policies against the
    AdmissionReview with complete data. This approach has many drawbacks:  
@@ -412,8 +412,8 @@ imagine two other methods, as follows:
       1. With this proposal, a user can see the conditions serialized in the
          `(Self)SubjectAccessReview`. Some of the conditions might be opaque (like
          `policy16`), yes, but at least the user might know where to look next.
-2. The authorizer does not return a ConditionSet, but instead caches the
-   conditions in a memory. The authorizer relies on Kubernetes to generate a
+2. The authorizer does not return a `ConditionsMap`, but instead caches the
+   conditions in memory. The authorizer relies on Kubernetes to generate a
    random “request ID”, which is passed to both `SubjectAccessReview` and
    `AdmissionReview` webhooks, so the authorizer can know which conditions to
    apply to which request.  
@@ -440,42 +440,80 @@ imagine two other methods, as follows:
 
 ### Glossary
 
-- Concrete/Unconditional (authorization) decision: one of `Allow`, `Deny`, `NoOpinion`.
+- Concrete/Unconditional (authorization) decision: one of `Allow`, `Deny`,
+  `NoOpinion`. Represented in Go as the pre-existing `authorizer.Decision` int
+  enum (`DecisionDeny=0`, `DecisionAllow`, `DecisionNoOpinion`), or as a
+  `ConditionsAwareDecision` whose `Type` is `Deny`, `Allow` or `NoOpinion`.
 - Residual: Expression which is a deterministic function of data that was
   unknown during partial evaluation.
-- Conditional Allow: A `Conditional` decision with a `ConditionSet` that has at
-  least one `effect=Allow` condition. In other words, the conditional decision
-  can turn into a concrete `Allow`, `Deny` or `NoOpinion` when evaluated.
-- Conditional Deny: A `Conditional` decision with a `ConditionSet` that has no
-  `effect=Allow` condition, in other words, just `effect=NoOpinion` or
-  `effect=Deny` conditions. When evaluated, this `ConditionSet` can thus only
-  turn into concrete `Deny` or `NoOpinion` decisions.
+- `ConditionsAwareDecision`: The wire and in-process type that represents any
+  decision variant an authorizer can produce. Discriminated by `Type`, with
+  variants `Deny`, `Allow`, `NoOpinion`, `ConditionsMap`, and `Union`. Union
+  nodes contain an ordered list of `NamedConditionsAwareDecision` (one per
+  sub-authorizer). The zero value is `Deny`.
+- `ConditionsMap`: The leaf conditional decision. Holds three ordered slices —
+  `denyConditions`, `noOpinionConditions`, `allowConditions` — where the
+  *effect* of a condition is determined structurally by which slice it lives
+  in (there is no per-`Condition` `Effect` field). A valid `ConditionsMap` has
+  at least one Allow condition *or* at least one Deny condition, and at most
+  128 conditions in total.
+- Conditional Allow: A `ConditionsAwareDecision` whose `PossibleDecisions()`
+  includes `DecisionAllow`. In practice: a `ConditionsMap` with at least one
+  Allow condition, or a `Union` that contains such a `ConditionsMap`
+  reachable before any unconditional Deny.
+- Conditional Deny: A `ConditionsAwareDecision` whose `PossibleDecisions()`
+  is `{DecisionDeny, DecisionNoOpinion}` (no reachable Allow). Typically a
+  `ConditionsMap` with only `denyConditions` and/or `noOpinionConditions`.
 
 ## Proposal
 
 To achieve the above mentioned goals, at a high level, the following changes are
 proposed:
 
-- The `authorizer.Authorizer` interface and `SubjectAccessReview` API are
-   extended to support:
-  - The client indicating it supports conditional authorization
-  - The authorizer returning, in addition to existing unconditional `Allow`,
-    `Deny` or `NoOpinion` decisions, a set of conditions
-- The `WithAuthorization` HTTP filter lets a supported request proceed in the
-  request chain if the decision is:
-  - A unconditional `Allow`, just like before, or
-  - A ConditionSet *which can evaluate* to `Allow`
-- A new, always-on `k8s.io/apiserver`-built-in `AuthorizationConditionsEnforcer`
-  validating admission plugin (ordered before other validating webhooks) which
-  enforces that the set of conditions (if any) evaluate into `Allow`, or denies
-  the request.
-  - To empower out-of-tree/webhook authorizers to evaluate their (opaque)
-    conditions, a new `AuthorizationConditionsReview` API is added.
-  - Any conditional authorizer must serve this API, which means that also
-    `kube-apiserver` must serve it.[^3]
-- A `k8s.io/apiserver`-built-in CEL condition evaluator, which allows evaluating
-  conditions expressed in CEL format to be evaluated in-process without another
-  webhook.
+- The `authorizer.Authorizer` interface is **split** into a downscoped
+  `authorizer.UnconditionalAuthorizer` (the classic `Authorize` method,
+  suitable for legacy callers) and the full `authorizer.Authorizer`
+  interface that additionally exposes `ConditionsAwareAuthorize` and
+  `EvaluateConditions`. Callers that don't need conditions accept
+  `UnconditionalAuthorizer`; conditions-aware call sites (the enforcer plugin,
+  the new HTTP filter, the SAR registry) take the full `Authorizer`.
+- The `SubjectAccessReview` API is extended so:
+  - The client opts in by populating
+    `spec.authorizationOptions.handledDecisionTypes` with the decision types
+    it can consume. Legacy clients pass only
+    `{Allow, Deny, NoOpinion}`; conditions-aware clients also include
+    `ConditionsMap` and `Union`.
+  - The authorizer returns a conditional response in a new
+    `status.conditionalDecision` field (a `*ConditionsAwareDecision`),
+    mutually exclusive with `allowed=true` and `denied=true`. A conditional
+    decision may itself be a `Union` of sub-authorizers' decisions.
+- A new sibling HTTP filter
+  `WithConditionsAwareAuthorization(handler, auth, s, conditionsEnforcerEnabled, classifier)`
+  runs whenever the `ConditionalAuthorization` feature gate is on, the
+  `AuthorizationConditionsEnforcer` admission plugin is enabled *and* a
+  `ConditionalAuthorizationRequestClassifier` is installed. It attaches the
+  authorizer's `ConditionsAwareDecision` to the request context via
+  `request.WithConditionallyAuthorizedDecision`, and lets a conditional-allow
+  request proceed only when the classifier confirms the request path is
+  covered by the enforcer plugin later on. In all other cases it falls back
+  to the legacy `WithAuthorization` filter.
+- An `AuthorizationConditionsEnforcer` validating admission plugin (in
+  `staging/src/k8s.io/apiserver/pkg/admission/plugin/authorizer/conditionsenforcer/`)
+  reads the conditions-aware decision from the request context, calls
+  `authz.EvaluateConditions(ctx, decision, data)` against a versioned
+  admission attributes wrapper, and enforces the resulting `Decision`. It is
+  positioned in the recommended plugin order *after* `MutatingAdmissionWebhook`
+  and *before* `ValidatingAdmissionPolicy`, so it sees the fully-mutated
+  object but runs before validating webhooks.
+- To empower out-of-tree/webhook authorizers to evaluate their (opaque)
+  conditions, a new `AuthorizationConditionsReview` API (v1alpha1) is added.
+  Any conditional authorizer must serve this API — including `kube-apiserver`
+  itself, because it acts as a webhook authorizer for aggregated API
+  servers.[^3]
+- The proposed `k8s.io/apiserver`-built-in CEL condition evaluator is
+  **not yet implemented** in this branch and is tracked as future work; today
+  all condition evaluation of webhook-authored conditions is delegated back
+  to the authorizer via `AuthorizationConditionsReview`.
 
 [^3]: As `kube-apiserver` serves as a webhook authorizer for aggregated API servers.
 
@@ -509,19 +547,24 @@ authorizer back" with the conditions it gave, and the rest of the data.
 ![Conditional Authorization Overview](images/overview.png)
 
 In function syntax, an authorizer is a deterministic function
-`authorize: Metadata x PolicyStore → Decision`. A `ConditionSet`, returned by
-some authorizer, is a map from an authorizer-scoped identifier to a condition.
-With this proposal, the `Decision` logical enum gets a new `Conditional`
-variant, that has a `ConditionSet` associated with it.
+`authorize: Metadata x PolicyStore → ConditionsAwareDecision`. A
+`ConditionsMap`, returned by some authorizer, holds three ordered slices of
+conditions grouped by effect (`denyConditions`, `noOpinionConditions`,
+`allowConditions`), each keyed by an authorizer-scoped `id`. With this
+proposal, the returned decision is modelled as an algebraic type
+`ConditionsAwareDecision` with five variants: `Deny`, `Allow`, `NoOpinion`,
+`ConditionsMap`, and `Union` (an ordered tree of named sub-decisions).
 
-Let `ConditionData` be the term for the data unknown at authorization time
-(request, stored object and request options). A condition is a deterministic
-function `condition: ConditionData → Boolean`. Note that the condition is only
+Let `ConditionsData` be the term for the data unknown at authorization time
+(request, stored object, request options, and other admission-time context).
+A condition is a deterministic function
+`condition: ConditionsData → Boolean`. Note that the condition is only
 a function of the unknown data; already-known data should be constants of the
 condition (see the [partial evaluation section](#what-is-partial-evaluation) for
-an example). A condition also has an *effect*, which controls if evaluation to
-`true` should be treated as producing a `Allow,` `Deny,` or `NoOpinion`
-decision.
+an example). A condition's *effect* — Allow, Deny, or NoOpinion — is expressed
+structurally by which slice of the `ConditionsMap` it lives in (there is no
+`Effect` field on the `Condition` interface itself); it controls whether
+evaluation to `true` produces an Allow, Deny, or NoOpinion decision.
 
 Note that even though the “full” new and old objects are given as inputs to the
 condition in this model, the authorizer is free to choose how much of that API
@@ -529,11 +572,12 @@ surface is exposed to policy authors. Some authorizer might decide to e.g. only
 expose field-selectable fields in the expression model given to the policy
 author.
 
-Evaluating a `ConditionSet` is a deterministic function
-`evaluate: ConditionSet x ConditionData → (Decision - {Conditional})`. Note
-that conditions evaluation *should not* have access to the policy store; this is
-by design, as it makes this two-stage mechanism *atomic*, just like it would
-have been if it could have been evaluated directly.
+Evaluating a `ConditionsMap` is a deterministic function
+`evaluate: ConditionsMap x ConditionsData → Decision`, where `Decision` is one
+of `Allow`, `Deny`, or `NoOpinion`. Note that conditions evaluation *should
+not* have access to the policy store; this is by design, as it makes this
+two-stage mechanism *atomic*, just like it would have been if it could have
+been evaluated directly.
 
 ### Technical Requirements
 
@@ -557,281 +601,380 @@ have been if it could have been evaluated directly.
 
 ### Core interface changes
 
-This KEP proposes to change `authorizer.Decision` to be a struct (as Go does not
-support enums with attached data :/), change the `authorizer.Authorizer` interface
-accordingly, and let the caller signal its conditions-readiness:
+Rather than turning `authorizer.Decision` into a struct with attached data
+(the KEP's original sketch), the implementation keeps the pre-existing
+`Decision int` enum unchanged and introduces a new sibling type,
+`ConditionsAwareDecision`, that carries the conditional variants. The
+`authorizer.Authorizer` interface is split into a downscoped
+`UnconditionalAuthorizer` (for legacy call sites) and the full `Authorizer`.
+This preserves the invariant `Decision{} == DecisionDeny` (via
+`Decision(0) == DecisionDeny`) and lets thousands of legacy call sites keep
+compiling unchanged, while still expressing conditional decisions through
+the new type.
 
 ```go
 package authorizer // k8s.io/apiserver/pkg/authorization/authorizer
 
-// Authorizer makes an authorization decision based on information gained by making
-// zero or more calls to methods of the Attributes interface. It might return
-// an error together with any decision. It is then up to the caller to decide
-// whether that error is critical or not.
+// Decision is the classic unconditional decision enum. Unchanged by this KEP.
+// The zero value is DecisionDeny (see the const block below).
+type Decision int
+
+const (
+    DecisionDeny Decision = iota
+    DecisionAllow
+    DecisionNoOpinion
+)
+
+// UnconditionalAuthorizer is a downscoped variant of Authorizer for callers
+// that don't need conditions (e.g. compound authorization inside subresource
+// registries). It only exposes the classic Authorize method.
+type UnconditionalAuthorizer interface {
+    Authorize(ctx context.Context, a Attributes) (authorized Decision, reason string, err error)
+}
+
+// Authorizer makes an authorization decision based on information gained by
+// making zero or more calls to methods of the Attributes interface. It may
+// return an error together with any decision; it is up to the caller to
+// decide whether that error is critical or not.
 type Authorizer interface {
-    Authorize(ctx context.Context, a Attributes) (Decision, error)
+    UnconditionalAuthorizer
 
-    // All authorizers are required to implement the conditions evaluation method,
-    // even though they just return an error saying "unsupported".
-    // This ensures composite authorizers do not "forget" to implement the
-    // EvaluateConditions method, even if it'd wrap a conditions-aware authorizer
-    ConditionSetEvaluator
+    // ConditionsAwareAuthorize returns an unconditional, conditional, or unioned
+    // decision, where the reason and error are part of the returned struct.
+    //
+    // An authorizer that is not conditions-aware MUST implement this method as:
+    //     return authorizer.ConditionsAwareDecisionFromParts(self.Authorize(ctx, a))
+    // Callers must call only one of Authorize or ConditionsAwareAuthorize per
+    // request — never both.
+    ConditionsAwareAuthorize(ctx context.Context, a Attributes) ConditionsAwareDecision
+
+    // EvaluateConditions evaluates a previously-returned conditional decision
+    // against the previously-unknown data available at admission time. It
+    // must return a concrete Decision (Allow, Deny, or NoOpinion).
+    //
+    // An authorizer that does not support conditions MUST fail closed and
+    // return authorizer.DecisionDeny, "", authorizer.ErrorConditionEvaluationNotSupported.
+    // The context may only be used for timeouts, cancellation, and tracing;
+    // it must not influence the outcome. Only `decision` and `data` may.
+    EvaluateConditions(ctx context.Context, decision ConditionsAwareDecision, data ConditionsData) (authorized Decision, reason string, err error)
 }
 
-type ConditionSetEvaluator interface {
-    // EvaluateConditions evaluates a condition set into
-    // a concrete decision (Allow, Deny, NoOpinion), given full information
-    // about the request (ConditionData, which includes e.g. the old and new objects).
-    // The returned Decision must be concrete.
-    EvaluateConditions(ctx context.Context, conditionSet *ConditionSet, data ConditionData) (Decision, error)
-}
-
-type Attributes interface {
-    // ... everything else as before, plus:
-
-    // ConditionsMode indicates how, if any, the client wants conditions to be returned.
-    ConditionsMode() ConditionsMode
-}
-
-// ConditionsMode specifies the client's request of how conditions should be returned
-// by the authorizer (or not at all). ConditionsMode name TBD.
-type ConditionsMode string
-
-const (
-    // ConditionsModeNone indicates that the client does not support conditions.
-    ConditionsModeNone ConditionsMode = ""
-
-    // ConditionsModeHumanReadable indicates that the client wants a
-    // human-readable condition and description, if possible.
-    ConditionsModeHumanReadable ConditionsMode = "HumanReadable"
-
-    // ConditionsModeOptimized indicates that the client wants an
-    // optimized conditions encoding without description, if possible.
-    ConditionsModeOptimized ConditionsMode = "Optimized"
-)
-
-// Decision constructors
-
-func DecisionAllow(reason string) Decision {}
-func DecisionDeny(reason string) Decision {}
-func DecisionNoOpinion(reason string) Decision {}
-func DecisionConditional(conditionSets *ConditionSet) Decision {}
-
-// ChainedDecisions combines an ordered list of computed decisions of an authorizer
-// chain, and registers a set of lazily-evaluated authorizers in the chain to call
-// in AllConditionSets() or if needed in Evaluate()
-// In case of nested unioned Decisions, the hierarchy is flattened.
-func ChainedDecisions(decision []Decision, authorizerChain ...Authorizer) Decision
-
-// Decision models an enum that can be Allow, Deny, NoOpinion or
-// Conditional([]*ConditionSet, []Authorizer)
-// The Decision struct is passed by value, and the empty struct == Deny.
-type Decision struct {
-    // only private fields
-}
-
-// Replaces the old enum d == authorizer.DecisionAllowed, etc.
-func (d Decision) IsAllowed() bool {}
-func (d Decision) IsDenied() bool {}
-func (d Decision) IsNoOpinion() bool {}
-func (d Decision) IsConditional() bool {}
-
-func (d Decision) IsConcrete() bool {return d.IsAllowed() || d.IsDenied() || d.IsNoOpinion()}
-
-func (d Decision) Reason() string {}
-
-// CanBecomeAllowed returns true if d.IsAllowed() or any ConditionSet can become
-// allowed.
-func (d Decision) CanBecomeAllowed() bool {}
-
-// Evaluate evaluates all ordered ConditionSets of d into a concrete decision.
-//
-// Might be an expensive operation, as authorizers might webhook to evaluate
-// its conditions.
-func (d Decision) Evaluate(ctx context.Context, data ConditionData, builtinConditionSetEvaluators ...BuiltinConditionSetEvaluator) (Decision, error)
-
-// AllConditionSets returns an ordered list of all (including lazily-evaluated)
-// authorizers' decisions, until a concrete decision is reached.
-//
-// Might be an expensive operation, as webhook authorizers might be called.
-func (d Decision) AllConditionSets(ctx context.Context) ([]*ConditionSet, error)
+var ErrorConditionEvaluationNotSupported = errors.New("condition evaluation not supported")
 ```
 
-Instead of `return authorizer.DecisionAllow, "some reason", nil`, all in-tree
-authorizers' return statements need to be rewritten to
-`return authorizer.DecisionAllow("some reason"), nil`. The change is not huge,
-but could be tedious. One good side-effect is that before it was possible to use
-values beyond the enum, e.g. like `return -100, "", nil`, but not anymore.
+`Attributes` is *not* extended with a `ConditionsMode()` method. Instead, the
+client's opt-in signal travels along the request via
+`SubjectAccessReviewSpec.authorizationOptions.handledDecisionTypes` — see
+[Changes to (Self)SubjectAccessReview](#changes-to-selfsubjectaccessreview)
+below. Helpers in
+`staging/src/k8s.io/api/authorization/v1/util.go`
+(`SupportsConditionalAuthorization`, `SupportsUnconditionalAuthorization`,
+`ConditionalAuthorizationDecisionTypes`,
+`UnconditionalAuthorizationDecisionTypes`) tell an authorizer whether the
+client can handle `ConditionsMap`/`Union` responses.
 
-The behavior of the zero value was previously `0 == DecisionDeny`, and is
-preserved as `Decision{} == DecisionDeny("")`.
+`ConditionsAwareDecision` is the algebraic type that carries the return value:
 
-The `authorizer.Attributes` package is augmented with `ConditionsMode`, to let
-the client indicate whether slower-to-execute, human-readable conditions with
-description or optimized (e.g. binary AST) conditions are more important. The
-default is an empty string, which is treated as "the client does not support
-conditions". In this case, an authorizer is advised to return `Deny` if it would
-have returned one or more `effect=Deny` conditions, otherwise the authorizer
-should `NoOpinion`.
+```go
+// ConditionsAwareDecision represents an authorization decision that may be
+// unconditional (Allow/Deny/NoOpinion), a leaf conditional (ConditionsMap),
+// or an ordered tree of sub-authorizer decisions (Union).
+// Immutable after construction; the zero value is Deny.
+type ConditionsAwareDecision struct { /* internal fields only */ }
 
-Evaluating a conditional decision into a concrete one is done using the
-`Evaluate()` method, and this function requires supplying at least all the data
-that was not present earlier, but which authorization policies are allowed to
-use. If the partial evaluation process was done correctly, the condition should
-be a pure function of this data:
+// Constructors for unconditional variants:
+func ConditionsAwareDecisionDeny(reason string, err error) ConditionsAwareDecision
+func ConditionsAwareDecisionAllow(reason string, err error) ConditionsAwareDecision
+func ConditionsAwareDecisionNoOpinion(reason string, err error) ConditionsAwareDecision
+
+// Lift a legacy (Decision, reason, error) triple into the new type. This is
+// what an authorizer that is not conditions-aware calls from its
+// ConditionsAwareAuthorize implementation.
+func ConditionsAwareDecisionFromParts(d Decision, reason string, err error) ConditionsAwareDecision
+
+// Construct a leaf conditional decision (ConditionsMap):
+func ConditionsAwareDecisionConditionsMap(deny, noOpinion, allow []Condition) ConditionsAwareDecision
+
+// Union decisions are built stepwise via a ConditionsAwareDecisionUnion builder,
+// see the "Computing a concrete decision from a conditional authorization
+// chain" section below.
+
+// Variant/predicate accessors:
+func (d ConditionsAwareDecision) IsAllow() bool
+func (d ConditionsAwareDecision) IsDeny() bool
+func (d ConditionsAwareDecision) IsNoOpinion() bool
+func (d ConditionsAwareDecision) IsUnconditional() bool
+func (d ConditionsAwareDecision) IsConditionsMap() bool
+func (d ConditionsAwareDecision) IsUnion() bool
+
+// Content accessors:
+func (d ConditionsAwareDecision) ConditionsMap() ConditionsMap
+func (d ConditionsAwareDecision) UnionedDecisions() iter.Seq2[string, ConditionsAwareDecision]
+func (d ConditionsAwareDecision) Reason() string
+func (d ConditionsAwareDecision) Error() error
+
+// Reasoning helpers:
+//   PossibleDecisions returns the set of concrete Decisions this decision can
+//   evaluate to, given some ConditionsData. For unconditional variants the
+//   set has exactly one element. Never empty.
+func (d ConditionsAwareDecision) PossibleDecisions() sets.Set[Decision]
+
+//   FailureDecision returns the fail-closed unconditional decision to use in
+//   contexts where the conditional decision cannot be honoured — Deny if
+//   PossibleDecisions() contains Deny, else NoOpinion.
+func (d ConditionsAwareDecision) FailureDecision() Decision
+
+//   ContainsUnconditionalAllowOrDeny reports whether any leaf in this
+//   decision tree is an unconditional Allow or Deny (used by the Union
+//   builder to short-circuit further additions).
+func (d ConditionsAwareDecision) ContainsUnconditionalAllowOrDeny() bool
+
+//   UnconditionalParts is the primary bridge back to the classic
+//   (Decision, reason, error) return.
+//   - If expectConditional == true, a still-conditional decision is folded to
+//     FailureDecision() with an explanatory reason (fail-closed).
+//   - If expectConditional == false, a still-conditional decision produces an
+//     error (programmer bug: conditional decision reached a non-conditional
+//     call site).
+func (d ConditionsAwareDecision) UnconditionalParts(expectConditional bool) (Decision, string, error)
+```
+
+Internally, `ConditionsAwareDecision` uses a five-variant enum
+(`Deny`, `Allow`, `NoOpinion`, `ConditionsMap`, `Union`). Legacy callers do
+not need to know about this — they interact through the classic `Decision`
+enum via `Authorize()` and `UnconditionalParts()`.
+
+Evaluating a conditional decision into a concrete one is done by supplying
+the previously-unknown data. Any authorization policy may reference this
+data; if partial evaluation was done correctly, each condition is a pure
+function of it:
 
 ```go
 package authorizer // k8s.io/apiserver/pkg/authorization/authorizer
 
-// TODO: This interface might need to change to something more generic,
-// as e.g. constrained impersonation might use other contextual data 
-// (or we bake that data into GetObject(), or add another field)
-type ConditionData interface {
-    // GetOperation is the operation being performed
-    // TODO: For impersonation requests, we might make this IMPERSONATE, if we want/need.
-    GetOperation() string
-    // GetOperationOptions is the options for the operation being performed
+// ConditionsData represents the data available at admission time against
+// which conditions can be evaluated. By design a subset of admission.Attributes.
+type ConditionsData interface {
+    GetName() string
+    GetNamespace() string
+    GetResource() schema.GroupVersionResource
+    GetSubresource() string
+    GetKind() schema.GroupVersionKind
+    GetOperation() AdmissionOperation
     GetOperationOptions() runtime.Object
-    // GetObject is the object from the incoming request prior to default values
-    // being applied.
-    // Only populated for CREATE and UPDATE requests.
+    IsDryRun() bool
+    // GetObject is the object from the incoming request; only populated for
+    // CREATE and UPDATE requests.
     GetObject() runtime.Object
-    // GetOldObject is the existing object.
-    // Only populated for UPDATE and DELETE requests.
+    // GetOldObject is the existing object in storage; only populated for
+    // UPDATE and DELETE requests.
     GetOldObject() runtime.Object
+    GetUserInfo() user.Info
 }
 ```
 
-### Condition and ConditionSet data model
+The `AdmissionOperation` type is defined in this package (rather than
+imported from `k8s.io/apiserver/pkg/admission`) to avoid an import cycle;
+the string constants match the admission operations (`CREATE`, `UPDATE`,
+`DELETE`, `CONNECT`).
 
-Next, the observant reader noticed that the `ConditionSet` struct was referred
-to above. Next, let's walk through the detailed model of a condition and its
-set:
+### Condition and ConditionsMap data model
+
+The KEP-original `ConditionSet` (a flat list of conditions each carrying an
+`Effect` field) is replaced by `ConditionsMap`, a struct with three ordered
+slices: `denyConditions`, `noOpinionConditions`, and `allowConditions`. The
+effect of a condition is expressed *structurally* — by which slice a
+`Condition` lives in — rather than through a per-condition `Effect` field.
+This keeps each individual `Condition` smaller and makes the deny/noOpinion/
+allow evaluation ladder trivial to walk.
+
+The three effect meanings are unchanged from the KEP's original description:
+
+- **Deny**: If any Deny condition evaluates to true, the `ConditionsMap`
+  necessarily evaluates to Deny. No further authorizers are consulted.
+- **NoOpinion**: If any NoOpinion condition evaluates to true (and no Deny
+  condition did), the `ConditionsMap` evaluates to NoOpinion for this
+  authorizer — later authorizers in the chain can still Allow or Deny. It is
+  effectively a "soft deny" that overrides this authorizer's own Allow
+  conditions but not the union.
+- **Allow**: If any Allow condition evaluates to true (and no Deny/NoOpinion
+  did), the `ConditionsMap` evaluates to Allow.
+
+`Condition` is expressed as an interface, not a struct, so authorizers can
+plug in pre-compiled representations without an extra serialize/parse round
+trip:
 
 ```go
-package authorizer
+package authorizer // k8s.io/apiserver/pkg/authorization/authorizer
 
-// ConditionEffect specifies how a condition evaluating to true should be handled.
-type ConditionEffect string
+// Condition is one authorization condition inside a ConditionsMap. Its
+// effect is determined by which slice of the ConditionsMap it lives in.
+// A Condition must be immutable and thread-safe.
+type Condition interface {
+    // GetID uniquely identifies the condition within the ConditionsMap.
+    // Validated as a domain-qualified Kubernetes label key
+    // (e.g. "acme.io/no-pod-exec"). Any *.k8s.io or *.kubernetes.io domain
+    // is reserved for Kubernetes.
+    GetID() string
 
-const (
-    // If any Deny condition evaluates to true, the ConditionSet 
-    // necessarily evaluates to Deny. No further authorizers 
-    // are consulted.
-    ConditionEffectDeny ConditionEffect = "Deny"
-    // If a NoOpinion condition evaluates to true, the given 
-    // authorizer's ConditionSet cannot evaluate to Allow anymore, but 
-    // necessarily Deny or NoOpinion, depending on whether there are any
-    // true EffectDeny conditions. 
-    // However, later authorizers in the chain can still Allow or Deny.
-    // It is effectively a softer deny that just overrides the 
-    // authorizer's own allow policies. It can be used if an authorizer  
-    // does not consider itself or the principal authoritative for a given request.
-    // TODO: Talk about error handling; what happens if any of these 
-    // conditions fail to evaluate.
-    ConditionEffectNoOpinion ConditionEffect = "NoOpinion"
-    // If an Allow condition evaluates to true, the ConditionSet evaluates
-    // to Allow, unless any Deny/NoOpinion condition also evaluates to 
-    // true (in which case the Deny/NoOpinion conditions have precedence).
-    ConditionEffectAllow ConditionEffect = "Allow"
-)
+    // GetType describes the condition's encoding (e.g. "acme.io/opaque",
+    // or a future built-in like "k8s.io/authorization-cel"). Validated as a
+    // domain-qualified label key. Optional if the authorizer can identify
+    // the condition by ID alone.
+    GetType() string
 
-// A condition to be evaluated
-type Condition struct {
-    // An alphanumeric string, validated as a Kubernetes label, that is
-    // (<DNS1123 subdomain>/)[-A-Za-z0-9_.]{1,63}.
-    // Users must not use IDs with the 'k8s.io/' prefix.
-    // Uniquely identifies the condition within the scope of the
-    // authorizer that authored the condition. Acts as a key for a 
-    // slice of conditions, such that it can be used as a map. 
-    // The FailureMode of the ConditionalAuthorizer determines how to
-    // handle invalid ID values.
-    // Used for error messages, e.g.
-    // "condition 'company.com/no-pod-exec' denied the request"
-    ID string
-    // An opaque string that represents the condition that should be
-    // evaluated. A condition is evaluated after mutation.
-    // A pure, deterministic function from ConditionData to a Boolean.
-    // Might or might not be human-readable (could e.g. be 
-    // base64-encoded), but max 1024 bytes.
-    // The FailureMode of the ConditionalAuthorizer determines how to
-    // handle too long Condition values.
-    // TODO: we could consider supporting also byte-encoded data using a
-    // mutually-exclusive ConditionBytes field, for more efficient
-    // AST encoding and execution of e.g. CEL conditions.
-    Condition string
-    // How should the condition evaluating to "true" be treated.
-    // The FailureMode of the ConditionalAuthorizer determines how to
-    // handle unknown Effect values.
-    Effect ConditionEffect
+    // GetCondition returns the condition body: a pure, deterministic function
+    // from ConditionsData to a Boolean, encoded as a string. May be opaque
+    // or human-readable; the API caps it at 10240 bytes (MaxConditionBytes).
+    GetCondition() string
 
-    // Optional human-friendly description that can be shown as an error 
-    // message or for debugging.
+    // GetDescription is an optional human-friendly description shown in
+    // errors and for debugging. The API caps it at 1024 bytes.
+    GetDescription() string
+
+    // Evaluate lets an authorizer with a pre-compiled representation evaluate
+    // this Condition directly (avoiding a parse round trip). If evaluation
+    // is not possible in this process — e.g. the Condition has been
+    // deserialised as an opaque payload — Evaluate may return
+    // ConditionsEvaluationResultUnevaluatable, in which case the caller
+    // falls back to ConditionsMap.Evaluate's EvaluateConditionFunc.
+    Evaluate(ctx context.Context, data ConditionsData) ConditionEvaluationResult
+}
+
+// GenericCondition is the reference struct implementation, used by
+// authorizers that carry conditions as (id, type, string body, description)
+// tuples and evaluate them from the string body.
+type GenericCondition struct {
+    ID          string
+    Condition   string
+    Type        string
     Description string
-
-    // TODO: Do we need per-condition failure modes? Most likely not initially.
+    // Optional; if nil, the condition is treated as Unevaluatable and the
+    // caller's EvaluateConditionFunc is used instead.
+    EvaluateFunc func(ctx context.Context, data ConditionsData) ConditionEvaluationResult
 }
-
-// ConditionSet represents a conditional response from an authorizer.
-// TODO: Decide on a maximum amount of conditions?
-type ConditionSet struct {
-    // private fields only, must be constructed through a constructor
-
-    // Some authorizers that are later in the chain than an authorizer that
-    // returned a conditional response, might return unconditional responses.
-    // Capture this in the ConditionSet.
-    // Mutually exclusive with set
-    unconditionalDecision *Decision
-    // Private field so constructor function can validate the conditions before
-    // adding them to the set.
-    set []Condition
-}
-
-// The format/encoding/language the conditions in this set.
-// Any type starting with `k8s.io/` is reserved for Kubernetes
-// condition types to be added in the future.
-// An authorizer must be able to evaluate any conditions it authors.
-// Validated as a label key, i.e. an alphanumeric string with an
-// optional DNS1123 subdomain prefix, and a key name of max 63 chars.
-// The FailureMode of the ConditionalAuthorizer determines how to
-// handle invalid Type values.
-func (c *ConditionSet) Type() string {}
 ```
 
-### Computing a concrete decision from a ConditionSet
+`ConditionEvaluationResult` (in `evaluate.go`) is a small algebraic type with
+four states — True, False, Error, Unevaluatable — where the Unevaluatable
+state is the addition that makes partial evaluation composable:
 
-How should a `ConditionSetEvaluator` evaluate the conditions in the given set? The
-process is two-fold:
+```go
+type ConditionEvaluationResult struct { /* internal */ }
 
-1. Evaluate each condition function to a boolean value, or error  
-2. Compute the individual truth values of the conditions, along with their
-   desired effect into an aggregate, concrete decision
-   (`Allow`/`Deny`/`NoOpinion`) at the authorizer level, according to the following
-   logic:
+func ConditionEvaluationResultBoolean(v bool) ConditionEvaluationResult
+func ConditionEvaluationResultError(err error) ConditionEvaluationResult
+func ConditionsEvaluationResultUnevaluatable() ConditionEvaluationResult
 
-If there is at least one condition with `effect=Deny` that evaluates to true,
-return `Deny`.
+func (r ConditionEvaluationResult) IsTrue() bool
+func (r ConditionEvaluationResult) IsFalse() bool
+func (r ConditionEvaluationResult) IsError() bool
+func (r ConditionEvaluationResult) IsUnevaluatable() bool
+func (r ConditionEvaluationResult) Error() error
+```
 
-If there is at least one condition with `effect=Deny` that evaluates to an
-error, return an error. The FailureMode of the ConditionalAuthorizer controls
-whether to treat the error as decision `Deny` or `NoOpinion`.
+`ConditionsMap` itself:
 
-Otherwise, it is known that all `effect=Deny` conditions evaluate to false.
-Then, if there is at least one condition with `effect=NoOpinion` that evaluates
-to true, return `NoOpinion`.
+```go
+// ConditionsMap is a conditional decision leaf. It must contain at least one
+// Allow condition OR at least one Deny condition (a map that could only
+// evaluate to NoOpinion is useless), and at most 128 conditions in total.
+type ConditionsMap struct {
+    // Private slices, populated only via ConditionsAwareDecisionConditionsMap.
+    // Iterated in order via DenyConditions(), NoOpinionConditions(),
+    // AllowConditions() (each returning iter.Seq[Condition]).
+}
 
-If there is at least one condition with `effect=NoOpinion` that evaluates to an
-error, return `NoOpinion` to fail closed (as if the condition evaluated to true)
-along with the error for logging/diagnostics.
+const (
+    MaxConditionsPerMap          = 128
+    MaxConditionBytes            = 10240 // GetCondition body upper bound
+    MaxConditionDescriptionBytes = 1024
+)
 
-Otherwise, it is known that all `effect=NoOpinion` conditions evaluate to false.
-Then, if there is at least one condition with `effect=Allow` that evaluates to
-true, return `Allow`.
+// PossibleDecisions returns the concrete outcomes this map can evaluate to,
+// e.g. {Allow, NoOpinion} for a map with only Allow conditions, or
+// {Deny, NoOpinion} for a map with only Deny/NoOpinion conditions.
+func (c ConditionsMap) PossibleDecisions() sets.Set[Decision]
 
-Any `effect=Allow` condition that evaluates to an error is ignored. If no
-`effect=Allow` condition evaluates to true, return `NoOpinion`.
+// FailureDecision returns Deny if this map's PossibleDecisions() contain
+// Deny, else NoOpinion. Used as the fail-closed folding target.
+func (c ConditionsMap) FailureDecision() Decision
 
-![How a decision is computed from an evaluated ConditionSet](images/conditionset-evaluation.png)
+// Evaluate walks the deny/noOpinion/allow ladder against `data`, using
+// evaluateConditionFn for any Condition whose native Evaluate returned
+// Unevaluatable. It always returns a concrete Decision.
+func (c ConditionsMap) Evaluate(ctx context.Context, data ConditionsData, evaluateConditionFn EvaluateConditionFunc) (Decision, string, error)
+```
+
+**Validation.** The wire-level `Condition` and `ConditionsMap` types in
+`staging/src/k8s.io/api/authorization/v1/types.go` are subject to the
+following validation (from
+`staging/src/k8s.io/apiserver/pkg/apis/authorization/validation/validation.go`):
+
+- `Condition.ID` and `Condition.Type` must be **domain-qualified label keys**
+  of the form `<domain>/<key>` (e.g. `acme.io/no-pod-exec`), enforced by
+  `validateDomainPrefixSeparator`. Any `*.k8s.io` or `*.kubernetes.io` domain
+  is reserved for Kubernetes.
+- `Condition.Condition` is capped at 10240 bytes; `Condition.Description` at
+  1024 bytes.
+- Each of `ConditionsMap.denyConditions`, `noOpinionConditions`, and
+  `allowConditions` is validated as `listType=map` on `id` with
+  `maxItems=128`.
+- Within a `Union` decision, each `NamedConditionsAwareDecision.authorizerName`
+  must be a DNS-1123 subdomain and unique within that union.
+- The SAR-level `spec.authorizationOptions` and `status.conditionalDecision`
+  fields are behind `+featureGate=ConditionalAuthorization` and forbidden
+  when the gate is off.
+
+### Computing a concrete decision from a ConditionsMap
+
+Evaluating a `ConditionsMap` is done by `ConditionsMap.Evaluate(ctx, data, evalFn)`
+in `staging/src/k8s.io/apiserver/pkg/authorization/authorizer/evaluate.go`. It
+takes an `EvaluateConditionFunc`, used to concretely evaluate any `Condition`
+whose native `Evaluate` returned `Unevaluatable`:
+
+```go
+type EvaluateConditionFunc      func(ctx context.Context, condition Condition, data ConditionsData) (bool, error)
+type MaybeEvaluateConditionFunc func(ctx context.Context, condition Condition, data ConditionsData) ConditionEvaluationResult
+```
+
+`ConditionsMap.Evaluate` always returns a concrete `Decision`. Its partial
+sibling, `PartiallyEvaluateConditionsAwareDecision(ctx, decision, data, maybeEvalFn)`
+(see the next section), takes a `MaybeEvaluateConditionFunc` and may leave
+still-Unevaluatable conditions in place, returning a
+`ConditionsAwareDecision` that is partially reduced. In practice:
+
+- The admission-time enforcer uses `ConditionsMap.Evaluate` (via
+  `authz.EvaluateConditions`) — it wants a final answer.
+- A future built-in CEL evaluator, chained in front of the authorizer, would
+  use `PartiallyEvaluateConditionsAwareDecision` to try to evaluate what it
+  can in-process and only webhook back to the authorizer for the residue.
+
+The deny/noOpinion/allow ladder itself is unchanged:
+
+1. Evaluate each condition to True, False, Error, or Unevaluatable.
+2. Aggregate:
+
+If there is at least one Deny condition that evaluates to true, return `Deny`.
+
+If there is at least one Deny condition that evaluates to an error, return
+`Deny` and surface the error (fail closed).
+
+Otherwise, all Deny conditions evaluate to false. If there is at least one
+NoOpinion condition that evaluates to true, return `NoOpinion`.
+
+If there is at least one NoOpinion condition that evaluates to an error,
+return `NoOpinion` (as if the condition evaluated to true) along with the
+error for logging/diagnostics.
+
+Otherwise, all NoOpinion conditions evaluate to false. If there is at least
+one Allow condition that evaluates to true, return `Allow`.
+
+Any Allow condition that evaluates to an error is ignored (it merely fails to
+contribute to the Allow disjunction). If no Allow condition evaluates to
+true, return `NoOpinion`.
+
+![How a decision is computed from an evaluated ConditionsMap](images/conditionset-evaluation.png)
 
 One quite tricky technical detail about partial evaluation is the
 short-circuiting of e.g. the common `&&` and `||` operators, especially with
@@ -840,22 +983,23 @@ However, `<residual> && false` can either be `false` or `<error>`, if evaluating
 `<residual>` can produce an error. Thus are the `&&` and `||` operators **not**
 commutative.
 
-The authorizer contract is such that the authorizer *should* only return a set
-of conditions that *could* evaluate to `Allow`. Returning a set of conditions
-that always evaluate to `NoOpinion` or `Deny` is a waste of resources.
-Concretely, the authorizer should not return conditions of form
-`<residual> && false` with `Allow` effect, as such conditions are either `false`
-or `<error>` and thus never contribute to an `Allow` decision. However, the same
-pruning cannot be done for `effect=Deny` or `effect=NoOpinion` conditions, as an
-evaluation error would trigger fail-closed short circuiting to `Deny` or `NoOpinion`.
+The authorizer contract is such that the authorizer *should* only return a
+`ConditionsMap` that *could* evaluate to `Allow`. Returning a `ConditionsMap`
+that can only evaluate to `NoOpinion` or `Deny` is a waste of resources.
+Concretely, the authorizer should not put conditions of form
+`<residual> && false` in `allowConditions`, as such conditions are either
+`false` or `<error>` and thus never contribute to an `Allow` decision.
+However, the same pruning cannot be done for `denyConditions` or
+`noOpinionConditions`, as an evaluation error would trigger fail-closed
+short-circuiting to `Deny` or `NoOpinion`.
 
 ### Computing a concrete decision from a conditional authorization chain
 
-It is now known how to evaluate a *single* `ConditionSet` together with the
-`ConditionData` into a single, aggregate concrete decision, the
-same decision that the authorizer would have immediately returned, if it had
-direct access to the `ConditionData`. Next, we discuss the semantics of
-multiple authorizers chained after each other (i.e. the
+It is now known how to evaluate a *single* `ConditionsMap` together with the
+`ConditionsData` into a single, aggregate concrete decision, the same decision
+that the authorizer would have immediately returned, if it had direct access
+to the `ConditionsData`. Next, we discuss the semantics of multiple
+authorizers chained after each other (i.e. the
 [union](https://pkg.go.dev/k8s.io/apiserver/pkg/authorization/union)
 authorizer), in the light of conditional authorization.
 
@@ -868,93 +1012,174 @@ needed. A chain with the decision prefix `NoOpinion, …, NoOpinion, Allow` stil
 short-circuits and returns a concrete `Allow`. Vice versa for a chain with the
 prefix `NoOpinion, …, NoOpinion, Deny` => `Deny`.
 
-A `ConditionSet` with at least one `effect=Allow` condition is considered a
+A `ConditionsMap` with at least one Allow condition is considered a
 "conditional allow". The union authorizer short-circuits when seeing such a
-decision in a "lazy" way, as now the request *can become allowed*. Crucially,
-however, the rest of the authorizer chain (that was not yet considered) must be
-saved in the Decision for later, lazy evaluation, in case the conditional allow
+decision — the request *can become allowed*. Crucially, however, the rest of
+the authorizer chain (that was not yet considered) must be saved in the
+returned decision for later, lazy evaluation, in case the conditional allow
 would evaluate into a `NoOpinion`.
 
-The `WithAuthorization` HTTP filter makes sure that the current request supports
-conditional authorization, and that the decision can become allowed (that is,
-the decision is a concrete or conditional allow) before proceeding. The returned
-`Decision` is propagated using the context to the validating admission phase,
-just like `UserInfo` and `RequestInfo` are today. The HTTP filter signature is
-augmented with a function that determines whether the request supports
-conditions or not:
+**The union authorizer.** Chain semantics are modelled as a tree rather than
+a flat list: the `Union` variant of `ConditionsAwareDecision` holds an
+ordered `[]NamedConditionsAwareDecision`, where each leaf is a `Deny`,
+`Allow`, `NoOpinion`, or `ConditionsMap` decision. The tree is built
+stepwise via the `ConditionsAwareDecisionUnion` builder in
+`staging/src/k8s.io/apiserver/pkg/authorization/authorizer/conditionsunion.go`:
 
 ```go
-func WithAuthorization(hhandler http.Handler, auth authorizer.Authorizer, s runtime.NegotiatedSerializer, supportsAuthorizationsConditions func(ctx context.Context))
+type ConditionsAwareDecisionUnion struct { /* internal */ }
+
+// Add appends a named sub-authorizer's decision to the union. Validates
+// authorizerName (DNS-1123 subdomain, unique within the union). If any
+// previously-added decision already contains an unconditional Allow or Deny
+// leaf, further Add calls are ignored — the chain has already committed.
+func (b *ConditionsAwareDecisionUnion) Add(authorizerName string, d ConditionsAwareDecision)
+
+// ToDecision finalises the builder. If the tree collapses to a single
+// unconditional outcome, returns that unconditional decision; otherwise
+// returns a Union-variant ConditionsAwareDecision.
+func (b *ConditionsAwareDecisionUnion) ToDecision() ConditionsAwareDecision
 ```
 
-If an authorizer returns a conditional response for a request that does not
-support conditions (such as `list` requests, for now), `WithAuthorization` fails
-closed. The function ensures that there is always a "safety net" behind the
-authorization filter, if the request is let to proceed. Aggregated API servers
-that use the `WithAuthorization` function can themselves choose when conditions
-are applicable. Initially, the `kube-apiserver` supports conditional responses
-for the following classes of requests:
+The union authorizer's Go implementation lives in
+`staging/src/k8s.io/apiserver/pkg/authorization/union/union.go`; its
+`ConditionsAwareAuthorize` walks the chain, feeding each sub-decision into a
+`ConditionsAwareDecisionUnion`. `PossibleDecisions` on a Union is the union
+of its sub-decisions' possible outcomes (removing `NoOpinion` if any leaf can
+Allow or Deny unconditionally). `FailureDecision` returns `DecisionDeny` if
+any leaf could Deny, else `DecisionNoOpinion`.
 
-- When verb is `create`, `update`, `delete` or `deletecollection`, the API
-  object is served by the same API server, and the GVR doesn't contain
-  wildcards.
-- When the request maps to a `Connect` handler instead of normal CRUD.
-  - Without the `supportsAuthorizationsConditions` function, `WithAuthorization`
-    has no way to know that `get pods/exec` is actually covered by admission,
-    and thus safe to authorize conditionally.
-  - Note that other `get` requests are not necessarily covered by admission
-    (`get pods/log` is a counterexample)
-- When the request belongs to an API group that is served by an aggregated API server.
-  - Warning: Any aggregated API server **MUST** use `kube-apiserver` as its
-    first authorizer; any other behavior is unsafe and with undefined behavior.
-  - When the aggregated API server uses the `kube-apiserver` (acting as an
-    authenticating front proxy) as its first webhook authorizer, the
-    `kube-apiserver` will return the applicable conditions (if any) to the
-    aggregated API server.
+**Two HTTP filters.** Rather than augmenting the signature of
+`WithAuthorization`, the implementation adds a *sibling* filter
+`WithConditionsAwareAuthorization` in
+`staging/src/k8s.io/apiserver/pkg/endpoints/filters/authorization.go`:
 
-However, if no `effect=Allow` condition is present in a returned `ConditionSet`,
-the decision is considered like a "conditional deny". In this case, later
+```go
+// Legacy — unchanged.
+func WithAuthorization(
+    hhandler http.Handler,
+    auth authorizer.UnconditionalAuthorizer,
+    s runtime.NegotiatedSerializer,
+) http.Handler
+
+// New — engaged when the ConditionalAuthorization feature gate is on AND the
+// AuthorizationConditionsEnforcer admission plugin is enabled AND a
+// classifier is provided. Falls back to WithAuthorization otherwise.
+func WithConditionsAwareAuthorization(
+    hhandler http.Handler,
+    auth authorizer.Authorizer,
+    s runtime.NegotiatedSerializer,
+    conditionsEnforcerEnabled bool,
+    conditionalAuthzClassifier ConditionalAuthorizationRequestClassifier,
+) http.Handler
+
+// ConditionalAuthorizationRequestClassifier returns true if a request with
+// the given attributes supports conditional authorization. It MUST guarantee
+// that some conditions enforcement runs later in the request handler chain
+// (in practice, that the AuthorizationConditionsEnforcer admission plugin
+// will fire for this request).
+type ConditionalAuthorizationRequestClassifier func(attrs authorizer.Attributes) bool
+```
+
+When engaged, `WithConditionsAwareAuthorization`:
+
+1. Calls `auth.ConditionsAwareAuthorize(ctx, attrs)` if the classifier
+   returned true; otherwise lifts the classic
+   `Authorize` result via `ConditionsAwareDecisionFromParts`. Either way, a
+   `ConditionsAwareDecision` is available.
+2. Attaches the decision to the context along with the `Authorizer` that
+   produced it, via
+   `request.WithConditionallyAuthorizedDecision(ctx, authz, d)` (see
+   `staging/src/k8s.io/apiserver/pkg/endpoints/request/context.go`). The
+   admission enforcer plugin later reads this back with
+   `request.ConditionallyAuthorizedDecisionFrom(ctx)`.
+3. Lets the request proceed if the decision `IsAllow()` (unconditional Allow)
+   or if `PossibleDecisions().Has(DecisionAllow)` (conditional allow). In the
+   latter case it adds an audit annotation
+   `authorization.k8s.io/is-conditional-decision=true`.
+4. Otherwise returns 403 with the reason from the decision, or 500 if the
+   decision carried an error.
+
+Note: even when the classifier returns false, the filter still attaches the
+(unconditional) decision to context. The enforcer plugin then observes the
+decision and short-circuits (since it's already unconditional), keeping the
+control flow uniform across classifier=true and classifier=false paths.
+
+**The classifier's predicate in `kube-apiserver`.** The classifier is
+provided by `pkg/controlplane/apiserver/config.go`
+(`conditionalRequestClassifier`), and wired onto
+`server.Config.Authorization.ConditionalAuthorizationRequestClassifier`
+whenever the feature gate is on (see
+`staging/src/k8s.io/apiserver/pkg/server/config.go`). The current predicate
+accepts requests where:
+
+- `verb ∈ {create, update, patch, delete, deletecollection}`;
+- the resource, API group, and API version are all concrete (not `*` or empty);
+- the GroupResource is not in the admission `exclusion.Excluded()` set.
+
+TODO markers in the classifier note that connect requests (accessed via HTTP
+`GET`) and requests for aggregated-API-server-owned groups are not yet
+routed through the conditions-aware filter — they are follow-up items.
+
+**Conditional deny vs conditional allow.** If no Allow condition is present
+in a returned `ConditionsMap`, the decision is a "conditional deny": later
 authorizers need to be consulted to find out if this request can become
-authorized. If a later authorizer returns a concrete `Deny`, clearly the request
-cannot become allowed; it is either conditionally or concretely denied.[^5] However,
-if a later authorizer returns a concrete `Allow`, the request is conditionally
-allowed; if the deny conditions in the beginning all evaluate to `false`, that
-first authorizer would have returned `NoOpinion`, and the next authorizer then
-returns a concrete `Allow`.
+authorized. If a later authorizer returns a concrete `Deny`, the request
+cannot become allowed; it is either conditionally or concretely denied.[^5]
+If a later authorizer returns a concrete `Allow`, the request is
+conditionally allowed; if the deny conditions in the beginning all evaluate
+to `false`, that first authorizer would have returned `NoOpinion`, and the
+next authorizer's concrete `Allow` stands.
 
 [^5]: Note: As we fold `ConditionalDeny + Deny` into Deny directly, the audit log just
 tells that one of the authorizers (in this case, the latter) denied it, not
 necessarily the first one.
 
 The DRA AdminAccess feature is a good example of a feature that could be
-modelled as an authorizer in the beginning of the chain that returns `NoOpinion`
-for most requests, but conditional denies for some requests (namely, creates and
-updates of `ResourceClaim(Template)s`). In contrast to using
-`ValidatingAdmissionPolicy` for that purpose, an authorizer does not need to
-allow for its policies to be deleted. In contrast to the existing DRA
-AdminAccess implementation at the storage layer, the condition shows up in
-`SubjectAccessReviews`.
+modelled as an authorizer in the beginning of the chain that returns
+`NoOpinion` for most requests, but conditional denies for some requests
+(namely, creates and updates of `ResourceClaim(Template)s`). In contrast to
+using `ValidatingAdmissionPolicy` for that purpose, an authorizer does not
+need to allow for its policies to be deleted. In contrast to the existing
+DRA AdminAccess implementation at the storage layer, the condition shows up
+in `SubjectAccessReviews`.
 
-What is proposed in this KEP is thus **lazy evaluation**, that allows a request
-to proceed to admission whenever a conditional allow is seen at authorization
-time, and the rest of the chain is lazily evaluated only if needed (if the
-previous authorizer evaluated to a concrete `NoOpinion`).
+**Lazy evaluation.** What is proposed in this KEP is thus **lazy
+evaluation**, that allows a request to proceed to admission whenever a
+conditional allow is seen at authorization time, and the rest of the chain
+is lazily evaluated only if needed (if the previous authorizer evaluated to
+a concrete `NoOpinion`). The union builder above enforces this: once a
+conditional-allow leaf has been added, subsequent authorizers are only
+consulted at evaluation time.
 
 Another considered alternative is the eager variant, that would call each
 authorizer in the chain already in the authorization stage, until a concrete
-`Allow` or `Deny` is reached. However, this approach might be wasteful and call
-later authorizers, whose response is never considered in the evaluation phase in
-admission. Thus is the lazy approach proposed.
+`Allow` or `Deny` is reached. However, this approach might be wasteful and
+call later authorizers, whose response is never considered in the evaluation
+phase in admission. Thus is the lazy approach proposed. Note that when
+aggregated API servers ask `kube-apiserver` for a `SubjectAccessReview`, the
+evaluation is necessarily eager (the whole chain must be walked once, so its
+result can be serialised) — this is acceptable and only affects cross-process
+evaluation.
+
+**Partial evaluation.** The top-level
+`PartiallyEvaluateConditionsAwareDecision(ctx, decision, data, maybeEvalFn)`
+function (in `evaluate.go`) walks the decision DAG depth-first: unconditional
+Allow/Deny leaves short-circuit, and the walk stops at the first
+still-conditional leaf that `maybeEvalFn` can't reduce (later leaves are
+left untouched). This is the intended entry point for a future in-process
+CEL evaluator that reduces what it can and defers the rest to
+`Authorizer.EvaluateConditions`.
 
 ![How conditions are propagated in the API server request chain](images/request-conditions-flow.png)
 
 A high-level picture of the request flow with conditional authorization. The
 chain of authorizer decisions can be lazily evaluated, such that the third
-authorizer in the picture is not evaluated directly in the authorization stage,
-as already the second one might yield an Allow. However, in admission, if the
-second authorizer ends up evaluating to `NoOpinion`, the third authorizer is
-evaluated (and in this example evaluates first to a conditional allow, then
-concrete `Allow`).
+authorizer in the picture is not evaluated directly in the authorization
+stage, as already the second one might yield an Allow. However, in admission,
+if the second authorizer ends up evaluating to `NoOpinion`, the third
+authorizer is evaluated (and in this example evaluates first to a conditional
+allow, then concrete `Allow`).
 
 A diagram to summarize what the request chain looks like:
 
@@ -962,258 +1187,346 @@ A diagram to summarize what the request chain looks like:
 
 ### `AuthorizationConditionsEnforcer` admission controller
 
-Whenever the `ConditionalAuthorization` feature gate is enabled in the API
-server, there is an `AuthorizationConditionsEnforcer` validating admission
-controller whose job it is to evaluate the conditions, and enforce the decision
-that the condition set evaluated to. If the `ConditionalAuthorization` feature
-gate is enabled, but the user disables the `AuthorizationConditionsEnforcer`
-admission controller, `k8s.io/apiserver` options validation errors, and thus
-won't the API server start in this setting. This is critical, as there must not
-be a case where the feature would be enabled, but there would be no enforcement.
+The `AuthorizationConditionsEnforcer` validating admission plugin
+(`staging/src/k8s.io/apiserver/pkg/admission/plugin/authorizer/conditionsenforcer/`)
+evaluates the conditions attached to the request at authorization time and
+enforces the resulting concrete `Decision`. It operates on the
+fully-mutated request object, and is positioned in the recommended plugin
+order **after** `MutatingAdmissionWebhook` and **before**
+`ValidatingAdmissionPolicy` (`RecommendedPluginOrder` in
+`staging/src/k8s.io/apiserver/pkg/server/options/admission.go`). This gives
+it the fully-mutated object while still allowing it to short-circuit before
+any validating webhooks fire.
 
-The validating admission controller operates on a fully-mutated request object
-just like other validating admission controllers, by design.
+**Feature-gate + plugin-flag coupling.** The current implementation does
+*not* hard-error on the "gate on, plugin off" configuration. Instead, the
+enablement of the conditions-aware code path is *conjunctive*:
 
-It is proposed that the `AuthorizationConditionsEnforcer` is the first
-validating admission plugin to run; such that e.g. no validating webhooks need
-to execute unnecessarily.
+1. `pkg/kubeapiserver/options/plugins.go` registers
+   `AuthorizationConditionsEnforcer` in `AllOrderedPlugins`, and in
+   `DefaultOffAdmissionPlugins` (it only becomes active when the feature
+   gate is enabled — see the plugin's `Handles` gate on
+   `genericfeatures.ConditionalAuthorization`).
+2. `AdmissionOptions.ApplyTo` records the fact of the plugin being enabled:
+   ```go
+   c.Authorization.ConditionsEnforcerPluginEnabled =
+       slices.Contains(pluginNames, conditionsenforcer.PluginName)
+   ```
+3. `server.Config.DefaultBuildHandlerChain` chooses between the two filters:
+   ```go
+   if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization)
+       && c.Authorization.ConditionsEnforcerPluginEnabled {
+       handler = genericapifilters.WithConditionsAwareAuthorization(handler,
+           c.Authorization.Authorizer, c.Serializer,
+           c.Authorization.ConditionsEnforcerPluginEnabled,
+           c.Authorization.ConditionalAuthorizationRequestClassifier)
+   } else {
+       handler = genericapifilters.WithAuthorization(handler, /* ... */)
+   }
+   ```
+
+The result: if the operator turns on the feature gate but does not enable
+the plugin, the API server silently degrades to the legacy filter — no
+conditional decisions are ever produced, so there is nothing to enforce.
+This is safe but *silent*; a future hardening (proposed as a follow-up) is
+to make `AdmissionOptions.Validate` error out on this misconfiguration so
+the API server refuses to start.
+
+**Plugin logic.** On `Validate`, the plugin:
+
+1. Reads the request-scoped conditional decision via
+   `request.ConditionallyAuthorizedDecisionFrom(ctx)`. If none is present or
+   the decision is already unconditional, the plugin returns `nil`
+   immediately.
+2. Constructs a `ConditionsData`-shaped view of the admission attributes
+   using `versioned_attrs.go`, converting `Object` and `OldObject` to the
+   authorizer's requested GVK.
+3. Calls `authz.EvaluateConditions(ctx, decision, data)` — where `authz` is
+   the exact `Authorizer` that produced the decision, propagated via the
+   context alongside the decision itself. This ensures that the *same*
+   authorizer that authored the conditions is asked to evaluate them.
+4. Validates that the returned concrete decision is within
+   `decision.PossibleDecisions()`; enforces the outcome (`DecisionAllow` →
+   pass; `DecisionDeny`/`DecisionNoOpinion` → return a `Forbidden` admission
+   error carrying the reason).
 
 ### Changes to `(Self)SubjectAccessReview`
 
-One of the core goals of this KEP is to make it easier also for users subject to
-authorization policies that span authorization and admission understand what
-policies they are subject to. This in practice means that the conditions should
-be shown in `(Self)SubjectAccessReview` (SAR) responses, as is logical when the
-authorizer response area grows. However, there are some details to pay attention
-to:
+One of the core goals of this KEP is to make it easier for users subject to
+authorization policies that span authorization and admission to understand
+what policies they are subject to. This in practice means that the
+conditional decision should be shown in `(Self)SubjectAccessReview` (SAR)
+responses. Two details drive the shape:
 
-- The same request might be subject to multiple conditional authorizers in the
-  authorizer chain. Consider a chain of two authorizers both returning a
-  `Conditional` decision. The first authorizer's returned `ConditionSet` will have
-  precedence over the second, and thus cannot be merged into one. Instead, the
-  `SubjectAccessReview` response must retain the ordering of the two
-  `ConditionSets`, so the user can reason about them.  
-- Consider a two-authorizer chain, where the first returns a `Conditional`
-  decision, and the second `Allow`. As the `Conditional` response could evaluate
-  to `Deny` (if that there are `effect=Deny` conditions), the structure must be
-  able to model both conditional and concrete decisions.
+- The same request might be subject to multiple conditional authorizers in
+  the authorizer chain. Consider a chain of two authorizers both returning a
+  conditional decision. The first authorizer's returned `ConditionsMap` has
+  precedence over the second, so they cannot be merged; the response must
+  retain their order.
+- Consider a two-authorizer chain, where the first returns a conditional
+  decision and the second returns `Allow`. Since the conditional response
+  could evaluate to `Deny` (if there are Deny conditions), the response
+  structure must be able to model both conditional and concrete decisions
+  interleaved.
 
-The `SubjectAccessReviewStatus` API is thus augmented with the following field and
-types:
+Both requirements are met by carrying a single `*ConditionsAwareDecision` on
+`status`. Its `Union` variant covers the multi-authorizer chain case; leaf
+variants cover the "just one authorizer's `ConditionsMap`" and unconditional
+cases uniformly.
+
+The `SubjectAccessReviewStatus` API is thus augmented as follows (the actual
+Go types are in
+`staging/src/k8s.io/api/authorization/v1/types.go`):
 
 ```go
 type SubjectAccessReviewStatus struct {
-    // ... Allowed, Denied, Reason and EvaluationError here as normal
+    // Allowed is required. True if the action would be allowed, false otherwise.
+    // Mutually exclusive with Denied=true and ConditionalDecision != nil.
+    Allowed bool `json:"allowed"`
 
-    // ConditionSetChain is an ordered list of condition sets, where every item
-    // of the list represents one authorizer's ConditionSet response.
-    // When evaluating the conditions, the first condition set must be evaluated
-    // as a whole first, and only if that condition set
-    // evaluates to NoOpinion, can the subsequent condition sets be evaluated.
-    //
-    // When ConditionSetChain is non-null, Allowed and Denied must be false.
-    //
-    // +optional
-    // +listType=atomic
-    ConditionSetChain []SubjectAccessReviewConditionSet `json:"conditionSetChain,omitempty"`
-}
-
-type SubjectAccessReviewConditionSet struct {
-    // Allowed specifies whether this condition set is unconditionally allowed.
-    // Mutually exclusive with Denied, Conditions, and ConditionSetChain.
-    Allowed bool `json:"allowed,omitempty"`
-    // Denied specifies whether this condition set is unconditionally denied.
-    // Mutually exclusive with Allowed, Conditions, and ConditionSetChain.
+    // Denied is optional. True if the action would be denied, otherwise false.
+    // If Allowed, Denied, and ConditionalDecision are all zero, the authorizer
+    // returned NoOpinion. (Previously v1beta1-only; now promoted to v1.)
+    // Mutually exclusive with Allowed=true and ConditionalDecision != nil.
     Denied bool `json:"denied,omitempty"`
 
-    // FailureMode specifies the failure mode for this condition set.
-    // Only relevant if the conditions are non-null.
-    FailureMode string `json:"failureMode,omitempty"`
+    // Reason indicates why a request was allowed or denied.
+    Reason string `json:"reason,omitempty"`
+    // EvaluationError indicates that some error occurred during the
+    // authorization check.
+    EvaluationError string `json:"evaluationError,omitempty"`
 
-    // AuthorizerName specifies the authorizer name, unique within the server,
-    // that authored these conditions. This is used by kube-apiserver to correlate
-    // conditions that need to be evaluated through the AuthorizationConditionsReview API.
-    AuthorizerName string `json:"authorizerName"`
-
-    // ConditionsType describes the type of all conditions in the Conditions slice.
-    // It does not apply at all to nested conditions in ConditionSetChain.
+    // ConditionalDecision carries the authorizer's conditional decision.
+    // Mutually exclusive with Allowed=true and Denied=true. In practice the
+    // top-level Type is expected to be ConditionsMap or Union; the
+    // Allow/Deny/NoOpinion variants are representable but redundant with the
+    // Allowed/Denied booleans above.
     //
-    // Mutually exclusive with Allowed, Denied, and ConditionSetChain.
-    ConditionsType string `json:"authorizerName,omitempty"`
-
-    // Conditions is an unordered set of conditions that should be evaluated
-    // against admission attributes, to determine
-    // whether this authorizer allows the request.
-    //
-    // Mutually exclusive with Allowed, Denied, and ConditionSetChain.
-    //
-    // +listType=map
-    // +listMapKey=id
-    // +optional
-    Conditions []SubjectAccessReviewCondition `json:"conditions,omitempty"`
-
-    // ConditionSetChain is an ordered list of condition sets, where every item
-    // of the list represents one authorizer's ConditionSet response.
-    // When evaluating the conditions, the first condition set must be evaluated
-    // as a whole first, and only if that condition set
-    // evaluates to NoOpinion, can the subsequent condition sets be evaluated.
-    //
-    // This field is used by composite authorizers, such as the kube-apiserver,
-    // that in turn delegate their decisions to other sub-authorizers.
-    //
-    // Mutually exclusive with Allowed, Denied, and Conditions.
+    // Requires the ConditionalAuthorization feature gate to be enabled;
+    // forbidden when the gate is off.
     //
     // +optional
-    // +listType=atomic
-    ConditionSetChain []SubjectAccessReviewConditionSet `json:"conditionSetChain,omitempty"`
+    // +featureGate=ConditionalAuthorization
+    ConditionalDecision *ConditionsAwareDecision `json:"conditionalDecision,omitempty"`
 }
 
-type SubjectAccessReviewCondition struct {
-    ID string                                       `json:"id"`
-    Effect      SubjectAccessReviewConditionEffect  `json:"effect"`
-    Condition   string                              `json:"condition"`
-    Description string                              `json:"description,omitempty"`
-}
-
-type SubjectAccessReviewConditionEffect string
+// ConditionsAwareDecisionType is the discriminator for ConditionsAwareDecision.
+type ConditionsAwareDecisionType string
 
 const (
-    SubjectAccessReviewConditionEffectAllow     SubjectAccessReviewConditionEffect = "Allow"
-    SubjectAccessReviewConditionEffectDeny      SubjectAccessReviewConditionEffect = "Deny"
-    SubjectAccessReviewConditionEffectNoOpinion SubjectAccessReviewConditionEffect = "NoOpinion"
+    ConditionsAwareDecisionTypeDeny          ConditionsAwareDecisionType = "Deny"
+    ConditionsAwareDecisionTypeAllow         ConditionsAwareDecisionType = "Allow"
+    ConditionsAwareDecisionTypeNoOpinion     ConditionsAwareDecisionType = "NoOpinion"
+    ConditionsAwareDecisionTypeConditionsMap ConditionsAwareDecisionType = "ConditionsMap"
+    ConditionsAwareDecisionTypeUnion         ConditionsAwareDecisionType = "Union"
 )
+
+// ConditionsAwareDecision is a discriminated union: exactly the field named
+// by Type is set. Union nodes form an ordered tree; all other Types are
+// leaves. During evaluation, the tree is walked depth-first until an
+// unconditional Allow/Deny is reached.
+type ConditionsAwareDecision struct {
+    // Discriminator.
+    // +required
+    Type ConditionsAwareDecisionType `json:"type"`
+
+    Deny          *UnconditionalDecision           `json:"deny,omitempty"`
+    NoOpinion     *UnconditionalDecision           `json:"noOpinion,omitempty"`
+    Allow         *UnconditionalDecision           `json:"allow,omitempty"`
+    ConditionsMap *ConditionsMap                   `json:"conditionsMap,omitempty"`
+
+    // Union has at least one element when Type=="Union". listMap on authorizerName.
+    Union []NamedConditionsAwareDecision `json:"union,omitempty"`
+}
+
+// NamedConditionsAwareDecision associates a sub-authorizer's decision with its
+// stable name, so kube-apiserver can correlate conditions back to the
+// authorizer that authored them.
+type NamedConditionsAwareDecision struct {
+    // AuthorizerName is the unique-within-the-union stable name of the
+    // sub-authorizer. Validated as a k8s-long-name (DNS-1123 subdomain).
+    // +required
+    AuthorizerName string                  `json:"authorizerName"`
+    // +required
+    Decision       ConditionsAwareDecision `json:"decision"`
+}
+
+// UnconditionalDecision carries the (reason, evaluationError) tuple for the
+// Deny / NoOpinion / Allow variants of ConditionsAwareDecision.
+type UnconditionalDecision struct {
+    Reason          string `json:"reason,omitempty"`
+    EvaluationError string `json:"evaluationError,omitempty"`
+}
+
+// ConditionsMap is a conditional decision leaf.
+// Must have at least one Allow condition OR one Deny condition. At most 128
+// conditions total across the three slices. Each slice is a listMap on `id`.
+type ConditionsMap struct {
+    DenyConditions      []Condition `json:"denyConditions,omitempty"`
+    NoOpinionConditions []Condition `json:"noOpinionConditions,omitempty"`
+    AllowConditions     []Condition `json:"allowConditions,omitempty"`
+}
+
+// Condition is one authorization condition. Note the absence of an `Effect`
+// field — the effect is determined by which slice of ConditionsMap the
+// condition lives in.
+type Condition struct {
+    // ID is a domain-qualified label key (e.g. "acme.io/no-pod-exec"),
+    // unique within the ConditionsMap.
+    // +required
+    ID          string `json:"id"`
+    // Condition body, at most 10240 bytes. Encoding is described by Type.
+    Condition   string `json:"condition,omitempty"`
+    // Type is a domain-qualified label key describing the condition encoding.
+    // Optional; can be omitted if the authorizer already knows how to
+    // evaluate the condition by ID.
+    Type        string `json:"type,omitempty"`
+    // Description is a human-friendly, optional string, at most 1024 bytes.
+    Description string `json:"description,omitempty"`
+}
 ```
 
-`Status.ConditionSetChain` is mutually exclusive with `Status.Allowed` and
-`Status.Denied`. A conditional response is characterized by
-`Status.ConditionSetChain != null`. Old implementers that do not recognize
-`Status.ConditionSetChain` will just safely assume it was a `NoOpinion`.
+A conditional response is characterised by `Status.ConditionalDecision != nil`.
+Old clients that do not recognise this field observe `Allowed=false` and
+`Denied=false` and correctly treat the response as a `NoOpinion` — the
+authorizer must fold back to `FailureDecision()` for these clients (see the
+`HandledDecisionTypes` opt-in below).
 
-The `spec` field is augmented to add the `ConditionsMode`, as described above:
+The `spec` field is augmented with an `AuthorizationOptions` block that
+lets the caller advertise which decision types it can consume:
 
 ```go
 type SubjectAccessReviewSpec struct {
-    // ConditionalAuthorization specifies caller-specified configuration related
-    // to conditional authorization. If unset, conditions are not supported.
-    ConditionalAuthorization *ConditionalAuthorizationConfiguration `json:"conditionalAuthorization,omitempty"`
+    // ... resourceAttributes / nonResourceAttributes / user / groups / extra / uid
+    // as before, plus:
 
-    // ... other field as usual.
+    // Requires the ConditionalAuthorization feature gate to be enabled;
+    // forbidden when the gate is off.
+    // +optional
+    // +featureGate=ConditionalAuthorization
+    AuthorizationOptions *AuthorizationOptions `json:"authorizationOptions,omitempty"`
 }
 
-// ConditionalAuthorizationConfiguration is its own struct/field, to allow
-// possible future expansion of caller-provided knobs (e.g. for version skew).
-type ConditionalAuthorizationConfiguration struct {
-    // Mode describes
-    // a) if the caller supports or wants conditions to be returned, and
-    // b) if supported, how (preferably) conditions should be returned.
-    // To indicate no support for conditional authorization, leave this field empty.
-    // An authorizer must never return conditions when this field is empty.
-    // However, respecting the caller's wish of presentation mode="HumanReadable"
-    // or "Optimized" is voluntary for the authorizer.
-    Mode ConditionsMode `json:"mode,omitempty"`
+type SelfSubjectAccessReviewSpec struct {
+    // ... resourceAttributes / nonResourceAttributes as before, plus:
+    // (same field, same semantics)
+    // +optional
+    // +featureGate=ConditionalAuthorization
+    AuthorizationOptions *AuthorizationOptions `json:"authorizationOptions,omitempty"`
+}
+
+// AuthorizationOptions carries client-specified options about how the
+// authorizer should respond.
+type AuthorizationOptions struct {
+    // HandledDecisionTypes specifies which ConditionsAwareDecisionType values
+    // the caller can consume in this context. Currently valid combinations:
+    //   - {Allow, Deny, NoOpinion}              (conditions-unaware caller)
+    //   - {Allow, Deny, NoOpinion, ConditionsMap, Union} (conditions-aware)
+    // If the authorizer would return a decision type the caller cannot
+    // handle, it MUST fold to ConditionsAwareDecision.FailureDecision()
+    // (Deny if any Deny conditions were present, else NoOpinion).
+    // Set semantics; order does not matter. All clients must handle the
+    // conditions-unaware subset.
+    // +listType=set
+    // +required
+    HandledDecisionTypes []ConditionsAwareDecisionType `json:"handledDecisionTypes"`
 }
 ```
 
+Helpers in `staging/src/k8s.io/api/authorization/v1/util.go`
+(`SupportsConditionalAuthorization`, `SupportsUnconditionalAuthorization`,
+`ConditionalAuthorizationDecisionTypes`,
+`UnconditionalAuthorizationDecisionTypes`) let authorizers cheaply check
+what a caller supports.
+
+Design note: the KEP originally proposed a `ConditionsMode`
+(`""`/`HumanReadable`/`Optimized`) field that let the caller ask for a
+particular encoding format. That was replaced by `HandledDecisionTypes`
+during implementation — it turned out that the meaningful contract between
+client and authorizer was "can you consume conditional decision types at
+all?", not "which serialisation flavour do you prefer?". Presentation
+formatting concerns (if any) can be added as separate `AuthorizationOptions`
+fields later without changing the enum semantics.
+
 ### Supporting webhooks through the `AuthorizationConditionsReview` API
 
-The webhook authorizer is augmented to support webhooks returning an ordered
-list (chain) of authorizer decisions, not just one decision. Supporting multiple
-returned decisions is required e.g. by aggregated API servers, that consult
-`kube-apiserver` as a webhook, which in turn can return more than one
-conditional decision. Note that aggregate API servers' evaluation is thus always
-in practice eager (not lazy). This is considered acceptable though.
+The webhook authorizer needs a way to be called back at admission time to
+evaluate the conditions it previously returned in a `SubjectAccessReview`.
+This is done through a new `AuthorizationConditionsReview` (ACR) API in
+`authorization.k8s.io/v1alpha1`. Because `kube-apiserver` acts as a webhook
+authorizer for aggregated API servers, `kube-apiserver` also serves this
+API. ACR requests are not themselves subject to admission in
+`kube-apiserver`.
 
-How should the webhook authorizer evaluate potentially opaque conditions? Unless
-the API server can evaluate the conditions returned by the webhook natively,
-another webhook needs to be made. To facilitate this, a new
-`AuthorizationConditionsReview` API, very similar to `AdmissionReview` is added.
-Because `kube-apiserver` acts as a webhook server, `kube-apiserver` must also
-serve this API. The `AuthorizationConditionsReview` API implementation is not
-subject to admission in `kube-apiserver`. A sketch of the new API is as follows:
+The ACR API carries the exact `ConditionsAwareDecision` the authorizer
+returned previously — no bespoke chain field. Correlation between the SAR
+that produced the conditions and the ACR that evaluates them is done by
+sending the very same `Decision` back to the authorizer:
 
 ```go
+// staging/src/k8s.io/api/authorization/v1alpha1/types.go
+
 // AuthorizationConditionsReview describes a request to evaluate authorization conditions.
 type AuthorizationConditionsReview struct {
-    metav1.TypeMeta `json:",inline"`
-    // Request describes the attributes for the authorization conditions request.
+    metav1.TypeMeta   `json:",inline"`
+    // ObjectMeta must be an empty struct.
+    metav1.ObjectMeta `json:"metadata,omitempty"`
     // +optional
-    Request *AuthorizationConditionsRequest `json:"request,omitempty"`
-    // Response describes the attributes for the authorization conditions response.
+    Request  *AuthorizationConditionsRequest  `json:"request,omitempty"`
     // +optional
     Response *AuthorizationConditionsResponse `json:"response,omitempty"`
 }
 
 // AuthorizationConditionsRequest describes the authorization conditions request.
 type AuthorizationConditionsRequest struct {
-    // TODO: Do we want UID like AdmissionReview here? I guess we don't need it.
+    // Decision is the exact ConditionsAwareDecision the authorizer previously
+    // returned in SubjectAccessReviewStatus.ConditionalDecision. If it is a
+    // Union, only sub-decisions relevant to this authorizer are included
+    // (kube-apiserver, as a composite authorizer, filters the union to
+    // sub-authorizers that use this ACR endpoint before forwarding).
+    // +required
+    Decision authorizationv1.ConditionsAwareDecision `json:"decision"`
 
-    // ConditionSetChain is an ordered list of condition sets, where every item
-    // of the list represents one authorizer's ConditionSet response.
-    // When evaluating the conditions, the first condition set must be evaluated
-    // as a whole first, and only if that condition set
-    // evaluates to NoOpinion, can the subsequent condition sets be evaluated.
-    //
-    // Composite authorizers (such as the kube-apiserver), which delegate their
-    // decisions to other sub-authorizers, might return a ConditionSetChain in
-    // SubjectAccessReview. That ConditionSetChain must be sent back unmodified
-    // by the client in this field.
-    //
-    // This list contains exactly one element for non-composite authorizers,
-    // which returned a simple list of their own conditions in SubjectAccessReview.
-    //
+    // AdmissionRequest carries the object, oldObject, operation, options,
+    // dryRun flag, and userInfo the authorizer will evaluate its conditions
+    // against — the ConditionsData subset needed at admission time. The
+    // AdmissionRequest shape is reused from admission.k8s.io/v1 to avoid
+    // duplicating well-tested types.
     // +optional
-    // +listType=atomic
-    ConditionSetChain []SubjectAccessReviewConditionSet `json:"conditionSetChain,omitempty"`
-
-    // All fields present in the ConditionData interface, not exhaustively listed
-    // in this KEP for brevity.
+    AdmissionRequest *admissionv1.AdmissionRequest `json:"admissionRequest,omitempty"`
 }
 
 // AuthorizationConditionsResponse describes an authorization conditions response.
 type AuthorizationConditionsResponse struct {
-    // TODO: Do we want UID like AdmissionReview here? I guess we don't need it.
+    // UID must be copied verbatim from the request. The server generates a
+    // fresh UUID per outbound ACR request and verifies it on the response
+    // before trusting the returned decision.
+    // +required
+    UID types.UID `json:"uid"`
 
-    // Allowed indicates whether or not the request is authorized according to
-    // the authorization conditions.
-    // Mutually exclusive with Denied.
-    // Allowed=false and Denied=false means that the authorizer has no NoOpinion on the request.
-    Allowed bool `json:"allowed"`
-
-    // Denied indicates whether or not the request is denied according to the authorization conditions.
-    // Mutually exclusive with Allowed.
-    // Allowed=false and Denied=false means that the authorizer has no NoOpinion on the request.
-    Denied bool `json:"denied,omitempty"`
-
-    // Reason describes a reason for the concrete decision
-    Reason string `json:"reason,omitempty"`
-
-    // EvaluationError describes a possible error that happened during evaluation.
-    EvaluationError string `json:"evaluationError,omitempty"`
-
-    // ConditionSetChain is an ordered list of condition sets, where every item
-    // of the list represents one authorizer's ConditionSet response.
-    // When evaluating the conditions, the first condition set must be evaluated
-    // as a whole first, and only if that condition set
-    // evaluates to NoOpinion, can the subsequent condition sets be evaluated.
-    //
-    // In order to support constrained impersonation that is also conditional
-    // on the object, evaluating a ConditionSet might yield another ConditionSet.
-    //
-    // When ConditionSetChain is non-null, Allowed and Denied must be false.
-    //
-    // +optional
-    // +listType=atomic
-    ConditionSetChain []SubjectAccessReviewConditionSet `json:"conditionSetChain,omitempty"`
-
-    // TODO: Add AuditAnnotations and/or Warnings as in AdmissionReview?
+    // Decision is the authorizer's decision after seeing the request data.
+    // In practice this is expected to be unconditional (Allow/Deny/NoOpinion)
+    // — the whole point of ACR is to reduce the previously-conditional
+    // decision to a concrete one — but the type allows any variant. For
+    // example, an object-scoped constrained-impersonation authorizer could
+    // return a follow-up ConditionsMap (future work).
+    // +required
+    Decision authorizationv1.ConditionsAwareDecision `json:"decision"`
 }
 ```
 
-In the aggregated API server case, there is automatic configuration to evaluate
-the conditions through a
-`POST /apis/authorization.k8s.io/v1alpha1/admissionconditionsreviews`.
-User-configured webhooks supply the URL to call the evaluation endpoint through
-a dedicated context in the supplied kubeconfig:
+The webhook authorizer implementation in
+`staging/src/k8s.io/apiserver/plugin/pkg/authorizer/webhook/webhook.go`
+handles the client side: `ConditionsAwareAuthorize` sends a SAR that lists
+its supported `handledDecisionTypes`; `EvaluateConditions` sends an ACR
+carrying the returned `Decision` plus an `AdmissionRequest` synthesised
+from the `ConditionsData`. It generates a fresh UUID per ACR request and
+rejects responses whose `UID` doesn't match.
+
+**Configuration.** Webhook authorizers opt into ACR support through an
+optional `conditionsReview` block on `WebhookConfiguration` (in
+`staging/src/k8s.io/apiserver/pkg/apis/apiserver/types.go`,
+`WebhookConfiguration.ConditionsReview`):
 
 ```yaml
 apiVersion: apiserver.config.k8s.io/v1
@@ -1222,37 +1535,46 @@ authorizers:
  - type: Webhook
    name: webhook
    webhook:
-    # New: Encode the endpoint for resolving the conditions as a KubeConfig 
-    # context. If unset, conditional authorization is not supported.
-    # The authentication info and service hostname can be the same, but most 
-    # likely the HTTP endpoint of the authorizer service is different.
-    # The authorizer MUST support evaluating any condition type it returns
-    # in the SubjectAccessReview.
-    conditionsEndpointKubeConfigContext: authorization-conditions
-    # New: What version of the AuthorizationConditionsReview to use.
-    # This field has no default.
-    authorizationConditionsReviewVersion: v1alpha1
-    # Existing struct, pointer to KubeConfig file where the context exists
+    # Existing SAR wiring
+    subjectAccessReviewVersion: v1
     connectionInfo:
       type: KubeConfigFile
       kubeConfigFile: /kube-system-authz-webhook.yaml
+
+    # New: Enables conditional authorization support for this webhook. If
+    # unset, the webhook will only be called for classic (unconditional)
+    # SubjectAccessReview requests.
+    conditionsReview:
+      # Required. The AuthorizationConditionsReview API version to send.
+      version: v1alpha1
+      # Optional. The kubeconfig context to use for ACR calls. If unset,
+      # ACR calls reuse the same URL as SAR calls (the caller distinguishes
+      # by TypeMeta).
+      kubeConfigContextName: authorization-conditions
 ```
 
-Finally, recall that the webhook authorizer by default caches requests. Any
-authorizer that utilizes caching, must also cache all conditions of the
-`Conditional` decision. If that advice is followed, evaluation is always done
-against a specific revision of the authorizers' underlying policy store, without
-the authorizer needing to implement snapshot reads.
+The reload/config plumbing lives in `pkg/kubeapiserver/authorizer/reload.go`,
+which loads the `conditionsReview` context (if any) into an
+`authorizationConditionsReviewer` REST client on the `WebhookAuthorizer`.
 
-If Kubernetes supports evaluating the conditions in-process with a builtin
-ConditionsEvaluator, e.g. the proposed CEL one, a
-`AuthorizationConditionsReview` webhook is not needed, as per the following
-table:
+Finally, recall that the webhook authorizer by default caches responses.
+Any authorizer that caches SAR responses must also cache the returned
+`ConditionsAwareDecision`, so that a follow-up ACR at admission time sees
+the same decision (and thus the same policy-store snapshot) that produced
+it in the first place.
+
+If Kubernetes supports evaluating some or all conditions in-process with a
+built-in condition evaluator, the ACR webhook may become unnecessary. The
+implementation currently ships **no** such built-in evaluator (see the
+"Built-in CEL conditions evaluator" section) — every conditional decision
+today round-trips to the authorizer via ACR. The intended future shape is
+summarised by:
 
 | Webhooks during phase: | Authorization response not cached | Authorization response cached |
 | :---- | :---- | :---- |
-| Condition Type Not Supported by Builtin Condition Evaluators | Authorize() + EvaluateConditions() | EvaluateConditions() |
-| Condition Type Supported | Authorize() | Neither |
+| Condition Type Not Supported by Builtin Condition Evaluators | `ConditionsAwareAuthorize()` + `EvaluateConditions()` (ACR) | `EvaluateConditions()` (ACR) |
+| Condition Type Supported by Builtin Evaluator | `ConditionsAwareAuthorize()` | Neither |
+| **Today (no built-in evaluator)** | `ConditionsAwareAuthorize()` + `EvaluateConditions()` (ACR) | `EvaluateConditions()` (ACR) |
 
 ### Composite / Union Authorizer Support
 
@@ -1268,407 +1590,469 @@ in the authorizer call chain, this is supported. Consider the following example:
 1. The aggregated API server, as per our contract, must be configured with the
    `kube-apiserver` as its first webhook authorizer, and thus sends a
    `SubjectAccessReview` to it.
-1. `kube-apiserver` in turn is configured with a webhook authorizer `foo`, to
-   which it sends another `SubjectAccessReview`. `foo` responds with two
-   ConditionSets (each ConditionSet which maps to an authorizer-internal concept
-   of "tiers", modelled as a composite authorizer of two smaller authorizers:
-   `system` and `user`). The response is:
+1. `kube-apiserver` in turn is configured with a webhook authorizer `foo`,
+   to which it sends another `SubjectAccessReview`. `foo` is internally a
+   composite authorizer over two sub-authorizers (`system` and `user`), so
+   it responds with a `Union` decision whose two children are
+   `ConditionsMap` decisions:
 
    ```yaml
    kind: SubjectAccessReview
    status:
      allowed: false
-     conditionSetChain:
-     - authorizerName: system
-       # Supported by both the kube-apiserver and the aggregated API server
-       conditionsType: k8s.io/cel
-       conditions:
-       - id: foo-system-1
-         effect: Deny
-         condition: <something>
-     - authorizerName: user
-       conditionsType: foo-opaque-type
-       conditions:
-       - id: foo-user-1
-         effect: NoOpinion
-         condition: <something>
-       - id: foo-user-2
-         effect: Allow
-         condition: <something>
-   ```
-
-1. Although it is at this stage known that the request can be authorized (if the
-   `Deny` and `NoOpinion` conditions are false, and the `Allow` condition is true),
-   the evaluation of the authorizer chain proceeds eagerly until an
-   unconditional response is found, or the end of the chain is reached. (See
-   [this](#computing-a-concrete-decision-from-a-conditionset) section for a
-   comparison of eager and lazy evaluation, lazy evaluation is only available
-   when the authorizer resides in the same process as the request)
-1. Thus, `kube-apiserver` performs a webhook to authorizer `bar`, which responds
-   with one ConditionSet of one `effect=Allow` condition.
-
-   ```yaml
-   kind: SubjectAccessReview
-   status:
-     allowed: false
-     conditionSetChain:
-     - authorizerName: whatever
-       # Supported by both the kube-apiserver and the aggregated API server
-       conditionsType: k8s.io/cel
-       conditions:
-       - id: bar-1
-         effect: Allow
-         condition: <something>
-   ```
-
-1. As `bar` also responded with a conditional allow, the authorizer queries next
-   the Node authorizer, which responds with `NoOpinion`, and finally, the RBAC
-   authorizer responds with `NoOpinion`.
-1. If an unconditional response would have been found, `kube-apiserver` would
-   have been able to soundly short-circuit the evaluation. Now it reached the
-   end of the authorizer chain, and thus returned the following aggregated
-   response to the aggregated API server is:
-
-   ```yaml
-   kind: SubjectAccessReview
-   status:
-     allowed: false
-     conditionSetChain:
-     - authorizerName: foo
-       conditionSetChain: # nested composite authorizer
+     conditionalDecision:
+       type: Union
+       union:
        - authorizerName: system
-         conditionsType: k8s.io/cel
-         conditions:
-         - id: foo-system-1
-           effect: Deny
-           condition: <something>
+         decision:
+           type: ConditionsMap
+           conditionsMap:
+             denyConditions:
+             - id: foo/system-1
+               # Supported by both the kube-apiserver and the aggregated API server
+               type: k8s.io/authorization-cel
+               condition: <something>
        - authorizerName: user
-         conditionsType: foo-opaque-type
-         conditions:
-         - id: foo-user-1
-           effect: NoOpinion
-           condition: <something>
-         - id: foo-user-2
-           effect: Allow
-           condition: <something>
-     - authorizerName: bar # authorizer name in kube-apiserver, "whatever" was ignored.
-       conditionsType: k8s.io/cel
-       conditions:
-       - id: bar-1
-         effect: Allow
-         condition: <something>
-     # node authorizer ignored, as it responded NoOpinion
-     # - authorizerName: node
-     #  denied: true # unconditional deny
-     # rbac authorizer ignored, as it responded NoOpinion
-     # if it would have answered Allow, it would have been communicated as:
-     # - authorizerName: rbac
-     #  allowed: true # unconditional allow
+         decision:
+           type: ConditionsMap
+           conditionsMap:
+             noOpinionConditions:
+             - id: foo/user-1
+               type: foo.example.com/opaque
+               condition: <something>
+             allowConditions:
+             - id: foo/user-2
+               type: foo.example.com/opaque
+               condition: <something>
    ```
 
-1. The aggregated API server sees that given this aggregate conditional response
-   from `kube-apiserver`, the request can become authorized, if certain
-   conditions are met, so it saves the conditions in the request context, and
-   proceeds with the request.
-1. Next, the `AuthorizationConditionsEnforcer` admission controller enforces
-   that the conditions hold. It walks the ConditionSets from top to bottom.
-   First up is the `foo` authorizer's `system` ConditionSet, which uses the
-   condition type `k8s.io/cel` which is supported by the aggregated API server.
-   Evaluation of the `foo-system-1` condition is thus directly done against the
-   object, which yields `false`, in other words, the Deny condition does not
-   apply, and thus can the evaluation proceed.
-1. The `foo` authorizer's `user` ConditionSet uses the opaque condition type
-   `foo-opaque-type` which cannot readily be evaluated by the aggregated API
-   server, and thus does the aggregated API server send the following request to
-   `kube-apiserver`:
-
-   ```yaml
-   kind: AuthorizationConditionsReview
-   spec:
-     conditionSetChain:
-     - authorizerName: foo
-       conditionSetChain:
-       # The "system" ConditionSet was already evaluated to NoOpinion,
-       # and is thus omitted
-       - authorizerName: user
-         conditionsType: foo-opaque-type
-         conditions:
-         - id: foo-user-1
-           effect: NoOpinion
-           condition: <something>
-         - id: foo-user-2
-           effect: Allow
-           condition: <something>
-     - authorizerName: bar
-       conditionsType: k8s.io/cel
-       conditions:
-       - id: bar-1
-         effect: Allow
-         condition: <something>
-     object: {} # request object
-     # ... + other metadata
-   ```
-
-1. `kube-apiserver` can correlate what authorizer authored what condition
-   through the `authorizerName` field, and thus calls the `foo` authorizer's
-   `EvaluateConditions` method. In the webhook authorizer case, this yields
-   another webhook to the foo authorizer:
-
-   ```yaml
-   kind: AuthorizationConditionsReview
-   spec:
-     conditionSetChain:
-     # The "system" ConditionSet was already evaluated to NoOpinion,
-       # and is thus omitted
-     - authorizerName: user
-       conditionsType: foo-opaque-type
-       conditions:
-       - id: foo-user-1
-         effect: NoOpinion
-         condition: <something>
-       - id: foo-user-2
-         effect: Allow
-         condition: <something>
-     object: {} # request object
-     # ... + other metadata
-   ```
-
-1. Authorizer `foo` authorizer responds with a `NoOpinion`, as both the
-   `foo-user-1` and `foo-user-2` conditions evaluated to `false`:
-
-   ```yaml
-   kind: AuthorizationConditionsReview
-   spec: {}
-   status:
-     allowed: false
-     denied: false
-   ```
-
-1. Next, `kube-apiserver` evaluates the ConditionSet from `bar`. These
-   conditions are of the built-in CEL condition type, so the `kube-apiserver`
-   tries to directly evaluate them. However, the condition used a CEL function
-   `cidr`, which was introduced in, say v1.37, and `kube-apiserver` is of v1.36.
-   As the "fast-path" of in-tree evaluation failed, the `kube-apiserver` falls
-   back to webhook evaluation and sends this to authorizer `bar`:
-
-   ```yaml
-   kind: AuthorizationConditionsReview
-   spec:
-     conditionSetChain:
-     - authorizerName: bar
-       conditionsType: k8s.io/cel
-       conditions:
-       - id: bar-1
-         effect: Allow
-         condition: <something>
-     object: {} # request object
-     # ... + other metadata
-   ```
-
-1. The `bar` authorizer who built a CEL condition using the `cidr` function,
-   naturally also has a CEL environment that is capable of evaluating it, which
-   means that evaluation succeeds. The result is again `false` (so that we can
-   illustrate the whole end-to-end flow), which means the ConditionSet as a
-   whole evaluates to `NoOpinion`, in the same way as `foo`.
-1. As both the ConditionSet of `foo` and `bar` evaluated to `NoOpinion`, does
-   the `kube-apiserver` also return `NoOpinion` to the aggregated API server.
-1. As evaluation of the aggregated API server's first authorizer's conditional
-   allow turned out to be `NoOpinion`, evaluation of the other authorizers in
-   the chain is lazily resumed.
-1. Thus, is the `Authorize` method on the RBAC authorizer called. Say it also
-   returns `NoOpinion`.
-1. Finally, `Authorize` on webhook `baz` is called, which sends a
-   `SubjectAccessReview` to `baz`. Say the response is the following:
+1. Although it is at this stage known that the request can be authorized (if
+   the Deny and NoOpinion conditions evaluate to false and the Allow
+   condition evaluates to true), evaluation of the authorizer chain proceeds
+   eagerly until an unconditional response is found or the end of the chain
+   is reached. Lazy evaluation is only available when the authorizer resides
+   in the same process as the request; when a webhook returns a conditional
+   decision, `kube-apiserver` must serialise the *entire* remaining chain
+   into the outbound SAR response.
+1. Thus, `kube-apiserver` performs a webhook to authorizer `bar`, which
+   responds with a `ConditionsMap` with one Allow condition:
 
    ```yaml
    kind: SubjectAccessReview
    status:
      allowed: false
-     conditionSetChain:
-     - authorizerName: baz
-       conditionsType: k8s.io/cel
-       conditions:
-       - id: baz-1
-         effect: Allow
-         condition: <something>
-       - id: baz-2
-         effect: Deny
-         condition: <something>
-       - id: baz-3
-         effect: Allow
-         condition: <something>
+     conditionalDecision:
+       type: ConditionsMap
+       conditionsMap:
+         allowConditions:
+         - id: bar/1
+           type: k8s.io/authorization-cel
+           condition: <something>
    ```
 
-1. Because the aggregated API server supports evaluating `k8s.io/cel`, it
-   evaluates the conditions in order of importance, that is, Deny conditions
-   (`baz-2`) first. As `baz-2` returns `false`, Allow conditions `baz-1` and
-   `baz-3` are evaluated to `false` and `true` respectively. As either of them
-   returned `true` (order of conditions within a set does not matter, only
-   ordering of the sets themselves), the `baz` ConditionSet evaluates to an
-   `Allow`. Thus is the request allowed, and can proceed to other validating
-   admission controllers.
+1. As `bar` also responded with a conditional allow, `kube-apiserver`
+   consults the Node authorizer next, which returns `NoOpinion`, and finally
+   the RBAC authorizer, which also returns `NoOpinion`.
+1. If an unconditional response would have been found, `kube-apiserver`
+   would have been able to short-circuit the evaluation. Now it reached the
+   end of the authorizer chain, and thus returned the following aggregated
+   response to the aggregated API server:
+
+   ```yaml
+   kind: SubjectAccessReview
+   status:
+     allowed: false
+     conditionalDecision:
+       type: Union
+       union:
+       - authorizerName: foo
+         decision:
+           type: Union # nested composite authorizer
+           union:
+           - authorizerName: system
+             decision:
+               type: ConditionsMap
+               conditionsMap:
+                 denyConditions:
+                 - id: foo/system-1
+                   type: k8s.io/authorization-cel
+                   condition: <something>
+           - authorizerName: user
+             decision:
+               type: ConditionsMap
+               conditionsMap:
+                 noOpinionConditions:
+                 - id: foo/user-1
+                   type: foo.example.com/opaque
+                   condition: <something>
+                 allowConditions:
+                 - id: foo/user-2
+                   type: foo.example.com/opaque
+                   condition: <something>
+       - authorizerName: bar # authorizer name in kube-apiserver
+         decision:
+           type: ConditionsMap
+           conditionsMap:
+             allowConditions:
+             - id: bar/1
+               type: k8s.io/authorization-cel
+               condition: <something>
+       # node authorizer omitted, as it responded NoOpinion
+       # rbac authorizer omitted, as it responded NoOpinion
+       # if the node authorizer would have answered Allow, it would have been:
+       # - authorizerName: node
+       #   decision:
+       #     type: Allow
+       #     allow:
+       #       reason: <something>
+   ```
+
+1. The aggregated API server sees that this aggregate conditional response
+   from `kube-apiserver` means the request can become authorized if certain
+   conditions are met, so it saves the decision on the request context and
+   proceeds.
+1. Next, the `AuthorizationConditionsEnforcer` admission controller enforces
+   that the conditions hold. It walks the decision tree depth-first. First
+   up is the `foo` authorizer's `system` `ConditionsMap`, which uses
+   `type: k8s.io/authorization-cel`. **In the future**, when the built-in
+   CEL evaluator lands, the aggregated API server evaluates the
+   `foo/system-1` condition directly against the object, which yields
+   `false`, so the Deny condition does not apply and evaluation proceeds.
+   **In the current implementation** (no built-in evaluator), the aggregated
+   API server issues an `AuthorizationConditionsReview` back to
+   `kube-apiserver` for the whole decision tree.
+1. The `foo` authorizer's `user` `ConditionsMap` uses the opaque condition
+   type `foo.example.com/opaque` which cannot be evaluated by the
+   aggregated API server, and so the aggregated API server sends the
+   following ACR to `kube-apiserver`:
+
+   ```yaml
+   kind: AuthorizationConditionsReview
+   request:
+     decision:
+       type: Union
+       union:
+       - authorizerName: foo
+         decision:
+           type: Union
+           union:
+           # The "system" ConditionsMap was already evaluated to NoOpinion,
+           # and is thus omitted
+           - authorizerName: user
+             decision:
+               type: ConditionsMap
+               conditionsMap:
+                 noOpinionConditions:
+                 - id: foo/user-1
+                   type: foo.example.com/opaque
+                   condition: <something>
+                 allowConditions:
+                 - id: foo/user-2
+                   type: foo.example.com/opaque
+                   condition: <something>
+       - authorizerName: bar
+         decision:
+           type: ConditionsMap
+           conditionsMap:
+             allowConditions:
+             - id: bar/1
+               type: k8s.io/authorization-cel
+               condition: <something>
+     admissionRequest:
+       # object, oldObject, operation, options, dryRun, userInfo, etc.
+       ...
+   ```
+
+1. `kube-apiserver` correlates each `NamedConditionsAwareDecision` through
+   its `authorizerName` and calls the corresponding authorizer's
+   `EvaluateConditions` method. For the `foo` sub-authorizer (a webhook), it
+   issues a nested ACR:
+
+   ```yaml
+   kind: AuthorizationConditionsReview
+   request:
+     decision:
+       type: ConditionsMap # "system" ConditionsMap already NoOpinion, omitted
+       conditionsMap:
+         noOpinionConditions:
+         - id: foo/user-1
+           type: foo.example.com/opaque
+           condition: <something>
+         allowConditions:
+         - id: foo/user-2
+           type: foo.example.com/opaque
+           condition: <something>
+     admissionRequest:
+       ...
+   ```
+
+1. The `foo` authorizer responds with `NoOpinion`, as both `foo/user-1` and
+   `foo/user-2` evaluated to `false`:
+
+   ```yaml
+   kind: AuthorizationConditionsReview
+   response:
+     uid: <copied from the request UID>
+     decision:
+       type: NoOpinion
+       noOpinion:
+         reason: no matching allow condition
+   ```
+
+1. Next, `kube-apiserver` evaluates the `bar` sub-decision. These conditions
+   are of the (future) built-in CEL condition type, so `kube-apiserver`
+   would try to evaluate them in-process. If in-process evaluation is not
+   possible (e.g. the condition uses a CEL function introduced in a newer
+   kube-apiserver than what is running), `kube-apiserver` falls back to
+   an ACR back to `bar`. This "fast-path fails → webhook fallback"
+   behaviour is described in the "Built-in CEL conditions evaluator"
+   section; today all `bar`-owned conditions are evaluated via ACR.
+1. The `bar` authorizer returns `NoOpinion`, in the same way as `foo`.
+1. Since both `foo` and `bar` evaluated to `NoOpinion`, `kube-apiserver`
+   returns `NoOpinion` to the aggregated API server.
+1. As evaluation of the first authorizer's conditional allow turned out to
+   be `NoOpinion`, evaluation of the other authorizers in the aggregated
+   API server's chain is lazily resumed. `Authorize` on the RBAC
+   authorizer is called; say it returns `NoOpinion`.
+1. Finally, `Authorize` on webhook `baz` is called, which sends a SAR to
+   `baz`. Suppose the response is:
+
+   ```yaml
+   kind: SubjectAccessReview
+   status:
+     allowed: false
+     conditionalDecision:
+       type: ConditionsMap
+       conditionsMap:
+         allowConditions:
+         - id: baz/1
+           type: k8s.io/authorization-cel
+           condition: <something>
+         - id: baz/3
+           type: k8s.io/authorization-cel
+           condition: <something>
+         denyConditions:
+         - id: baz/2
+           type: k8s.io/authorization-cel
+           condition: <something>
+   ```
+
+1. If the aggregated API server supports evaluating
+   `k8s.io/authorization-cel` in-process (future work), it evaluates in
+   the deny→noOpinion→allow order. `baz/2` returns `false`, then `baz/1`
+   and `baz/3` are evaluated to `false` and `true` respectively. Since at
+   least one Allow condition evaluated to `true` (order within a slice
+   doesn't matter), the `ConditionsMap` evaluates to `Allow`. The request
+   is thus allowed to proceed to the remaining validating admission
+   controllers. In the current implementation, evaluation happens via an
+   ACR back to `baz`.
 
 ### Built-in CEL conditions evaluator
 
-The most logical alternative for Kubernetes to provide as a builtin primitive is
-a CEL conditions evaluator. Such a conditions evaluator could re-use most of the
-CEL infrastructure that Kubernetes already has, and provide a unified model for
-those that already are familiar with `ValidatingAdmissionPolicies`. This means
-that a wide variety of authorizers could author CEL-typed conditions, and let
-the API server evaluate them without a need for a second webhook. RBAC++ could
-use this as well.
+> **Status: not implemented in this branch.** The current commit set ships
+> only the framework (interfaces, decision types, HTTP filter, admission
+> plugin, ACR API) and delegates all condition evaluation back to the
+> authorizer via `AuthorizationConditionsReview`. No `k8s.io/authorization-cel`
+> (or similar) built-in condition type exists yet. The integration test
+> `test/integration/apiserver/conditionalauthorization/conditionalauthorization_test.go`
+> has commented-out `in-process-eval-only` and
+> `if-in-process-fails-call-webhook` variants that mark the intended future
+> shape.
 
-However, this evaluator could evolve with distinct maturity guarantees than the
-core conditional authorization feature.
+The most logical primitive for Kubernetes to add as a follow-up is a CEL
+conditions evaluator. Such an evaluator could re-use most of the CEL
+infrastructure that Kubernetes already has, and provide a unified model for
+those already familiar with `ValidatingAdmissionPolicies`. A wide variety of
+authorizers could then author CEL-typed conditions and let the API server
+evaluate them without a second webhook. RBAC++ could use this as well. The
+CEL evaluator could evolve with distinct maturity guarantees from the core
+conditional authorization feature.
 
-The observant reader noticed that `Decision.Evaluate` takes a list of
-`BuiltinConditionSetEvaluator` as input, which allow evaluating the conditions
-in-process, without potentially sending webhooks back to the authorizer. A
-`BuiltinConditionSetEvaluator` is just a normal `ConditionSetEvaluator`, but
-scoped to just a set of supported types:
+The plumbing point for such a future evaluator is the top-level
+`PartiallyEvaluateConditionsAwareDecision(ctx, d, data, maybeEvalFn)`
+function. The evaluator would be a `MaybeEvaluateConditionFunc` that
+recognises specific condition types (e.g. `k8s.io/authorization-cel`) and
+returns `ConditionEvaluationResultUnevaluatable` for others. The reduced
+decision is then handed to `Authorizer.EvaluateConditions` for the residue.
+The intended interface sketch:
 
 ```go
-package authorizer
-
-type BuiltinConditionSetEvaluator interface {
-    ConditionSetEvaluator
-    // SupportedConditionTypes defines the condition types that the builtin
+// Future work — not implemented today.
+type BuiltinConditionsMapEvaluator interface {
+    // SupportedConditionTypes defines the Condition.Type values this builtin
     // evaluator can assign truth values to in-process.
-    SupportedConditionTypes() sets.Set[ConditionType]
+    SupportedConditionTypes() sets.Set[string]
+
+    // Evaluate is used as a MaybeEvaluateConditionFunc; returns
+    // ConditionsEvaluationResultUnevaluatable for unsupported types.
+    Evaluate(ctx context.Context, condition Condition, data ConditionsData) ConditionEvaluationResult
 }
 ```
 
-To avoid having to parse the AST from a string (which is relatively expensive),
-there could be an optimized mode in which the CEL evaluator can evaluate a
-binary-encoded AST directly, to get performance on par with e.g.
-`ValidatingAdmissionPolicy`, which also executes pre-compiled CEL programs.
+To avoid parsing the AST from a string on every evaluation (which is
+relatively expensive), the CEL evaluator can accept a binary-encoded AST
+directly, to get performance on par with `ValidatingAdmissionPolicy`, which
+also executes pre-compiled CEL programs.
 
 The built-in CEL condition environment would be similar to that of
 `ValidatingAdmissionPolicy`, including the ability to perform secondary
-authorization checks through the builtin `authorizer` function. This allows an
-authorizer at any point in the authorizer chain to respect other authorizers in
-their configured order for secondary authorization checks. This also makes the
-authorization layer aware of API author-designated secondary checks, e.g. the
-designer of the `CertificateSigningRequest` API can require any writer of its
-objects to also have the `sign` permission of some signer resource.
+authorization checks through the built-in `authorizer` function. This allows
+an authorizer at any point in the authorizer chain to respect other
+authorizers in their configured order for secondary authorization checks.
+It also makes the authorization layer aware of API-author-designated
+secondary checks — e.g. the designer of the `CertificateSigningRequest` API
+can require any writer of its objects to also have the `sign` permission on
+some signer resource.
 
-One important point of note is that the authorizer returning conditions might
-not know what the caller's (enforcement point's) CEL capabilities are. Consider
-that the authorizer that wants to return a condition, which can be encoded in
-CEL form. However, if there would be two k8s-supported CEL condition types
-`k8s.io/authorization-cel-v1` and `k8s.io/authorization-cel-v2`, the authorizer
-needs to naturally choose to encode its condition in either form. However, if
-the API server supports only `v1`, and the authorizer returned `v2`, or vice
-versa, the API server cannot necessarily evaluate those conditions in-process
-(if the formats do not round-trip between each other), but might have to "call
-out" to the authorizer again (which can be either a webhook or simple function
-call). This means that even in this case, the evaluation won't fail, it might
-just be slightly slower. If we decide it is worth it, we can add other
-caller-provided knobs to `SubjectAccessReview.spec.conditionalAuthorization` in
-the future.
+**Note on what *did* land in the CEL area.** The commit "Add the
+`conditionalAuthorization` field to the CEL environment for the
+AuthorizationConfig usage" extends the CEL environment used for
+`AuthorizationConfiguration.Authorizers[].MatchConditions` to expose
+`authorizationOptions.handledDecisionTypes` on the SAR spec — so operator-
+written CEL match conditions can filter based on whether the client opts
+into conditional authorization. This is a *matcher* CEL environment (which
+authorizers see the request), not a *condition* CEL evaluator (which
+evaluates authorizer-authored conditions against the object). The two must
+not be conflated.
 
-However, if there was a change in the semantics of evaluating a certain
-condition type that did not lead to a "major version bump", that is, change of
-condition type entirely, there might be risk that an authorizer returns a
-condition that cannot be evaluated in-process. For example, in Kubernetes v1.36,
-say Kubernetes would support evaluating conditions of form
-`k8s.io/authorization-cel` in-process. If in v1.37, a new function was added to
-the CEL environment (say, `datetime` or similar), a new v1.37 authorizer could
-return a CEL condition referencing the new `datetime` function to an old v1.36
-API server, which would error upon evaluation with "no such function exists". If
-this happens, the in-process optimized evaluation is ignored, and the API server
-asks the authorizer to evaluate the conditions directly instead, which will lead
-to the correct result, as the authorizer is new.
+**Version-skew considerations for the future CEL evaluator.** The authorizer
+returning conditions might not know what the caller's (enforcement point's)
+CEL capabilities are. If there were two supported CEL condition types
+`k8s.io/authorization-cel-v1` and `k8s.io/authorization-cel-v2`, the
+authorizer would need to pick one. If the API server supports only `v1` but
+the authorizer returned `v2`, the API server would not be able to evaluate
+those conditions in-process — but the fallback path is exactly the
+already-implemented ACR round-trip, so evaluation still succeeds (just
+slower). Even within a single type, if a new CEL function was added in a
+later minor version and a newer authorizer used it against an older API
+server, the API server would fail in-process evaluation with "no such
+function exists" and fall back to ACR, again producing the correct answer.
 
 ### Feature availability and version skew
 
-Conditional authorization is available when all of the following criteria are met:
+Conditional authorization is available for a given request when all of the
+following criteria are met:
 
-- The authorizer implementation supports conditions, which can be done in two ways:
-  - In-tree authorizer: through implementing the
-    `authorizer.ConditionSetEvaluator` interface, and
-  - Webhook authorizer: when needed, responds with a non-null
-    `.status.conditionSetChain` array, along with `.status.allowed=false` and
-    `.status.denied=false`.
-- The `ConditionalAuthorization` feature gate is enabled AND the
-  `AuthorizationConditionsEnforcer` admission plugin is enabled
-  - The `AuthorizationConditionsEnforcer` plugin could be enabled by default, as
-    it returns `Handles=<featureGateEnabled>`.
-  - However, to avoid the problematic configuration of a server being set up
-    with the feature gate enabled, but not the admission plugin, the proposal is
-    that AdmissionOptions.Validate will error, such that the API server can
-    never start up in such a misconfigured state.
-- The SubjectAccessReview's `apiGroup`, `resource` and `apiVersion` selects
-  exactly one GVR (no wildcards allowed), which is served by the current API
-  server, and the verb is one of `create`, `update`, `patch`, `delete`, or
-  `deletecollection`. In the future, one could consider conditional
-  authorization for reads as well (see below).
+- The authorizer implementation supports conditions:
+  - In-tree authorizer: implements the full `authorizer.Authorizer`
+    interface (including `ConditionsAwareAuthorize` and `EvaluateConditions`)
+    and returns something other than a `ConditionsAwareDecisionFromParts`
+    lift when appropriate.
+  - Webhook authorizer: `WebhookConfiguration.ConditionsReview` is set with
+    a valid ACR version, and the webhook responds with
+    `.status.conditionalDecision` populated (along with
+    `.status.allowed=false` and `.status.denied=false`).
+- The `ConditionalAuthorization` feature gate is enabled **AND** the
+  `AuthorizationConditionsEnforcer` admission plugin is enabled. When both
+  are true, `server.Config.DefaultBuildHandlerChain` installs
+  `WithConditionsAwareAuthorization`; if either is missing the API server
+  silently falls back to the legacy filter and no conditional decisions
+  ever leave the authorizer chain. Follow-up hardening: make
+  `AdmissionOptions.Validate` error out on "gate on, plugin off" so a
+  misconfigured server refuses to start.
+- The request classifier
+  (`server.Config.Authorization.ConditionalAuthorizationRequestClassifier`,
+  provided by kube-apiserver via
+  `pkg/controlplane/apiserver/config.go:conditionalRequestClassifier`)
+  returns true. Currently: verb ∈ `{create, update, patch, delete,
+  deletecollection}`, resource / APIGroup / APIVersion all concrete
+  (no `*`), and the GroupResource is not on the admission
+  `exclusion.Excluded()` list. Connect requests and aggregated-API-server-
+  owned groups are flagged as TODOs in the classifier — they are
+  follow-up items.
+- The client opts in via
+  `SubjectAccessReviewSpec.AuthorizationOptions.HandledDecisionTypes`
+  containing all conditional variants. Kube-apiserver's built-in call
+  sites opt in whenever the feature gate is on.
 
-| Version skew matrix | Old API server | New API server |
+**Version-skew matrix.** Because opt-in is per-request via
+`HandledDecisionTypes`, older callers never see conditional decisions and
+newer callers negotiate down as needed:
+
+| | Old API server | New API server |
 | :---- | :---- | :---- |
-| Old webhook | Conditions never returned | Conditions never returned from webhooks |
-| New webhook | Webhook respects `ConditionsModeNone` and never returns a conditional response | Conditions respected if asked for |
+| Old webhook | Conditions never returned (webhook doesn't know how). | Conditions never returned (webhook has no `conditionsReview` block, so kube-apiserver treats it as conditions-unaware). |
+| New webhook | Webhook sees old SAR spec without `authorizationOptions` → treats the client as conditions-unaware → folds to `FailureDecision()`. | Full conditional flow: kube-apiserver sends `authorizationOptions.handledDecisionTypes`; new webhook returns `status.conditionalDecision` when useful. |
 
 ## Other Kubernetes authorization enforcement points, with and without conditions-awareness
 
-In the following section, relevant applications of the conditional authorization
-feature are listed. Existing `Authorize` calls that not mentioned here to
-specifically support conditional authorization, do not support it, and will fail
-closed upon seeing on any conditions.
+In this section, existing and prospective applications of conditional
+authorization are listed. Existing `Authorize` call sites *not* listed as
+conditions-aware take `authorizer.UnconditionalAuthorizer` (the downscoped
+interface) and thus fail closed if handed a conditional decision by folding
+to `FailureDecision()`.
+
+The **current status** of each enforcement point below reflects the commit
+set that landed the framework. Only the primary `WithAuthorization` /
+`WithConditionsAwareAuthorization` filter and the
+`AuthorizationConditionsEnforcer` admission plugin are wired end-to-end.
+The other integrations listed below remain follow-up work; they are
+described here because the design is stable enough to serve as guidance.
 
 One thing that needs to be taken into account for secondary authorization
-checks: today some of the checks set `APIVersion="*"` (for unknown reason) when
-there is no logical API version at hand. If such checks would need to start
-supporting conditional authorization, we'd need to propagate a concrete, logical
-API version instead, as conditional authorization requires API version to be
-concrete (not a wildcard).
+checks: today some of the checks set `APIVersion="*"` (for unknown reason)
+when there is no logical API version at hand. If such checks would need to
+start supporting conditional authorization, a concrete API version needs to
+be propagated instead, as the classifier rejects wildcard API versions.
 
 ### Compound Authorization for Connectible Resources
 
 After the move to WebSockets
 ([KEP 4006](https://github.com/kubernetes/enhancements/tree/master/keps/sig-api-machinery/4006-transition-spdy-to-websockets#proposal-synthetic-rbac-create-authorization-check)),
 connect requests are initially authorized as e.g. `get pods/exec`, which can
-lead someone thinking that giving `get *` gives only read-only access, and not
-also write access. To mitigate this privilege-escalation vector, when the
-`AuthorizePodWebsocketUpgradeCreatePermission` feature gate is enabled (beta and
-on by default in 1.35), currently `pods/attach`, `pods/exec` and
-`pods/portforward` are subject to compound authorization, where effectively it
-is made sure that the requestor also is authorized to `create` the corresponding
-connectible resource. However, this check is not added (yet at least) for
+lead someone to think that giving `get *` gives only read-only access, and
+not also write access. To mitigate this privilege-escalation vector, when
+the `AuthorizePodWebsocketUpgradeCreatePermission` feature gate is enabled
+(beta and on by default in 1.35), currently `pods/attach`, `pods/exec` and
+`pods/portforward` are subject to compound authorization: it is made sure
+that the requestor also is authorized to `create` the corresponding
+connectible resource. This check is not added (yet at least) for
 `pods/proxy`, `services/proxy` and `nodes/proxy`.
 
-In relation to these two workstreams, it is proposed that we uniformly and
-generally require the requestor to have the `create` verb using compound
-authorization in the `ConnectResource` handler, whenever the feature gate (or a
-new one) is enabled. Both the initial (`get`) and compound (`create`) check
-would support conditional authorization, with `operation == CONNECT`,
-`object == <connect-data>` (e.g. `PodExecOptions`), `oldobject == null`, and
-`options == null`, just like connect admission today.
+**Status: not yet conditions-aware.** The current compound authz call site,
+`ensureAuthorizedForVerb` in
+`pkg/registry/core/pod/rest/authorize.go`, takes an
+`authorizer.UnconditionalAuthorizer`, so any conditional decision returned
+by the authorizer folds to its `FailureDecision()` at this call site. Making
+this call site conditions-aware — with `operation == CONNECT`,
+`object == <connect-data>` (e.g. `PodExecOptions`), `oldobject == nil`, and
+`options == nil`, just like connect admission today — remains follow-up
+work. That change also requires the classifier to accept the connect
+verb (currently a TODO in `conditionalRequestClassifier`).
 
-Such a check thus becomes a generalization of [KEP-2862: Fine-grained Kubelet
-API
-Authorization](https://github.com/kubernetes/enhancements/blob/master/keps/sig-node/2862-fine-grained-kubelet-authz/README.md),
-as now an authorizer can say "allow lucas to `create nodes/proxy`, but only when
-`options.path == "/configz"`", or any other such policy that the administrator
+Once conditions-aware, this check becomes a generalisation of
+[KEP-2862: Fine-grained Kubelet API Authorization](https://github.com/kubernetes/enhancements/blob/master/keps/sig-node/2862-fine-grained-kubelet-authz/README.md),
+as an authorizer can say "allow lucas to `create nodes/proxy`, but only when
+`options.path == "/configz"`", or any other such policy the administrator
 might fancy.
 
 ### Compound Authorization for update/patch → create
 
-If an `update` or `patch` turns into a `create`, the API server performs compound
-authorization to make sure the requestor also has the privilege to create the
-resource. This KEP also applies conditional authorization support for this
-compound authorization check.
+If an `update` or `patch` turns into a `create`, the API server performs
+compound authorization to make sure the requestor also has the privilege to
+create the resource.
+
+**Status: not yet conditions-aware.**
+`staging/src/k8s.io/apiserver/pkg/endpoints/handlers/update.go` does not
+consume the conditional decision from the request context; it still uses
+the classic `Authorizer.Authorize` path. Wiring `ConditionsAwareAuthorize`
+here (and passing along the `ConditionsMap` for a follow-up ACR) is
+follow-up work covered by the same design as the primary filter above.
 
 ### Constrained Impersonation through Conditional Authorization
 
 [KEP-5284: Constrained Impersonation](https://github.com/kubernetes/enhancements/tree/master/keps/sig-auth/5284-constrained-impersonation)
-proposes a way to restrict impersonation such that the requestor both needs the
-permission to impersonate the specified user, but the permission to impersonate
-certain types of requests, e.g.
-`lucas can only impersonate node foo, but only to get pods`. This is a perfect
-example of where conditional authorization shines; the request that is being
-performed is the initially-unknown data that an authorizer might want to specify
+proposes a way to restrict impersonation such that the requestor both needs
+the permission to impersonate the specified user *and* the permission to
+impersonate certain types of requests, e.g. `lucas can only impersonate
+node foo, but only to get pods`. This is a perfect example of where
+conditional authorization shines; the request that is being performed is
+the initially-unknown data that an authorizer might want to specify
 conditions on.
+
+**Status: not implemented in this branch.** The framework supports the
+design; wiring the impersonation filter to a conditions-aware code path
+remains follow-up work.
 
 Consider the example of
 `lucas can only impersonate node foo, but only to get pods`. The authorizer
@@ -1695,15 +2079,16 @@ apiVersion: authorization.k8s.io/v1
 kind: SubjectAccessReview
 status:
   allowed: false
-  conditionSetChain:
-  - conditionsSet:
-    - type: k8s.io/authorization-cel
-      id: "lucas-only-impersonate-node-get-pods"
-      condition: |
-        impersonatedRequest.apiGroup == "" &&
-        impersonatedRequest.resource == "pods" &&
-        impersonatedRequest.verb == "get"
-      effect: Allow
+  conditionalDecision:
+    type: ConditionsMap
+    conditionsMap:
+      allowConditions:
+      - id: acme.io/lucas-only-impersonate-node-get-pods
+        type: k8s.io/authorization-cel
+        condition: |
+          impersonatedRequest.apiGroup == "" &&
+          impersonatedRequest.resource == "pods" &&
+          impersonatedRequest.verb == "get"
 ```
 
 Now, the impersonation filter can evaluate the condition, either through the
@@ -1793,18 +2178,23 @@ keeps the option open.
 
 ### Node authorizer
 
-The Node authorizer was the first conditional authorizer in that it had both an
-authorization and admission part that always were designed and evolved in
-tandem. This proposal generalizes this; now the Node authorizer could return
-conditional responses with type e.g. `k8s.io/node-authorizer` and either
-transparent conditions written in CEL, if possible, or opaque ones, e.g.
+The Node authorizer was the first conditional authorizer in spirit: it had
+both an authorization and admission part that were always designed and
+evolved in tandem. This proposal generalises that pattern. The Node
+authorizer could return conditional responses with, say,
+`type: acme.io/node-authorizer` (or with transparent conditions written in
+CEL once the built-in CEL evaluator lands), e.g.
 `condition: '{"condition": "require-pod-node-name", "nodeName": "foo"}'`.
 
-In the opaque condition case, the Node authorizer will get a callback on its
-then-added `EvaluateConditions()` function to, even in native code, enforce e.g.
-a Pod's `spec.nodeName` actually matches what it should be. If this were the case,
-all logic is centralized in the authorizer, instead of being split between two
-components, and `SubjectAccessReview` shows what policies apply.
+In the opaque condition case, the Node authorizer would implement
+`EvaluateConditions` to, even in native code, enforce e.g. that a Pod's
+`spec.nodeName` actually matches what it should be. All logic then lives in
+the authorizer, instead of being split between the authorizer and the
+`NodeEnforcement` admission controller, and `SubjectAccessReview` shows
+what policies apply.
+
+**Status: not implemented in this branch.** The Node authorizer still
+follows the classic split; converting it is follow-up work.
 
 ### ValidatingAdmissionPolicies
 
@@ -1845,11 +2235,11 @@ better and worse.
 
 ### `deletecollection` support
 
-Although not immediately obvious, conditional authorization would also work for
-`verb=deletecollection` requests. In this case, the condition is written just as
-it would for `verb=delete`, the same admission chain (which has the conditions
-enforcement as the first validating admission plugin) is run once for all
-objects.
+Although not immediately obvious, conditional authorization also works for
+`verb=deletecollection` requests. The condition is written just as it would
+be for `verb=delete`; the same admission chain (which runs the
+`AuthorizationConditionsEnforcer` plugin ahead of validating webhooks) is
+executed once per object.
 
 ### Complete list of all `Authorize` calls in `kube-apiserver`
 
@@ -1860,19 +2250,24 @@ objects.
 - `k8s.io/kubernetes/pkg/kubelet/server.InstallAuthFilter`: Primary
   authorization for the kubelet server.
   - Would support conditions, so that conditions can apply to the path called of
-    the `nodes/proxy` resource.
+    the `nodes/proxy` resource. Not implemented yet.
 - `k8s.io/kubernetes/pkg/registry/admissionregistration/{validating,mutating}admissionpolicy{,binding}`
   Performs secondary checks of the requestor being able to `get` the referenced
   parameter resource object or all objects.
   - Does not support conditions, verb is `get`
 - `k8s.io/kubernetes/pkg/registry/authorization/{local,self,}subjectaccessreview`:
-  Serving the SAR endpoints
-  - Would be conditions-aware, so conditions can be propagated further (e.g. to
-    aggregated API servers)
+  Serving the SAR endpoints.
+  - Conditions-aware in this branch: the SAR REST handlers propagate
+    `spec.authorizationOptions.handledDecisionTypes` down to the authorizer
+    and serialise the returned `ConditionsAwareDecision` into
+    `status.conditionalDecision`. See the "Make the SubjectAccessReview
+    handlers conditions-aware" commit.
 - `k8s.io/kubernetes/pkg/registry/core/pod/rest.ensureAuthorizedForVerb`:
   Ensures that the requestor also has the `create` verb on certain connectible
   subresources for pods, as discussed above.
-  - Would be conditions-aware, as discussed [above](#compound-authorization-for-connectible-resources).
+  - **Currently uses `UnconditionalAuthorizer`** — see
+    [Compound Authorization for Connectible Resources](#compound-authorization-for-connectible-resources).
+    Follow-up work.
 - `k8s.io/kubernetes/pkg/registry/rbac`: Verifies that a user cannot
   privilege-escalate their permissions when creating roles and bindings. If the
   user indeed would try to privilege-escalate, allow them to do so if they have
@@ -1896,69 +2291,85 @@ objects.
 - `k8s.io/apiserver/pkg/cel/library`: Implements the CEL functions for VAP
   secondary checks. These do not support conditions initially at least, but this
   could be expanded in the future as discussed above.
-- `k8s.io/apiserver/pkg/endpoints/filters`: This is the main `WithAuthorization`
-  entrypoint to make conditions-aware as part of this proposal. It also contains
-  the impersonation code that could be made conditional.
+- `k8s.io/apiserver/pkg/endpoints/filters`: Home of both the legacy
+  `WithAuthorization` (unchanged; takes `UnconditionalAuthorizer`) and the
+  new `WithConditionsAwareAuthorization` (takes the full `Authorizer` plus
+  a `ConditionalAuthorizationRequestClassifier`). Also contains the
+  impersonation code, which is a candidate for future conditions-aware
+  wiring.
 - `k8s.io/apiserver/pkg/endpoints/handlers/delete.go`: Authorizes use of unsafe
   deletion without reading the object, as a special case. This would not support
   conditions.
 - `k8s.io/apiserver/pkg/endpoints/handlers/update.go`: Secondary check for
-  `update` requests turning into a `create` request.
+  `update` requests turning into a `create` request. Currently not
+  conditions-aware (follow-up work).
 
 ## Authorizer requirements
 
 To recap, the authorizer must adhere to the following requirements to be
 considered functional:
 
-- If the `ConditionsMode` is `None` (that is, unset), no conditions must be
-  returned, and it is up to the authorizer if it should fold a response it
-  wanted to be conditional to either `NoOpinion` or `Deny`.
-- If any of the conditions that the authorizer would have returned would have
-  been of `effect=Deny`, it is recommended for the authorizer to fold to
-  `decision=Deny`.
+- Respect the caller's `spec.authorizationOptions.handledDecisionTypes`. If
+  the caller has not opted into `ConditionsMap`/`Union` (or the field is
+  absent), no conditional decision must be returned; the authorizer must
+  fold to `ConditionsAwareDecision.FailureDecision()` (Deny if any Deny
+  conditions were present, else NoOpinion). Use the helpers
+  `authorizationv1.SupportsConditionalAuthorization` and
+  `SupportsUnconditionalAuthorization` in `util.go` for the check.
 - Only ever produce a conditional response if producing an unconditional
   response is not possible.
-  - The effect of authorizer-internal policies determines this. If there is an
-    authorizer which has `effect=Allow|NoOpinion (soft deny)|Deny (hard deny)`
-    policies, then the strength of policies are ordered as `Deny`
-    (unconditional) > `Deny` (conditional) > `NoOpinion` (unconditional) >
-    `NoOpinion` (conditional) > `Allow` (unconditional) > `Allow` (conditional).
-  - For example, if an unconditional `Deny` policy matches, the output is always
-    an unconditional `Deny`, regardless of other matches.
-  - If no `Deny` or `NoOpinion` policies match, only a conditional and
-    unconditional `Allow`, the unconditional `Allow` takes precedence.
+  - The effect of authorizer-internal policies determines this. If an
+    authorizer has policies with Allow / NoOpinion (soft deny) / Deny
+    (hard deny) effects, then the strength of policies is ordered as:
+    `Deny` (unconditional) > `Deny` (conditional) > `NoOpinion`
+    (unconditional) > `NoOpinion` (conditional) > `Allow` (unconditional) >
+    `Allow` (conditional).
+  - For example, if an unconditional `Deny` policy matches, the output is
+    always an unconditional `Deny`, regardless of other matches.
+  - If no `Deny` or `NoOpinion` policies match, and only a conditional and
+    an unconditional `Allow` are candidates, the unconditional `Allow`
+    takes precedence.
   - However, if a conditional `Deny` policy matches together with an
-    unconditional `Allow`, the response needs to be conditional, as before
-    producing a final response, one needs to know whether the conditional `Deny`
-    will override the unconditional `Allow`.
-- The authorizer can only return a conditional response with an `effect=Allow`
-  if there is a path for the request to become authorized. All pruning that is
-  possible to do with the initial authorizer Attributes MUST be used.
+    unconditional `Allow`, the response needs to be conditional — before
+    producing a final response, one needs to know whether the conditional
+    `Deny` will override the unconditional `Allow`.
+- The authorizer can only return a `ConditionsMap` with Allow conditions if
+  there is a path for the request to become authorized. All pruning that is
+  possible to do with the initial authorizer `Attributes` MUST be used.
   - For example, a policy of form `object.metadata.labels.foo == "bar" &&
-    request.verb == "create"` MUST not yield a conditional response for a
+    request.verb == "create"` MUST NOT yield a conditional response for a
     `verb="update"` request, as the LHS of `&&` is then always `false`.
-- An authorizer must be API version-aware, and should only let a policy author
-  refer to a field in a version-dependent manner, and/or validate that the
-  policy applies successfully to all known versions.
-  - The request object version might not equal the storage version, and the API
-    server cannot necessarily convert between the versions (due to CRD
-    conversion webhooks failing). For in-tree, one can always convert without
-    errors and reasonably fast. The new (request) object is always the request
-    API version. The authorizer could ask the API server to convert, if we want,
-    but this is not necessarily error-free.
-    - TODO(Lucas): See what happens for a CRD + VAP, if the request version !=
-      storage version, or if the CRD schema changes.
-  - For example, VAP policies today use the latter technique, which rejects
-    expressions that do not compile under all possible API version-specific CEL
-    environments.
-  - Another technique could be to expose the object through a version-specific
-    fieldpath, e.g. `v1.spec.foo` and `v2.spec.bar` could refer to logically the
-    same value of a field that was renamed from `foo` in `v1` to `bar` in `v2`.
+- The `ConditionsMap` returned MUST fit within the enforced limits:
+  - At most 128 conditions in total across `denyConditions`,
+    `noOpinionConditions`, `allowConditions`.
+  - Each `Condition.Condition` body ≤ 10240 bytes,
+    `Condition.Description` ≤ 1024 bytes.
+  - Each `Condition.ID` and `Condition.Type` MUST be a domain-qualified
+    label key (e.g. `acme.io/foo`); reserved domains are `*.k8s.io` and
+    `*.kubernetes.io`.
+- An authorizer must be API-version aware, and should only let a policy
+  author refer to a field in a version-dependent manner and/or validate
+  that the policy applies successfully to all known versions.
+  - The request object version might not equal the storage version, and
+    the API server cannot necessarily convert between the versions (due to
+    CRD conversion webhooks failing). For in-tree types, one can always
+    convert without errors and reasonably fast. The new (request) object is
+    always in the request API version. The authorizer could ask the API
+    server to convert, if we want, but this is not necessarily error-free.
+    - TODO(Lucas): See what happens for a CRD + VAP if the request version
+      != storage version, or if the CRD schema changes.
+  - For example, VAP policies today use the latter technique, which
+    rejects expressions that do not compile under all possible API
+    version-specific CEL environments.
+  - Another technique could be to expose the object through a
+    version-specific fieldpath, e.g. `v1.spec.foo` and `v2.spec.bar` refer
+    to logically the same value of a field that was renamed from `foo` in
+    `v1` to `bar` in `v2`.
 - To fail closed when new API versions are added, the authorizer could
-  automatically insert restrictions that only API versions that are referenced
-  in the policy can yield an allowed response. In the following example, write
-  requests fail closed for API version `v3` until the policy author has had time
-  to add the restriction specific to that version, as follows:
+  automatically insert restrictions that only API versions referenced in
+  the policy can yield an allowed response. In the following example,
+  write requests fail closed for API version `v3` until the policy author
+  has had time to add the restriction specific to that version:
 
   ```cel
   request.verb in ["create", "update"] &&
@@ -1970,10 +2381,13 @@ considered functional:
     false
   ```
 
-- An authorizer must be able to evalute any condition they authored, such that
-  the API server always can call the authorizer to evaluate the condition
-  (regardless of in-process evaluation capabilities). An authorizer only ever
-  evaluates its own conditions.
+- An authorizer must be able to evaluate any condition it authors, so that
+  the API server can always call back through `EvaluateConditions`
+  (regardless of in-process evaluation capabilities). An authorizer only
+  ever evaluates its own conditions. An authorizer that does not implement
+  condition evaluation MUST return
+  `DecisionDeny, "", ErrorConditionEvaluationNotSupported` from
+  `EvaluateConditions` (fail-closed).
 - The authorizer must make sure their conditions are safe and performant to
   execute. In particular, any CEL condition that is returned to Kubernetes must
   be within reasonable CEL cost limits. The authorizer should reject policies
@@ -2035,9 +2449,31 @@ Testing will in addition be added as appropriate to new packages.
 
 #### Integration tests
 
-An integration test will be added for this feature in
-`k8s.io/kubernetes/test/integration/apiserver/cel/conditionalauthz`, both when
-the feature is enabled and disabled.
+Integration tests for this feature live at
+`k8s.io/kubernetes/test/integration/apiserver/conditionalauthorization/`.
+The current landed set covers:
+
+- `conditionalauthorization_test.go` — end-to-end SAR + ACR flow with the
+  webhook authorizer configured against a test HTTP server that installs an
+  in-test `testAuthorizer` (unconditional Allow/Deny/NoOpinion; CEL-based
+  Allow/Deny/NoOpinion conditions; deny-overrides-allow priority;
+  operation-aware conditions). Feature-gate on and off are both exercised
+  via `TestConditionalAuthorizationEnabled` and
+  `TestConditionalAuthorizationDisabled`.
+- `hpa_conversion_test.go` — HPA v1/v2 CPU utilisation conditions across
+  create and update, verifying condition evaluation against both the
+  request and stored object shapes.
+- `crd_conversion_test.go` — a CRD with two versions and a webhook
+  conversion strategy, verifying conditional authz interop with CRD
+  version conversion.
+- `main_test.go` — feature-gate + kube-apiserver bootstrap.
+
+**Caveat:** only the webhook-only condition-evaluation variant is
+exercised. The commented-out `in-process-eval-only` and
+`if-in-process-fails-call-webhook` variants at
+`conditionalauthorization_test.go` (near `celConditionalAuthorizerVariants`)
+mark the intended coverage once the built-in CEL condition evaluator
+lands.
 
 #### e2e tests
 
@@ -2282,8 +2718,20 @@ checking if there are objects with field X set) may be a last resort. Avoid
 logs or events for this purpose.
 -->
 
-Audit annotations can surface information that a request was initially
-conditionally authorized.
+Audit annotations surface conditional authorization use. Specifically:
+
+- `authorization.k8s.io/decision` — `allow`/`forbid`, as before.
+- `authorization.k8s.io/reason` — reason string, as before.
+- `authorization.k8s.io/is-conditional-decision` — set to `"true"` on
+  requests that were let through the authorization filter as a
+  conditional allow (the enforcer plugin later decided the final
+  outcome). Absent for unconditional requests.
+
+Operators can also observe the
+`authorizationMetricsLabelForAuthorizeConditionsAware` result label on
+the standard authorization latency metrics
+(`staging/src/k8s.io/apiserver/pkg/endpoints/filters/metrics.go`) — this
+label distinguishes conditions-aware decisions from classic ones.
 
 ###### How can someone using this feature know that it is working for their instance?
 
@@ -2517,11 +2965,47 @@ Not known.
 
 ## TODOs
 
-- TODO: Expand on this point of conditional vs composite authorization
-- TODO: Add more wording on ReferenceGrants
-- TODO: One might be able to infer the admission-time operation through whether
-  only the request object is available (create), or both the stored and request
-  object is (update)?
+Framework-level TODOs still open at the time of writing:
+
+- TODO: Expand on this point of conditional vs composite authorization.
+- TODO: Add more wording on ReferenceGrants.
+- TODO(Lucas): See what happens for a CRD + VAP if the request version !=
+  storage version, or if the CRD schema changes.
+
+Implementation follow-ups (the framework has landed; these are natural next
+steps that the design already accommodates):
+
+- Ship the built-in CEL condition evaluator
+  (`k8s.io/authorization-cel` — or successor naming), plugged in via
+  `PartiallyEvaluateConditionsAwareDecision`. Reactivate the
+  `in-process-eval-only` and `if-in-process-fails-call-webhook` variants of
+  the integration test.
+- Wire conditional authz into `ensureAuthorizedForVerb`
+  (`pkg/registry/core/pod/rest/authorize.go`) and the update→create
+  compound check (`staging/src/k8s.io/apiserver/pkg/endpoints/handlers/update.go`).
+- Extend the `ConditionalAuthorizationRequestClassifier` in
+  `pkg/controlplane/apiserver/config.go` to accept connect requests and
+  aggregated-API-server-owned groups (both are TODOs in the current
+  predicate).
+- Harden misconfiguration: make `AdmissionOptions.Validate` error out when
+  `ConditionalAuthorization` is enabled but `AuthorizationConditionsEnforcer`
+  is not, so the API server refuses to start in that state.
+- Consider surfacing a set-level `Type` on `ConditionsMap` (in addition to
+  the current per-`Condition` `Type`), if operational experience shows all
+  conditions in a set typically share a type.
+
+Resolved TODOs (kept here as historical anchors):
+
+- ~~"One might be able to infer the admission-time operation…"~~ — resolved:
+  `ConditionsData.GetOperation()` returns an explicit `AdmissionOperation`.
+- ~~"ConditionData interface might need to change to something more generic"~~
+  — resolved: renamed to `ConditionsData`, expanded to the 11-method subset
+  of `admission.Attributes`.
+- ~~"Decide on a maximum amount of conditions"~~ — resolved: 128 per
+  `ConditionsMap`.
+- ~~"Do we want UID like AdmissionReview here?"~~ — resolved: yes, the
+  `AuthorizationConditionsResponse` requires the `UID` to be copied from
+  the request.
 
 ## Alternatives Considered
 
