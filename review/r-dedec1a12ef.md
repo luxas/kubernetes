@@ -46,6 +46,21 @@ None.
 - Speculative future-proofing is done with a clear intent (the commit body explicitly labels it as "if they differ ... in the future"), not silently.
 - Threading the version through the call chain keeps the option open without over-engineering.
 
+## Tests
+
+### Test files touched
+- Three `test/declarative_validation/authorization/{local,self,}subjectaccessreview/declarative_validation_test.go` files, 1–2 line diff each — the assertion presumably picks up the new `version string` parameter that the REST handlers now thread through.
+
+### Coverage
+- The three declarative_validation tests exercise a happy-path validation against a specific API version. This commit's plumbing is validated indirectly: if the wrong version string reached the validator, the declarative validation would surface a `+k8s:ifDisabled` or version-specific rule mismatch that these tests catch. But that's coincidental; no test explicitly asserts `version="v1beta1"` produces different behaviour from `version="v1"`.
+- **Missing:** no test constructs a request with `X-Kubernetes-API-Version: v1beta1` or otherwise stubs `RequestInfo.APIVersion` and asserts the validation branches on it. Given the commit body explicitly says "if they differ between source API versions in the future", the hook exists but is not exercised. Add a test scaffolding when v1 and v1beta1 validations actually differ.
+
+### Structure
+- Nothing to critique — 1–2 lines changed per file.
+
+### Stale comments
+- Production `rest.go:70–73` — the `apierrors.NewBadRequest("expected a RequestInfo in the context")` — BadRequest may be misleading; RequestInfo missing is a server-side wiring bug, not a client error. (Already flagged in main review's Important #1.)
+
 ## Verdict
 
 **LGTM.** Small, well-scoped forward-compat plumbing.

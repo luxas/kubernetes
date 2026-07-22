@@ -70,6 +70,38 @@ Also touches `hack/lib/init.sh` (probably to add v1alpha1 to the list of API ver
 - Fuzzer registration for the new types — good for round-trip testing.
 - v1beta1 conversion tests (232 lines) — thorough coverage of the drop-fields cases.
 
+## Tests
+
+### Test files touched
+- `staging/src/k8s.io/api/authorization/v1/util_test.go` new, +209 — `TestAuthorizationOptions_Supports` exercises `SupportsConditionalAuthorization`, `SupportsUnconditionalAuthorization`, `GetHandledDecisionTypes` across nil / empty / partial / full sets.
+- `pkg/apis/authorization/v1beta1/conversion_test.go` new, +232 — v1beta1 ↔ internal conversion.
+- `staging/src/k8s.io/apiserver/pkg/apis/authorization/v1beta1/conversion_test.go` new, +307 — v1beta1 ↔ internal conversion (moved copy).
+- `staging/src/k8s.io/apiserver/pkg/apis/authorization/validation/validation_test.go` +444 — extends the validation tests with `AuthorizationOptions` / `ConditionalDecision` cases.
+- Four `declarative_validation/authorization/*/declarative_validation_test.go` files — +332/+424/+332/+332 lines each. Auto-generated declarative validation harnesses that verify the `+k8s:*` markers on the new types.
+- `staging/src/k8s.io/api/roundtrip_test.go` +2 — adds v1alpha1 to the round-trip test list.
+- `pkg/api/testing/{fuzzer,validation_test}.go` +9 each.
+
+### Coverage
+- **Well covered:**
+  - `AuthorizationOptions` nil-safety: `TestAuthorizationOptions_Supports` covers `nil` receiver on both `Supports*` methods, verifying the fallback to `unconditionalAuthorizationDecisionTypes`.
+  - Empty `HandledDecisionTypes` (non-nil options with empty slice) — a subtle case: `SupportsUnconditionalAuthorization` returns `false` because the empty set is not a superset of `{Allow, Deny, NoOpinion}`. Verify this is the intended semantic (a client that opts in to `AuthorizationOptions` but doesn't specify types is *worse* than a client that omits `AuthorizationOptions` entirely).
+  - v1beta1 conversion tests exercise: internal SAR with `ConditionalDecision` → v1beta1 (drops the field), v1beta1 → internal (leaves the field zero), and the round-trip identity.
+- **Missing / thin:**
+  - **Superset check with extra values**: `HandledDecisionTypes = [Allow, Deny, NoOpinion, ConditionsMap, Union, "Frobnicate"]` — extra unknown values should not break the superset check. Tests appear to cover the exact-match case; verify.
+  - **`GetHandledDecisionTypes` returns a fresh set** — `util.go:66–68` builds a new set from the slice on every call. Verify no test relies on mutating the returned set and observing side effects (which would be a bug).
+  - **Deep copy of `ConditionsAwareDecision`** — the deep-copy generated code is not explicitly asserted. The zz_generated file *should* handle recursive `Union` correctly, but a fuzzer round-trip catches this; verify via `TestRoundTripTypes` in `roundtrip_test.go`.
+  - **Declarative validation** — the `+k8s:listType=map` on `Union[].authorizerName` enforces uniqueness. Verify the declarative validation test asserts an error for a duplicate `authorizerName`.
+- **Feature-gate on/off:** partial — `SubjectAccessReviewSpec.AuthorizationOptions` is `+featureGate=ConditionalAuthorization`, `+k8s:ifDisabled("ConditionalAuthorization")=+k8s:forbidden`. The declarative validation tests presumably exercise both gate states via the `+k8s:ifDisabled` marker; verify.
+
+### Structure
+- Table-driven in `util_test.go` — straightforward.
+- The four `declarative_validation_test.go` files are auto-generated and duplicated across LocalSAR/SelfSAR/SAR/AuthorizationConditionsReview — expected for codegen output; no simplification opportunity.
+- `pkg/apis/authorization/v1beta1/conversion_test.go` and `staging/src/k8s.io/apiserver/pkg/apis/authorization/v1beta1/conversion_test.go` are nearly parallel copies of the same test surface — the "internal" location has 307 lines vs the "k8s.io" location's 232. Diff them to confirm the extra 75 lines are legitimate (perhaps additional coverage for the new types) and not accidental duplication.
+
+### Stale comments
+- Production `util.go:73` — docstring typo `"need to support"` → `"needs to support"`. (Already flagged in the main review's Nits.)
+- Test file — no stale comments found.
+
 ## Verdict
 
 **LGTM with nits.** Substantive API-shape commit. The one Critical item (nil-safety of `AuthorizationOptions`) is worth an explicit spot-check by grep before merge. Otherwise this is a well-structured commit for a large API landing.

@@ -55,6 +55,31 @@ None. The interface grows in a way that would ordinarily break every out-of-tree
 - The `ConditionsAwareDecisionFromParts` design decision — take the exact `(Decision, reason, error)` tuple the legacy `Authorize` returns — makes the migration story mechanical for the caller. Combined with the copy-paste snippet in the interface godoc, this is a well-designed migration ramp.
 - Reasoning for the `unconditionalDecision Decision` field placement, with the comment explaining that `Decision(0) == DecisionDeny` makes the zero value coincide with Deny (`conditions.go:44–47`), is exactly the right kind of load-bearing comment.
 
+## Tests
+
+### Test files touched
+- `staging/src/k8s.io/apiserver/pkg/authorization/authorizer/conditions_test.go` — new file, 194 lines. Single `TestConditionsAwareDecision` function driving a table of 6 test cases.
+
+### Coverage
+- **Well covered:** all three constructors (`Deny`/`Allow`/`NoOpinion`) plus `ConditionsAwareDecisionFromParts` are exercised via a triple-shape row structure — the same expected outcome is asserted against three shapes at once (direct constructor, `FromParts`, and `AuthorizerFunc.ConditionsAwareAuthorize`). This is a clever way to encode the "three shapes must agree" invariant (`conditions_test.go:52–60` zero-value, `:64–74` deny, etc.).
+- **Well covered:** the unknown-integer `Decision` case is tested twice: bare `42` and `42, "foo", otherError`. Verifies that `ConditionsAwareDecisionFromParts` folds unknown values into a Deny with an aggregated error.
+- **Missing / thin:**
+  - `String()` output is asserted for Deny/Allow/NoOpinion but *not* for the default-fallthrough case in `String()` (`conditions.go:190–196`). Since only three variants exist in this commit the fallthrough is unreachable, but the commit's docstring already promises `Conditional` and `Union` variants — a test asserting today's fallthrough would guard against silent breakage when those variants land.
+  - `Error()` return is asserted where the value is non-nil (`conditions_test.go:71`) but the symmetric Allow-with-non-nil-error case is not covered. `conditions.go:167–169` is a trivial getter, low value, but worth a row for symmetry.
+  - Concurrency claims: the type comment says `A ConditionsAwareDecision is passed by value` (`conditions.go:36`), implying safe to copy. No concurrency test asserts this.
+- **Feature-gate on/off:** N/A — the feature gate is not introduced until `p-db947349618`.
+
+### Structure
+- The triple-shape rows (`[]authorizer.ConditionsAwareDecision`) are a nice pattern — but the inner subtest loop `t.Run(fmt.Sprint(i), ...)` uses the array index for the subtest name (`conditions_test.go:161`). Prefer a stable label like `"direct-constructor"`, `"from-parts"`, `"authorizer-func"` so failing subtests are self-identifying.
+- `unexpectedErr` and `otherErr` are constructed with `fmt.Errorf` (`conditions_test.go:35–36`). Package-level `var` block would be idiomatic. Micro-nit.
+- The `sampleAttrs := authorizer.AttributesRecord{}` fixture (`:38`) is passed to `ConditionsAwareAuthorize` but the closures ignore attributes. Consider a documenting comment.
+- The zero-value test uses `named1, named2, named3` in a variadic `return` (`conditions_test.go:56`) — clever but obscure; `return authorizer.DecisionDeny, "", nil` would be clearer.
+
+### Stale comments
+- Production `conditions.go:98`: `INVARIANT: Exactly one of Is* must return true at all times.` — already flagged in the main review; the tests don't assert this either (they only check that the *expected* `Is*` is true, not that the others are false). Invariant is neither enforced by code nor by tests.
+- Production `conditions.go:32–40`: the "five variants" docstring is aspirational; the tests only exercise three.
+- No stale comments in the test file itself.
+
 ## Verdict
 
 **LGTM with nits.** The interface change is well-designed and the migration ramp is thoughtful. The main non-nit items are the docstring/state mismatches (five vs. three variants, invariant comment, `UnconditionalParts` semantics) — these will bite reviewers doing archaeology later. All are documentation-level fixes.
