@@ -28,25 +28,11 @@ None. The interface grows in a way that would ordinarily break every out-of-tree
 
 ### Important (should fix)
 
-1. **Docstring on `ConditionsAwareDecision` overstates what this commit ships.** `conditions.go:32–40` promises five variants (`Allow`, `Deny`, `NoOpinion`, `Conditional`, `Union`) but only three are implemented here. `Conditional` and `Union` are marked TODO in `FailClosedDecision` (`conditions.go:145–148`) and `ConditionsData` is an empty struct (`conditions.go:198–200`). A reader picking this commit up in isolation will be confused about state vs. plan. Prefer either narrowing the docstring ("three variants today; two more variants in follow-up") or landing this commit together with commit 08 (`9d7f6593151`) which adds the `ConditionsMap` variant.
-2. **The invariant comment is not currently true.** `conditions.go:98` reads `INVARIANT: Exactly one of Is* must return true at all times.` but `IsUnconditional()` (`conditions.go:117–119`) returns `true` for any of Allow/Deny/NoOpinion — so *two* `Is*` predicates return `true` simultaneously (e.g. `IsAllowed() && IsUnconditional()`). Either rename `IsUnconditional` to `IsUnconditional*Category*` (mental group name) or amend the comment to say "exactly one of {`IsAllowed`, `IsDenied`, `IsNoOpinion`, `IsConditional`, `IsUnion`} returns true".
-3. **`UnconditionalParts` godoc is inconsistent with behaviour.** `conditions.go:125–128` says "This function is meant to be called when IsUnconditional() == true", but the `default` branch handles the non-unconditional case by folding to `FailClosedDecision()`. The current code is safer than the docstring implies — reword to "safe to call even for conditional decisions; folds to FailClosedDecision() as a fallback" so callers know they can rely on it in bridge shims.
-4. **`ConditionsData` is a placeholder empty struct.** `conditions.go:198–200`. Referenced by `Authorizer.EvaluateConditions` in the interface. Anyone implementing the interface today has to accept a value they can't inspect; the follow-up interfaces.go changes (later commits) evolve this into a rich interface. Consider gating this whole file behind the same commit where it becomes useful, or at minimum, make `ConditionsData` an interface with no methods now so its identity doesn't change later.
-5. **`ConditionsAwareDecisionFromParts` on an unknown `Decision` value returns a Deny that surfaces the raw int enum in the reason.** `conditions.go:79–86`: `fmt.Errorf("unknown unconditional decision type: %d", unconditional)`. The value could originate from anywhere, but the fail-closed behaviour is correct. Consider whether this error should be `%!v(int=42)` style or explicitly `<internal>` to avoid the impression that these ints are a public contract.
 
 ### Nits
 
-- `conditions.go:23` imports `utilerrors "k8s.io/apimachinery/pkg/util/errors"`. Every other file in the package uses the alias `utilerrors` too, so this is fine — verified.
-- `conditions.go:33–34` comment says "The zero value (ConditionsAwareDecision{}) is equivalent to ConditionsAwareDecisionDeny()." The constructor takes `(reason, err)`, so equivalence is only structural under `reason=""`, `err=nil`. Minor: pin the exact equivalence, e.g. `ConditionsAwareDecision{} == ConditionsAwareDecisionDeny("", nil)`.
-- `interfaces.go:100–115` — the two new method docstrings are excellent and give implementers a copy-pastable snippet. Nice.
-- `interfaces.go:129–132` — `AuthorizerFunc.EvaluateConditions` uses named return-value shadowing implicitly via the `_ ConditionsData` param naming; consider `(_ Decision, _ string, err error)` with `err = ErrorConditionEvaluationNotSupported` for symmetry with the docstring "fail closed and return authorizer.DecisionDeny, ...".
-- `interfaces.go:230–232` — updated docstring for `DecisionNoOpinion` mentions unioned authorizers, but this commit doesn't ship the union authorizer changes. Minor doc-vs-code timing issue.
-- Test file uses `t.Context()` (Go 1.24+) — good, but verify all Kubernetes tree modules are on Go 1.24 already. `conditions_test.go:31`. (Spot check: yes, staging modules use go1.24 in the current tree.)
-
 ### Questions
 
-- Why is `String()` (`conditions.go:170–197`) emitting `Deny` even when the decision is not (yet) `Conditional` or `Union`? The `if !d.IsAllowed() && !d.IsNoOpinion()` fallthrough means any future variant automatically prints as `Deny`, which will silently mask bugs after `ConditionsMap`/`Union` land. Consider adding a `panic` or a distinctive prefix (`<internal>`) for `default`.
-- Rationale for choosing `errors.New` for `ErrorConditionEvaluationNotSupported` vs. an interface / typed error? Not blocking; single sentinel is fine.
 
 ## What's well done
 
@@ -61,24 +47,10 @@ None. The interface grows in a way that would ordinarily break every out-of-tree
 - `staging/src/k8s.io/apiserver/pkg/authorization/authorizer/conditions_test.go` — new file, 194 lines. Single `TestConditionsAwareDecision` function driving a table of 6 test cases.
 
 ### Coverage
-- **Well covered:** all three constructors (`Deny`/`Allow`/`NoOpinion`) plus `ConditionsAwareDecisionFromParts` are exercised via a triple-shape row structure — the same expected outcome is asserted against three shapes at once (direct constructor, `FromParts`, and `AuthorizerFunc.ConditionsAwareAuthorize`). This is a clever way to encode the "three shapes must agree" invariant (`conditions_test.go:52–60` zero-value, `:64–74` deny, etc.).
-- **Well covered:** the unknown-integer `Decision` case is tested twice: bare `42` and `42, "foo", otherError`. Verifies that `ConditionsAwareDecisionFromParts` folds unknown values into a Deny with an aggregated error.
-- **Missing / thin:**
-  - `String()` output is asserted for Deny/Allow/NoOpinion but *not* for the default-fallthrough case in `String()` (`conditions.go:190–196`). Since only three variants exist in this commit the fallthrough is unreachable, but the commit's docstring already promises `Conditional` and `Union` variants — a test asserting today's fallthrough would guard against silent breakage when those variants land.
-  - `Error()` return is asserted where the value is non-nil (`conditions_test.go:71`) but the symmetric Allow-with-non-nil-error case is not covered. `conditions.go:167–169` is a trivial getter, low value, but worth a row for symmetry.
-  - Concurrency claims: the type comment says `A ConditionsAwareDecision is passed by value` (`conditions.go:36`), implying safe to copy. No concurrency test asserts this.
-- **Feature-gate on/off:** N/A — the feature gate is not introduced until `p-db947349618`.
 
 ### Structure
-- The triple-shape rows (`[]authorizer.ConditionsAwareDecision`) are a nice pattern — but the inner subtest loop `t.Run(fmt.Sprint(i), ...)` uses the array index for the subtest name (`conditions_test.go:161`). Prefer a stable label like `"direct-constructor"`, `"from-parts"`, `"authorizer-func"` so failing subtests are self-identifying.
-- `unexpectedErr` and `otherErr` are constructed with `fmt.Errorf` (`conditions_test.go:35–36`). Package-level `var` block would be idiomatic. Micro-nit.
-- The `sampleAttrs := authorizer.AttributesRecord{}` fixture (`:38`) is passed to `ConditionsAwareAuthorize` but the closures ignore attributes. Consider a documenting comment.
-- The zero-value test uses `named1, named2, named3` in a variadic `return` (`conditions_test.go:56`) — clever but obscure; `return authorizer.DecisionDeny, "", nil` would be clearer.
 
 ### Stale comments
-- Production `conditions.go:98`: `INVARIANT: Exactly one of Is* must return true at all times.` — already flagged in the main review; the tests don't assert this either (they only check that the *expected* `Is*` is true, not that the others are false). Invariant is neither enforced by code nor by tests.
-- Production `conditions.go:32–40`: the "five variants" docstring is aspirational; the tests only exercise three.
-- No stale comments in the test file itself.
 
 ## Verdict
 
