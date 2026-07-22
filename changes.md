@@ -165,6 +165,198 @@ Date:   Thu May 7 22:22:14 2026 +0300
 ```
 
 
+## Review plan
+
+### Scope and mechanics
+
+- 25 commits from the block above are the review targets. They form the
+  full logical history of KEP-5681 (Conditional Authorization).
+- The current branch `impl-conditional-authz-3` contains 14 of these
+  commits at their listed SHAs. The remaining 11 earlier commits
+  (interface refactors + `ConditionsMap` build-up) live on older branches
+  or as dangling SHAs but are all reachable in this repo. Full SHA
+  mapping is in the "Commit inventory" table below.
+- Output: one Markdown review per commit at
+  `review/<12-char-sha>.md`, plus a `review/00-summary.md` cross-cutting
+  roll-up at the end. No code changes are produced.
+
+### Review method per commit
+
+1. `git show --stat <sha>` — file inventory, touch size.
+2. `git show <sha>` — full diff (read in chunks for very large commits).
+3. Classify each file: production, test, generated/vendored, docs/config.
+4. Read the relevant HEAD state where the diff invariants aren't obvious
+   from the diff alone.
+5. Emit `review/<sha>.md` from the template below.
+
+### Review template
+
+```markdown
+# Review: <subject> (<12-char-sha>)
+
+- **SHA:** <sha>
+- **Author date:** YYYY-MM-DD
+- **Subject:** <exact commit subject>
+- **Reachable on:** <branch or "dangling; reachable by SHA only">
+- **Size:** <N files, +A/-D lines>
+
+## What this commit does
+Short prose summary of the change.
+
+## Files touched
+Grouped by category (production / tests / generated / other).
+
+## Findings
+
+### Critical (must fix before merge)
+### Important (should fix)
+### Nits (optional)
+### Questions
+
+Each finding has a `file.go:line` reference.
+
+## What's well done
+Positive callouts.
+
+## Verdict
+LGTM | LGTM with nits | Needs revision | Blocking issue
+```
+
+### Structured aspects to check for each commit
+
+Based on the review criteria at the top of this document, plus KEP‑5681
+implementation specifics:
+
+1. **Correctness / bugs** — Does the code do what the subject says? Any
+   off-by-ones, nil deref potential, race conditions, missing error
+   handling, incorrect fail-closed logic?
+2. **Test coverage** — Do the unit + integration tests exercise the
+   production code paths meaningfully? Edge cases (empty ConditionsMap,
+   unknown decision type, feature gate off, classifier=false)?
+3. **Security (OWASP-flavoured)** — A01 broken access control (fail-open
+   in error paths?), A06 insecure design (missing validation that lets
+   malicious input through), A08 data integrity (mutable shared decision
+   state?), A10 mishandling of exceptional conditions (silent swallow of
+   errors that should surface).
+4. **Feature-gate discipline** — New public API fields gated by
+   `+featureGate=ConditionalAuthorization`, `+k8s:ifDisabled=+k8s:forbidden`,
+   or equivalent runtime gate; legacy paths still work when gate is off.
+5. **Backwards compatibility** — Legacy `authorizer.Decision` int enum
+   invariants preserved (`Decision(0) == DecisionDeny`); no shadowed
+   constants; existing callers unaffected when they don't opt in.
+6. **KEP alignment** — Any place the code disagrees with `kep.md`
+   (recently updated to reflect implementation) is a finding — flag
+   whether the KEP is stale or the code is off-spec.
+7. **`code-review` plugin at threshold 60** — mentally apply the plugin's
+   heuristics (readability, naming, symmetry, defensive coding); lower
+   threshold means more nits surfaced.
+
+### Cross-cutting themes
+
+Apply these to every commit:
+
+1. Backwards-compat of legacy `Decision int` enum.
+2. Feature-gate discipline (new fields, new code paths).
+3. Fail-closed on unknown / unsupported conditions.
+4. `UnconditionalAuthorizer` vs `Authorizer` interface split — right one
+   at each call site?
+5. Immutability & thread safety of `ConditionsAwareDecision`.
+6. API validation (domain-qualified `id`/`type`, 128-condition cap,
+   10240 / 1024 byte caps, DNS-1123-subdomain `authorizerName`).
+7. Union-tree well-formedness (unique names, order preserved, at least
+   one `ConditionsMap` leaf).
+8. ACR correlation (UUID copied verbatim from request to response;
+   decision echoed exactly).
+9. Audit annotation `authorization.k8s.io/is-conditional-decision=true`.
+10. Silent-misconfiguration ("gate on + plugin off" falls back to legacy;
+    should this be a startup error instead?).
+11. Ordering of `AuthorizationConditionsEnforcer` in
+    `RecommendedPluginOrder` (after MutatingWebhook, before VAP).
+12. `ConditionsData` completeness — enough info to evaluate against a
+    fully-mutated request.
+13. `ErrorConditionEvaluationNotSupported` fallback path is tested.
+14. Cross-commit consistency — early commit introduces X, later commit
+    uses it; is X's docstring complete already?
+15. CEL *matcher* env vs. CEL *condition* evaluator — the former was
+    extended in this branch, the latter is deferred; comments must not
+    conflate them.
+16. Generated code sanity — no hand-edits inside `zz_generated*`; proto
+    tags stable; openapi-spec diff matches API changes.
+
+### Commit inventory (recommended review order, phase-grouped)
+
+Reviewing in this order — foundations first, integration last — because
+later commits depend on earlier data-model decisions.
+
+**Phase A — Interface & data-model foundations (dangling SHAs)**
+
+| # | SHA | Date | Subject |
+|---|---|---|---|
+| 01 | `6d78dfd60cf` | 2026-03-15 | Extend the Authorizer interface with conditions-aware methods. |
+| 02 | `7e3c7349470` | 2026-05-07 | Add the Unconditional prefix to Authorizer and WantsAuthorizer interfaces |
+| 03 | `69a8b4dd7a9` | 2026-05-13 | Adapt the codebase to the Authorizer interface change |
+| 04 | `27e0fa95ff9` | 2026-05-26 | Address liggitt's comments |
+
+**Phase B — ConditionsAwareDecision + ConditionsMap (on `impl-conditional-authz-2`)**
+
+| # | SHA | Date | Subject |
+|---|---|---|---|
+| 05 | `a42663cc26c` | 2026-07-07 | Move some definitions from conditions.go → interfaces.go |
+| 06 | `40d1ff2444b` | 2026-07-07 | Represent the ConditionsAwareDecision variants using an internal enum |
+| 07 | `98eab691156` | 2026-07-03 | Add PossibleDecisions, FailureDecision, ContainsUnconditionalAllowOrDeny methods |
+| 08 | `9d7f6593151` | 2026-07-07 | Add the ConditionsMap decision variant |
+| 09 | `666dea045e8` | 2026-07-03 | Add a reference implementation for evaluating a ConditionsMap |
+| 10 | `d725c326bcd` | 2026-07-03 | Implement conditions for the union authorizer |
+| 11 | `7a6938b39f1` | 2026-07-07 | Add PartiallyEvaluateConditionsAwareDecision |
+
+**Phase C — API validation, pre-factor & feature gate (on `impl-conditional-authz-3`)**
+
+| # | SHA | Date | Subject |
+|---|---|---|---|
+| 12 | `5c9a3d7744d` | 2026-07-19 | Move authorization API validations, defaults and some conversions to k8s.io/apiserver |
+| 13 | `72400feff77` | 2026-07-19 | autogenerated |
+| 14 | `3033213ea26` | 2026-07-18 | Pre-factor for conditional authz: DNS-1123 names, length limits, domain-qualified, UnconditionalParts |
+| 15 | `be2f64e38a9` | 2026-07-22 | Refine the UnconditionalParts method and add a test |
+| 16 | `db947349618` | 2026-07-19 | Add ConditionalAuthorization feature gate |
+
+**Phase D — v1alpha1 API + CEL env + HTTP filter/plugin (on `impl-conditional-authz-3`)**
+
+| # | SHA | Date | Subject |
+|---|---|---|---|
+| 17 | `cce400c33ab` | 2026-07-20 | Add API serializations of the new authorizer types, including authorization.k8s.io/v1alpha1 |
+| 18 | `dedec1a12ef` | 2026-07-20 | Explicitly source the API version for which to run the declarative SAR validations |
+| 19 | `f2982e77497` | 2026-07-19 | Add the conditionalAuthorization field to the CEL environment for the AuthorizationConfig usage |
+| 20 | `67896e14ab4` | 2026-07-19 | Add a WithConditionsAwareAuthorization HTTP filter together with AuthorizationConditionsEnforcer admission plugin |
+
+**Phase E — SAR + webhook + handler-chain (on `impl-conditional-authz-3`)**
+
+| # | SHA | Date | Subject |
+|---|---|---|---|
+| 21 | `f0f9a3ed310` | 2026-07-20 | Make the SubjectAccessReview handlers conditions-aware |
+| 22 | `f1e726ca22c` | 2026-07-20 | Implement conditions evaluation for the webhook authorizer, and add related API types. |
+| 23 | `67711704058` | 2026-07-19 | Make the kube-apiserver handler chain support conditions for write requests covered by admission. |
+
+**Phase F — Testing + codegen refresh (on `impl-conditional-authz-3`)**
+
+| # | SHA | Date | Subject |
+|---|---|---|---|
+| 24 | `6013eb05df2` | 2026-07-20 | Add conditional authorization integration test |
+| 25 | `2f14e9c3e7d` | 2026-07-22 | hack/update-codegen.sh; …; hack/update-openapi-spec.sh |
+
+### Execution steps
+
+1. `mkdir -p review/` at repo root.
+2. Loop through the phase tables above in order, producing
+   `review/<sha>.md` for each commit.
+3. After all 25 reviews, write `review/00-summary.md` with cross-cutting
+   findings, blocking issues, and follow-ups.
+
+### Non-goals
+
+- No code changes in the tree.
+- No PR posts or external submissions.
+- No re-writing of the KEP (a separate task, already done).
+
 ### Appendix: OWASP risks
 
 These are example security issues, but consult the `security-guidance` and another sub-agent that specializes in security review as well.
