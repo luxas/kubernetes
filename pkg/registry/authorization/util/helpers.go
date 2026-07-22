@@ -242,7 +242,9 @@ func BuildEvaluationError(evaluationError error, attrs authorizer.AttributesReco
 	return strings.Join(evaluationErrors, "; ")
 }
 
-// SARStatusFromAuthorize invokes the authorizer as appropriate (with or without conditions support), and encodes the result into SAR status.
+// ConditionsAwareDecisionToSARStatus encodes the given decision into a SubjectAccessReviewStatus.
+// Unconditional Allow/Deny/NoOpinion decisions populate the top-level status.{allowed,denied,reason,evaluationError} fields;
+// ConditionsMap and Union variants populate status.conditionalDecision.
 func ConditionsAwareDecisionToSARStatus(ctx context.Context, attrs authorizer.AttributesRecord, decision authorizer.ConditionsAwareDecision) authorizationapi.SubjectAccessReviewStatus {
 	// Allow/Deny/NoOpinion decisions should be serialized as before, on the top-level SAR status.
 	if decision.IsUnconditional() {

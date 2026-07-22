@@ -293,7 +293,10 @@ func BuildAuthorizer(ctx context.Context, s options.CompletedOptions, egressSele
 // the verbs for which admission control applies to in kube-apiserver
 var admissionVerbs = sets.New("create", "update", "patch", "delete", "deletecollection")
 
-// conditionalRequestClassifier returns true if admission runs for
+// conditionalRequestClassifier returns true if admission runs for the given
+// request attributes and can therefore enforce conditional authorization. That
+// means: a write verb, a concrete GroupResource+APIVersion, and a GroupResource
+// that is not on the admission exclusion list.
 func conditionalRequestClassifier(attrs authorizer.Attributes) bool {
 	// Make sure there is exactly one GVR matched. This _should_ be the case in the HTTP filter, but just to make sure.
 	if len(attrs.GetResource()) == 0 || attrs.GetResource() == "*" {

@@ -64,13 +64,13 @@ func (ao *AuthorizationOptions) GetHandledDecisionTypes() sets.Set[ConditionsAwa
 }
 
 // ConditionalAuthorizationDecisionTypes returns the decision types that a client
-// need to support to handle conditional authorization: {Allow, Deny, NoOpinion, ConditionMap, Union}.
+// needs to support to handle conditional authorization: {Allow, Deny, NoOpinion, ConditionsMap, Union}.
 func ConditionalAuthorizationDecisionTypes() sets.Set[ConditionsAwareDecisionType] {
 	return conditionalAuthorizationDecisionTypes.Clone() // always return fresh copies, never expose the original data
 }
 
 // UnconditionalAuthorizationDecisionTypes returns the decision types that a client
-// need to support to handle conditional authorization: {Allow, Deny, NoOpinion}.
+// needs to support to handle unconditional authorization: {Allow, Deny, NoOpinion}.
 func UnconditionalAuthorizationDecisionTypes() sets.Set[ConditionsAwareDecisionType] {
 	return unconditionalAuthorizationDecisionTypes.Clone() // always return fresh copies, never expose the original data
 }
