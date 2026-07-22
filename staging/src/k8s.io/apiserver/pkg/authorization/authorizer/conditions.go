@@ -54,7 +54,7 @@ const (
 // - ConditionsMap: conditional, expressed as a map of conditions to be evaluated later.
 // - Union: an ordered list of sub-decisions, which forms a tree of decisions.
 //
-// The zero value (ConditionsAwareDecision{}) is equivalent to ConditionsAwareDecisionDeny().
+// The zero value (ConditionsAwareDecision{}) is equivalent to ConditionsAwareDecisionDeny("", nil).
 // A ConditionsAwareDecision is passed by value.
 // Important: A ConditionsAwareDecision is immutable after construction.
 type ConditionsAwareDecision struct {
