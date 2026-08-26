@@ -19,6 +19,7 @@ limitations under the License.
 // +k8s:openapi-gen=true
 // +k8s:prerelease-lifecycle-gen=true
 // +k8s:openapi-model-package=io.k8s.api.authorization.v1
+// +k8s:validation-gen=TypesWithField=TypeMeta
 
 // +groupName=authorization.k8s.io
 

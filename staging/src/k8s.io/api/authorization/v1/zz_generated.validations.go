@@ -25,7 +25,6 @@ import (
 	context "context"
 	fmt "fmt"
 
-	authorizationv1 "k8s.io/api/authorization/v1"
 	equality "k8s.io/apimachinery/pkg/api/equality"
 	operation "k8s.io/apimachinery/pkg/api/operation"
 	safe "k8s.io/apimachinery/pkg/api/safe"
@@ -41,14 +40,14 @@ func init() { localSchemeBuilder.Register(RegisterValidations) }
 func RegisterValidations(scheme *runtime.Scheme) error {
 	// type LocalSubjectAccessReview
 	scheme.AddValidationFunc(
-		(*authorizationv1.LocalSubjectAccessReview)(nil),
+		(*LocalSubjectAccessReview)(nil),
 		func(ctx context.Context, op operation.Operation, obj, oldObj interface{}) field.ErrorList {
 			switch op.Request.SubresourcePath() {
 			case "/", "/status":
 				return Validate_LocalSubjectAccessReview(
 					ctx, op, nil, /* fldPath */
-					obj.(*authorizationv1.LocalSubjectAccessReview),
-					safe.Cast[*authorizationv1.LocalSubjectAccessReview](oldObj))
+					obj.(*LocalSubjectAccessReview),
+					safe.Cast[*LocalSubjectAccessReview](oldObj))
 			}
 			return field.ErrorList{
 				field.InternalError(nil, fmt.Errorf("no validation found for %T, subresource: %v", obj, op.Request.SubresourcePath())),
@@ -56,14 +55,14 @@ func RegisterValidations(scheme *runtime.Scheme) error {
 		})
 	// type SelfSubjectAccessReview
 	scheme.AddValidationFunc(
-		(*authorizationv1.SelfSubjectAccessReview)(nil),
+		(*SelfSubjectAccessReview)(nil),
 		func(ctx context.Context, op operation.Operation, obj, oldObj interface{}) field.ErrorList {
 			switch op.Request.SubresourcePath() {
 			case "/", "/status":
 				return Validate_SelfSubjectAccessReview(
 					ctx, op, nil, /* fldPath */
-					obj.(*authorizationv1.SelfSubjectAccessReview),
-					safe.Cast[*authorizationv1.SelfSubjectAccessReview](oldObj))
+					obj.(*SelfSubjectAccessReview),
+					safe.Cast[*SelfSubjectAccessReview](oldObj))
 			}
 			return field.ErrorList{
 				field.InternalError(nil, fmt.Errorf("no validation found for %T, subresource: %v", obj, op.Request.SubresourcePath())),
@@ -71,14 +70,14 @@ func RegisterValidations(scheme *runtime.Scheme) error {
 		})
 	// type SubjectAccessReview
 	scheme.AddValidationFunc(
-		(*authorizationv1.SubjectAccessReview)(nil),
+		(*SubjectAccessReview)(nil),
 		func(ctx context.Context, op operation.Operation, obj, oldObj interface{}) field.ErrorList {
 			switch op.Request.SubresourcePath() {
 			case "/", "/status":
 				return Validate_SubjectAccessReview(
 					ctx, op, nil, /* fldPath */
-					obj.(*authorizationv1.SubjectAccessReview),
-					safe.Cast[*authorizationv1.SubjectAccessReview](oldObj))
+					obj.(*SubjectAccessReview),
+					safe.Cast[*SubjectAccessReview](oldObj))
 			}
 			return field.ErrorList{
 				field.InternalError(nil, fmt.Errorf("no validation found for %T, subresource: %v", obj, op.Request.SubresourcePath())),
@@ -91,15 +90,15 @@ func RegisterValidations(scheme *runtime.Scheme) error {
 // to declarative validation rules in the API schema.
 func Validate_LocalSubjectAccessReview(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *authorizationv1.LocalSubjectAccessReview) (errs field.ErrorList) {
+	obj, oldObj *LocalSubjectAccessReview) (errs field.ErrorList) {
 
-	// field authorizationv1.LocalSubjectAccessReview.TypeMeta has no validation
-	// field authorizationv1.LocalSubjectAccessReview.ObjectMeta has no validation
+	// field LocalSubjectAccessReview.TypeMeta has no validation
+	// field LocalSubjectAccessReview.ObjectMeta has no validation
 
-	{ // field authorizationv1.LocalSubjectAccessReview.Spec
+	{ // field LocalSubjectAccessReview.Spec
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *authorizationv1.SubjectAccessReviewSpec,
+			obj, oldObj *SubjectAccessReviewSpec,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -112,13 +111,13 @@ func Validate_LocalSubjectAccessReview(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *authorizationv1.LocalSubjectAccessReview) *authorizationv1.SubjectAccessReviewSpec {
+			func(oldObj *LocalSubjectAccessReview) *SubjectAccessReviewSpec {
 				return &oldObj.Spec
 			})
 		errs = append(errs, fn(fldPath.Child("spec"), &obj.Spec, oldVal, oldObj != nil)...)
 	}
 
-	// field authorizationv1.LocalSubjectAccessReview.Status has no validation
+	// field LocalSubjectAccessReview.Status has no validation
 	return errs
 }
 
@@ -126,15 +125,15 @@ func Validate_LocalSubjectAccessReview(
 // to declarative validation rules in the API schema.
 func Validate_SelfSubjectAccessReview(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *authorizationv1.SelfSubjectAccessReview) (errs field.ErrorList) {
+	obj, oldObj *SelfSubjectAccessReview) (errs field.ErrorList) {
 
-	// field authorizationv1.SelfSubjectAccessReview.TypeMeta has no validation
-	// field authorizationv1.SelfSubjectAccessReview.ObjectMeta has no validation
+	// field SelfSubjectAccessReview.TypeMeta has no validation
+	// field SelfSubjectAccessReview.ObjectMeta has no validation
 
-	{ // field authorizationv1.SelfSubjectAccessReview.Spec
+	{ // field SelfSubjectAccessReview.Spec
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *authorizationv1.SelfSubjectAccessReviewSpec,
+			obj, oldObj *SelfSubjectAccessReviewSpec,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -147,13 +146,13 @@ func Validate_SelfSubjectAccessReview(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *authorizationv1.SelfSubjectAccessReview) *authorizationv1.SelfSubjectAccessReviewSpec {
+			func(oldObj *SelfSubjectAccessReview) *SelfSubjectAccessReviewSpec {
 				return &oldObj.Spec
 			})
 		errs = append(errs, fn(fldPath.Child("spec"), &obj.Spec, oldVal, oldObj != nil)...)
 	}
 
-	// field authorizationv1.SelfSubjectAccessReview.Status has no validation
+	// field SelfSubjectAccessReview.Status has no validation
 	return errs
 }
 
@@ -163,16 +162,16 @@ var unionMembershipFor_k8s_io_api_authorization_v1_SelfSubjectAccessReviewSpec_ 
 // to declarative validation rules in the API schema.
 func Validate_SelfSubjectAccessReviewSpec(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *authorizationv1.SelfSubjectAccessReviewSpec) (errs field.ErrorList) {
+	obj, oldObj *SelfSubjectAccessReviewSpec) (errs field.ErrorList) {
 
 	if e := validate.Union(ctx, op, fldPath, obj, oldObj, unionMembershipFor_k8s_io_api_authorization_v1_SelfSubjectAccessReviewSpec_,
-		func(obj *authorizationv1.SelfSubjectAccessReviewSpec) bool {
+		func(obj *SelfSubjectAccessReviewSpec) bool {
 			if obj == nil {
 				return false
 			}
 			return obj.ResourceAttributes != nil
 		},
-		func(obj *authorizationv1.SelfSubjectAccessReviewSpec) bool {
+		func(obj *SelfSubjectAccessReviewSpec) bool {
 			if obj == nil {
 				return false
 			}
@@ -181,10 +180,10 @@ func Validate_SelfSubjectAccessReviewSpec(
 		errs = append(errs, e...)
 	}
 
-	{ // field authorizationv1.SelfSubjectAccessReviewSpec.ResourceAttributes
+	{ // field SelfSubjectAccessReviewSpec.ResourceAttributes
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *authorizationv1.ResourceAttributes,
+			obj, oldObj *ResourceAttributes,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -203,16 +202,16 @@ func Validate_SelfSubjectAccessReviewSpec(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *authorizationv1.SelfSubjectAccessReviewSpec) *authorizationv1.ResourceAttributes {
+			func(oldObj *SelfSubjectAccessReviewSpec) *ResourceAttributes {
 				return oldObj.ResourceAttributes
 			})
 		errs = append(errs, fn(fldPath.Child("resourceAttributes"), obj.ResourceAttributes, oldVal, oldObj != nil)...)
 	}
 
-	{ // field authorizationv1.SelfSubjectAccessReviewSpec.NonResourceAttributes
+	{ // field SelfSubjectAccessReviewSpec.NonResourceAttributes
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *authorizationv1.NonResourceAttributes,
+			obj, oldObj *NonResourceAttributes,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -231,7 +230,7 @@ func Validate_SelfSubjectAccessReviewSpec(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *authorizationv1.SelfSubjectAccessReviewSpec) *authorizationv1.NonResourceAttributes {
+			func(oldObj *SelfSubjectAccessReviewSpec) *NonResourceAttributes {
 				return oldObj.NonResourceAttributes
 			})
 		errs = append(errs, fn(fldPath.Child("nonResourceAttributes"), obj.NonResourceAttributes, oldVal, oldObj != nil)...)
@@ -244,15 +243,15 @@ func Validate_SelfSubjectAccessReviewSpec(
 // to declarative validation rules in the API schema.
 func Validate_SubjectAccessReview(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *authorizationv1.SubjectAccessReview) (errs field.ErrorList) {
+	obj, oldObj *SubjectAccessReview) (errs field.ErrorList) {
 
-	// field authorizationv1.SubjectAccessReview.TypeMeta has no validation
-	// field authorizationv1.SubjectAccessReview.ObjectMeta has no validation
+	// field SubjectAccessReview.TypeMeta has no validation
+	// field SubjectAccessReview.ObjectMeta has no validation
 
-	{ // field authorizationv1.SubjectAccessReview.Spec
+	{ // field SubjectAccessReview.Spec
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *authorizationv1.SubjectAccessReviewSpec,
+			obj, oldObj *SubjectAccessReviewSpec,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -265,13 +264,13 @@ func Validate_SubjectAccessReview(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *authorizationv1.SubjectAccessReview) *authorizationv1.SubjectAccessReviewSpec {
+			func(oldObj *SubjectAccessReview) *SubjectAccessReviewSpec {
 				return &oldObj.Spec
 			})
 		errs = append(errs, fn(fldPath.Child("spec"), &obj.Spec, oldVal, oldObj != nil)...)
 	}
 
-	// field authorizationv1.SubjectAccessReview.Status has no validation
+	// field SubjectAccessReview.Status has no validation
 	return errs
 }
 
@@ -281,16 +280,16 @@ var unionMembershipFor_k8s_io_api_authorization_v1_SubjectAccessReviewSpec_ = va
 // to declarative validation rules in the API schema.
 func Validate_SubjectAccessReviewSpec(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *authorizationv1.SubjectAccessReviewSpec) (errs field.ErrorList) {
+	obj, oldObj *SubjectAccessReviewSpec) (errs field.ErrorList) {
 
 	if e := validate.Union(ctx, op, fldPath, obj, oldObj, unionMembershipFor_k8s_io_api_authorization_v1_SubjectAccessReviewSpec_,
-		func(obj *authorizationv1.SubjectAccessReviewSpec) bool {
+		func(obj *SubjectAccessReviewSpec) bool {
 			if obj == nil {
 				return false
 			}
 			return obj.ResourceAttributes != nil
 		},
-		func(obj *authorizationv1.SubjectAccessReviewSpec) bool {
+		func(obj *SubjectAccessReviewSpec) bool {
 			if obj == nil {
 				return false
 			}
@@ -299,10 +298,10 @@ func Validate_SubjectAccessReviewSpec(
 		errs = append(errs, e...)
 	}
 
-	{ // field authorizationv1.SubjectAccessReviewSpec.ResourceAttributes
+	{ // field SubjectAccessReviewSpec.ResourceAttributes
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *authorizationv1.ResourceAttributes,
+			obj, oldObj *ResourceAttributes,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -321,16 +320,16 @@ func Validate_SubjectAccessReviewSpec(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *authorizationv1.SubjectAccessReviewSpec) *authorizationv1.ResourceAttributes {
+			func(oldObj *SubjectAccessReviewSpec) *ResourceAttributes {
 				return oldObj.ResourceAttributes
 			})
 		errs = append(errs, fn(fldPath.Child("resourceAttributes"), obj.ResourceAttributes, oldVal, oldObj != nil)...)
 	}
 
-	{ // field authorizationv1.SubjectAccessReviewSpec.NonResourceAttributes
+	{ // field SubjectAccessReviewSpec.NonResourceAttributes
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *authorizationv1.NonResourceAttributes,
+			obj, oldObj *NonResourceAttributes,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -349,15 +348,15 @@ func Validate_SubjectAccessReviewSpec(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *authorizationv1.SubjectAccessReviewSpec) *authorizationv1.NonResourceAttributes {
+			func(oldObj *SubjectAccessReviewSpec) *NonResourceAttributes {
 				return oldObj.NonResourceAttributes
 			})
 		errs = append(errs, fn(fldPath.Child("nonResourceAttributes"), obj.NonResourceAttributes, oldVal, oldObj != nil)...)
 	}
 
-	// field authorizationv1.SubjectAccessReviewSpec.User has no validation
-	// field authorizationv1.SubjectAccessReviewSpec.Groups has no validation
-	// field authorizationv1.SubjectAccessReviewSpec.Extra has no validation
-	// field authorizationv1.SubjectAccessReviewSpec.UID has no validation
+	// field SubjectAccessReviewSpec.User has no validation
+	// field SubjectAccessReviewSpec.Groups has no validation
+	// field SubjectAccessReviewSpec.Extra has no validation
+	// field SubjectAccessReviewSpec.UID has no validation
 	return errs
 }
