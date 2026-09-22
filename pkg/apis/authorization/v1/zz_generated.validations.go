@@ -106,6 +106,10 @@ func Validate_AuthorizationOptions(
 			}
 			// call field-attached validations
 			earlyReturn := false
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 100).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
 			if e := validate.RequiredSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
@@ -155,7 +159,7 @@ func Validate_Condition(
 			if earlyReturn {
 				return // do not proceed
 			}
-			if e := validate.LabelKey(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := validate.PrefixedLabelKey(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -186,7 +190,7 @@ func Validate_Condition(
 			if earlyReturn {
 				return // do not proceed
 			}
-			if e := validate.MaxBytes(ctx, op, fldPath, obj, oldObj, 10240).MarkBeta(); len(e) != 0 {
+			if e := validate.MaxBytes(ctx, op, fldPath, obj, oldObj, 10240); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -217,7 +221,7 @@ func Validate_Condition(
 			if earlyReturn {
 				return // do not proceed
 			}
-			if e := validate.LabelKey(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := validate.PrefixedLabelKey(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -248,7 +252,7 @@ func Validate_Condition(
 			if earlyReturn {
 				return // do not proceed
 			}
-			if e := validate.MaxBytes(ctx, op, fldPath, obj, oldObj, 1024).MarkBeta(); len(e) != 0 {
+			if e := validate.MaxBytes(ctx, op, fldPath, obj, oldObj, 1024); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
