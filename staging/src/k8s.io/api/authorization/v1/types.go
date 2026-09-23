@@ -230,6 +230,7 @@ type SubjectAccessReviewSpec struct {
 	UID string `json:"uid,omitempty" protobuf:"bytes,6,opt,name=uid"`
 
 	// authorizationOptions contains options for specifying the client's authorization abilities.
+	// If unset, only unconditional authorization is supported, for backwards-compability.
 	// Requires the ConditionalAuthorization feature to be enabled.
 	// +optional
 	// +k8s:optional
@@ -262,6 +263,7 @@ type SelfSubjectAccessReviewSpec struct {
 	NonResourceAttributes *NonResourceAttributes `json:"nonResourceAttributes,omitempty" protobuf:"bytes,2,opt,name=nonResourceAttributes"`
 
 	// authorizationOptions contains options for specifying the client's authorization abilities.
+	// If unset, only unconditional authorization is supported, for backwards-compability.
 	// Requires the ConditionalAuthorization feature to be enabled.
 	// +optional
 	// +k8s:optional
@@ -450,6 +452,7 @@ type Condition struct {
 	// type describes the type of the condition, if there are multiple possibilities.
 	// Should be formatted as a Kubernetes label key.
 	// Any domain of form *.k8s.io or *.kubernetes.io is reserved for Kubernetes use.
+	// authorizer.kubernetes.io/cel is a conditions type for CEL, handled by kube-apiserver.
 	// Optional. Can be omitted if the authorizer already knows how to evaluate the condition.
 	// +k8s:format=k8s-prefixed-label-key
 	// +k8s:optional
@@ -537,7 +540,7 @@ const (
 // with variants described in ConditionsAwareDecisionType, plus a reason and error.
 type ConditionsAwareDecision struct {
 	// type describes the type of the decision, and acts as an enum discriminator.
-	// +k8s:beta=+k8s:unionDiscriminator
+	// +k8s:unionDiscriminator
 	// +k8s:required
 	// +required
 	Type ConditionsAwareDecisionType `json:"type" protobuf:"bytes,1,opt,name=type,casttype=ConditionsAwareDecisionType"`
