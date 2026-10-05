@@ -179,9 +179,9 @@ func VerifyVersionedValidationEquivalence(t *testing.T, obj, old runtime.Object,
 			rGVK := rGV.WithKind(kind)
 			// remove items from lv that we don't expect in rk
 			// shadow lv so this only applies to this loop.
-			lv := omitErrorsForVersion(lv, rk, opts.OmittedFieldPaths[rGVK])
+			lv := omitErrorsForPaths(lv, opts.OmittedFieldPaths[rGVK])
 			// remove items from rv we don't expect in lk
-			rv = omitErrorsForVersion(rv, lk, opts.OmittedFieldPaths[lGVK])
+			rv = omitErrorsForPaths(rv, opts.OmittedFieldPaths[lGVK])
 
 			if len(lv) != len(rv) {
 				t.Errorf("different error count (%d vs. %d)\n%s: %v\n%s: %v", len(lv), len(rv), lk, fmtErrs(lv), rk, fmtErrs(rv))
@@ -208,7 +208,8 @@ func VerifyVersionedValidationEquivalence(t *testing.T, obj, old runtime.Object,
 	}
 }
 
-func omitErrorsForVersion(errs field.ErrorList, gv string, omittedFieldPaths []string) field.ErrorList {
+// omitErrorsForPaths drops errors whose field path equals, or is nested under, any of omittedFieldPaths.
+func omitErrorsForPaths(errs field.ErrorList, omittedFieldPaths []string) field.ErrorList {
 	var retainedErrs field.ErrorList
 	for i := range errs {
 		currentPath := errs[i].Field
@@ -281,7 +282,9 @@ type validationOption struct {
 	// NormalizationRules are the rules to apply to field paths before comparison.
 	NormalizationRules []field.NormalizationRule
 
-	// map of apiVersion -> field paths that do not exist in this version
+	// OmittedFieldPaths maps a GVK to field paths that do not exist in that version. When comparing
+	// another version against this GVK, errors at (or nested under) these paths are dropped.
+	// Paths are matched after NormalizationRules have been applied.
 	OmittedFieldPaths map[schema.GroupVersionKind][]string
 
 	// IgnoreObjectConversions skips the tests if the conversion from the internal object
