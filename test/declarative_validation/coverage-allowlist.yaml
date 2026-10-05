@@ -45,3 +45,15 @@
   errorType: FieldValueInvalid
   origin: union
   reason: DiscriminatedUnion emits errors at child paths, not the parent struct path.
+- apiVersion: authorization.k8s.io/v1alpha1
+  kind: AuthorizationConditionsReview
+  path: request.decision
+  errorType: FieldValueInvalid
+  origin: union
+  reason: DiscriminatedUnion emits errors at child paths, not the parent struct path.
+- apiVersion: authorization.k8s.io/v1alpha1
+  kind: AuthorizationConditionsReview
+  path: response.decision
+  errorType: FieldValueInvalid
+  origin: union
+  reason: DiscriminatedUnion emits errors at child paths, not the parent struct path.
