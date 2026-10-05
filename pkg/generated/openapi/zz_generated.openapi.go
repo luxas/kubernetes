@@ -12737,7 +12737,7 @@ func schema_k8sio_api_authorization_v1_AuthorizationOptions(ref common.Reference
 							},
 						},
 						SchemaProps: spec.SchemaProps{
-							Description: "handledDecisionTypes specifies what decision types the client can handle in the context it is in. Currently valid values are: - [Allow, Deny, NoOpinion] (for conditions-unaware clients) or - [Allow, Deny, NoOpinion, ConditionsMap, Union, ...] (for conditions-aware clients) If the authorizer would like to return conditions, but the client does not opt in to handle those here,\n  the authorizer must fail closed to a safe unconditional decision using ConditionsAwareDecision.FailureDecision()\n  (Deny if any Deny conditions were present, otherwise NoOpinion).\nOrder does not matter in this slice; set semantics should be used. The server should not reject unrecognized decision types (hence the k8s:opaqueType), but focus on whether the client supports a mode that the server does. All clients must support \"classic\", conditions-unaware authorization.",
+							Description: "handledDecisionTypes specifies what decision types the client can handle in the context it is in. Currently valid values are: - [Allow, Deny, NoOpinion] (for conditions-unaware clients) or - [Allow, Deny, NoOpinion, ConditionsMap, Union, ...] (for conditions-aware clients) If the authorizer would like to return conditions, but the client does not opt in to handle those here,\n  the authorizer must fail closed to a safe unconditional decision\n  (Deny if any Deny conditions were present, otherwise NoOpinion).\nOrder does not matter in this slice; set semantics should be used. The server does not reject unrecognized decision types, but focuses on whether the client supports a mode that the server does. All clients must support \"classic\", conditions-unaware authorization.",
 							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
@@ -13829,7 +13829,7 @@ func schema_k8sio_api_authorization_v1alpha1_AuthorizationConditionsResponse(ref
 				Properties: map[string]spec.Schema{
 					"uid": {
 						SchemaProps: spec.SchemaProps{
-							Description: "uid is an identifier for the individual request/response. This must be copied over from the corresponding AuthorizationConditionsRequest. It is possible that the same request content (except uid) is sent to the authorizer multiple times.",
+							Description: "uid is an identifier for the individual request/response. This must be copied over from request.admissionRequest.uid of the corresponding AuthorizationConditionsReview. It is possible that the same request content (except uid) is sent to the authorizer multiple times.",
 							Default:     "",
 							Type:        []string{"string"},
 							Format:      "",
