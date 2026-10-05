@@ -32,9 +32,10 @@ import (
 
 func TestCompileCELExpression(t *testing.T) {
 	cases := []struct {
-		name          string
-		expression    string
-		expectedError string
+		name                       string
+		expression                 string
+		conditionalAuthorizationOn bool
+		expectedError              string
 	}{
 		{
 			name:       "SubjectAccessReviewSpec user comparison",
@@ -76,10 +77,21 @@ func TestCompileCELExpression(t *testing.T) {
 			name:       "labelSelector requirement",
 			expression: "request.resourceAttributes.labelSelector.requirements.exists(r, r.key == 'foo' && r.operator == 'In' && ('bar' in r.values))",
 		},
+		{
+			name:                       "authorizationOptions handledDecisionTypes",
+			expression:                 "'ConditionsMap' in request.authorizationOptions.handledDecisionTypes",
+			conditionalAuthorizationOn: true,
+		},
+		{
+			name:          "authorizationOptions undefined with ConditionalAuthorization disabled",
+			expression:    "'ConditionsMap' in request.authorizationOptions.handledDecisionTypes",
+			expectedError: "undefined field 'authorizationOptions'",
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ConditionalAuthorization, tc.conditionalAuthorizationOn)
 			// create new compiler because it depends on the feature gate
 			compiler := NewDefaultCompiler()
 
