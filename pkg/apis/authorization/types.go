@@ -313,10 +313,10 @@ type AuthorizationOptions struct {
 	// - [Allow, Deny, NoOpinion] (for conditions-unaware clients) or
 	// - [Allow, Deny, NoOpinion, ConditionsMap, Union, ...] (for conditions-aware clients)
 	// If the authorizer would like to return conditions, but the client does not opt in to handle those here,
-	//   the authorizer must fail closed to a safe unconditional decision using ConditionsAwareDecision.FailureDecision()
+	//   the authorizer must fail closed to a safe unconditional decision
 	//   (Deny if any Deny conditions were present, otherwise NoOpinion).
 	// Order does not matter in this slice; set semantics should be used.
-	// The server should not reject unrecognized decision types (hence the k8s:opaqueType), but focus on whether the client
+	// The server does not reject unrecognized decision types, but focuses on whether the client
 	// supports a mode that the server does. All clients must support "classic", conditions-unaware authorization.
 	// +listType=set
 	// +required
