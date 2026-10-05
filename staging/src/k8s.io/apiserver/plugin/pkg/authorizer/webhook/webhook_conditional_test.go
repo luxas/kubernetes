@@ -107,6 +107,16 @@ func (fakeConditionsData) GetUserInfo() user.Info {
 	return &user.DefaultInfo{Name: "alice"}
 }
 
+// fakeConditionsDataWithObjects is a fakeConditionsData that carries the given objects.
+type fakeConditionsDataWithObjects struct {
+	fakeConditionsData
+	object, oldObject, options runtime.Object
+}
+
+func (f fakeConditionsDataWithObjects) GetObject() runtime.Object           { return f.object }
+func (f fakeConditionsDataWithObjects) GetOldObject() runtime.Object        { return f.oldObject }
+func (f fakeConditionsDataWithObjects) GetOperationOptions() runtime.Object { return f.options }
+
 // newTestWebhookAuthorizer creates a WebhookAuthorizer with fake clients for testing.
 func newTestWebhookAuthorizer(
 	sarReviewer subjectAccessReviewer,
@@ -158,9 +168,12 @@ func TestConditionsAwareAuthorize(t *testing.T) {
 	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ConditionalAuthorization, true)
 
 	tests := []struct {
-		name            string
-		sarStatus       authorizationv1.SubjectAccessReviewStatus
-		sarErr          error
+		name      string
+		sarStatus authorizationv1.SubjectAccessReviewStatus
+		sarErr    error
+		// noACRReviewer leaves the conditions review client unset, in which case
+		// conditional decision support must not be advertised to the webhook.
+		noACRReviewer   bool
 		decisionOnError authorizer.Decision
 		wantDecision    string // expected decision.String()
 	}{
@@ -299,6 +312,27 @@ func TestConditionsAwareAuthorize(t *testing.T) {
 			decisionOnError: authorizer.DecisionNoOpinion,
 			wantDecision:    `Union[cm: ConditionsMap(denies=1), allow: Allow(reason="sub-allow")]`,
 		},
+		{
+			name:            "no reviewer, unconditional allow is honored",
+			sarStatus:       authorizationv1.SubjectAccessReviewStatus{Allowed: true, Reason: "admin access"},
+			noACRReviewer:   true,
+			decisionOnError: authorizer.DecisionNoOpinion,
+			wantDecision:    `Allow(reason="admin access")`,
+		},
+		{
+			name: "no reviewer, unrequested conditional decision fails closed",
+			sarStatus: authorizationv1.SubjectAccessReviewStatus{
+				ConditionalDecision: &authorizationv1.ConditionsAwareDecision{
+					Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
+					ConditionsMap: &authorizationv1.ConditionsMap{
+						AllowConditions: []authorizationv1.Condition{{ID: "example.com/allow", Type: "example.com/opaque"}},
+					},
+				},
+			},
+			noACRReviewer:   true,
+			decisionOnError: authorizer.DecisionNoOpinion,
+			wantDecision:    `NoOpinion(reason="failed closed", err="status.conditionalDecision: Forbidden: can only be set when the client opted into conditions-awareness")`,
+		},
 	}
 
 	for _, tc := range tests {
@@ -308,15 +342,23 @@ func TestConditionsAwareAuthorize(t *testing.T) {
 				err:      tc.sarErr,
 			}
 
-			wh := newTestWebhookAuthorizer(sarReviewer, nil, tc.decisionOnError)
+			var acrReviewer authorizationConditionsReviewer
+			if !tc.noACRReviewer {
+				acrReviewer = &fakeAuthorizationConditionsReviewer{}
+			}
+
+			wh := newTestWebhookAuthorizer(sarReviewer, acrReviewer, tc.decisionOnError)
 			decision := wh.ConditionsAwareAuthorize(testCtx, testAttr)
 
 			if got := decision.String(); got != tc.wantDecision {
 				t.Errorf("expected decision %s, got %s", tc.wantDecision, got)
 			}
-			if sarReviewer.received == nil {
+			switch {
+			case sarReviewer.received == nil:
 				t.Error("expected SAR to be called")
-			} else if !authorizationv1.SupportsConditionalAuthorization(sarReviewer.received.Spec.AuthorizationOptions) {
+			case tc.noACRReviewer && sarReviewer.received.Spec.AuthorizationOptions != nil:
+				t.Errorf("expected no authorizationOptions in the outgoing SAR, got %v", sarReviewer.received.Spec.AuthorizationOptions)
+			case !tc.noACRReviewer && !authorizationv1.SupportsConditionalAuthorization(sarReviewer.received.Spec.AuthorizationOptions):
 				t.Error("expected ConditionalAuthorization to be enabled in the outgoing SAR")
 			}
 		})
@@ -331,6 +373,7 @@ func TestAuthorize_FoldDown(t *testing.T) {
 	tests := []struct {
 		name               string
 		serializedDecision authorizationv1.ConditionsAwareDecision
+		denied             bool
 		wantDecision       authorizer.Decision
 	}{
 		{
@@ -394,6 +437,21 @@ func TestAuthorize_FoldDown(t *testing.T) {
 			},
 			wantDecision: authorizer.DecisionNoOpinion,
 		},
+		{
+			// The explicit deny must not be weakened to the NoOpinion failure decision
+			// of an unrequested Allow-only conditional decision.
+			name: "Denied together with an Allow-only condition stays Deny",
+			serializedDecision: authorizationv1.ConditionsAwareDecision{
+				Type: authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
+				ConditionsMap: &authorizationv1.ConditionsMap{
+					AllowConditions: []authorizationv1.Condition{
+						{ID: "example.com/allow-all", Type: "example.com/opaque"},
+					},
+				},
+			},
+			denied:       true,
+			wantDecision: authorizer.DecisionDeny,
+		},
 	}
 
 	for _, tc := range tests {
@@ -401,6 +459,7 @@ func TestAuthorize_FoldDown(t *testing.T) {
 			sarReviewer := &fakeSubjectAccessReviewer{
 				response: &authorizationv1.SubjectAccessReview{
 					Status: authorizationv1.SubjectAccessReviewStatus{
+						Denied:              tc.denied,
 						ConditionalDecision: &tc.serializedDecision,
 					},
 				},
@@ -422,11 +481,13 @@ func TestEvaluateConditions(t *testing.T) {
 	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ConditionalAuthorization, true)
 
 	tests := []struct {
-		name            string
-		decision        authorizer.ConditionsAwareDecision
-		acrResponse     *authorizationv1alpha1.AuthorizationConditionsReview
-		acrErr          error
-		noACRReviewer   bool
+		name          string
+		decision      authorizer.ConditionsAwareDecision
+		acrResponse   *authorizationv1alpha1.AuthorizationConditionsReview
+		acrErr        error
+		noACRReviewer bool
+		// data defaults to fakeConditionsData{} when nil.
+		data            authorizer.ConditionsData
 		decisionOnError authorizer.Decision
 		wantDecision    authorizer.Decision
 		wantReason      string
@@ -691,7 +752,7 @@ func TestEvaluateConditions(t *testing.T) {
 			decisionOnError: authorizer.DecisionNoOpinion, // ignored on purpose, Deny condition is stronger
 			wantDecision:    authorizer.DecisionDeny,
 			wantReason:      "failed closed",
-			wantErr:         `unrecognized decisionToEvaluate type "UnknownDecisionType"`,
+			wantErr:         `[response.decision.type: Invalid value: "UnknownDecisionType": currently must evaluate to an unconditional decision, response.decision.type: Unsupported value: "UnknownDecisionType": supported values: "Allow", "ConditionsMap", "Deny", "NoOpinion", "Union"]`,
 		},
 		{
 			name: "unknown response type fails closed, allow condition",
@@ -709,7 +770,103 @@ func TestEvaluateConditions(t *testing.T) {
 			decisionOnError: authorizer.DecisionDeny, // ignored on purpose, Deny condition is stronger
 			wantDecision:    authorizer.DecisionNoOpinion,
 			wantReason:      "failed closed",
-			wantErr:         `unrecognized decisionToEvaluate type "UnknownDecisionType"`,
+			wantErr:         `[response.decision.type: Invalid value: "UnknownDecisionType": currently must evaluate to an unconditional decision, response.decision.type: Unsupported value: "UnknownDecisionType": supported values: "Allow", "ConditionsMap", "Deny", "NoOpinion", "Union"]`,
+		},
+		// The webhook's response must be validated. The following responses would
+		// otherwise be accepted by the decision type switch alone.
+		{
+			name: "Allow response without the allow member fails validation",
+			decision: authorizer.ConditionsAwareDecisionConditionsMap(
+				nil, nil,
+				[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/c", Type: "example.com/opaque"}},
+			),
+			acrResponse: &authorizationv1alpha1.AuthorizationConditionsReview{
+				Response: &authorizationv1alpha1.AuthorizationConditionsResponse{
+					Decision: authorizationv1.ConditionsAwareDecision{
+						Type: authorizationv1.ConditionsAwareDecisionTypeAllow,
+					},
+				},
+			},
+			decisionOnError: authorizer.DecisionNoOpinion,
+			wantDecision:    authorizer.DecisionNoOpinion,
+			wantReason:      "failed closed",
+			wantErr:         "response.decision.allow: Invalid value: \"\": must be specified when `type` is \"Allow\"",
+		},
+		{
+			name: "response with unset decision type fails validation",
+			decision: authorizer.ConditionsAwareDecisionConditionsMap(
+				[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/c", Type: "example.com/opaque"}},
+				nil, nil,
+			),
+			acrResponse: &authorizationv1alpha1.AuthorizationConditionsReview{
+				Response: &authorizationv1alpha1.AuthorizationConditionsResponse{},
+			},
+			decisionOnError: authorizer.DecisionNoOpinion,
+			wantDecision:    authorizer.DecisionDeny,
+			wantReason:      "failed closed",
+			wantErr:         "response.decision.type: Required value",
+		},
+		// Objects must carry apiVersion and kind, as the webhook authorizer does not convert them.
+		{
+			name: "object without apiVersion and kind fails closed",
+			decision: authorizer.ConditionsAwareDecisionConditionsMap(
+				nil, nil,
+				[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/c", Type: "example.com/opaque"}},
+			),
+			data:            fakeConditionsDataWithObjects{object: &metav1.PartialObjectMetadata{}},
+			decisionOnError: authorizer.DecisionNoOpinion,
+			wantDecision:    authorizer.DecisionNoOpinion,
+			wantReason:      "failed closed",
+			wantErr:         "object of type *v1.PartialObjectMetadata must have apiVersion and kind set to be sent to the webhook authorizer",
+		},
+		{
+			name: "oldObject without apiVersion and kind fails closed",
+			decision: authorizer.ConditionsAwareDecisionConditionsMap(
+				[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/c", Type: "example.com/opaque"}},
+				nil, nil,
+			),
+			data: fakeConditionsDataWithObjects{
+				object:    &metav1.PartialObjectMetadata{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "ConfigMap"}},
+				oldObject: &metav1.PartialObjectMetadata{},
+			},
+			decisionOnError: authorizer.DecisionNoOpinion,
+			wantDecision:    authorizer.DecisionDeny,
+			wantReason:      "failed closed",
+			wantErr:         "oldObject of type *v1.PartialObjectMetadata must have apiVersion and kind set to be sent to the webhook authorizer",
+		},
+		{
+			name: "objects with apiVersion and kind are sent, typed nil objects are skipped, options need no apiVersion and kind",
+			decision: authorizer.ConditionsAwareDecisionConditionsMap(
+				nil, nil,
+				[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/c", Type: "example.com/opaque"}},
+			),
+			data: fakeConditionsDataWithObjects{
+				object:    &metav1.PartialObjectMetadata{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "ConfigMap"}},
+				oldObject: (*metav1.PartialObjectMetadata)(nil),
+				options:   &metav1.CreateOptions{},
+			},
+			acrResponse: &authorizationv1alpha1.AuthorizationConditionsReview{
+				Response: &authorizationv1alpha1.AuthorizationConditionsResponse{
+					Decision: authorizationv1.ConditionsAwareDecision{
+						Type:  authorizationv1.ConditionsAwareDecisionTypeAllow,
+						Allow: &authorizationv1.UnconditionalDecision{Reason: "allowed"},
+					},
+				},
+			},
+			decisionOnError: authorizer.DecisionNoOpinion,
+			wantDecision:    authorizer.DecisionAllow,
+			wantReason:      "allowed",
+			verifyACR: func(t *testing.T, acr *authorizationv1alpha1.AuthorizationConditionsReview) {
+				if acr == nil || acr.Request == nil || acr.Request.AdmissionRequest == nil {
+					t.Fatal("expected ACR request with an admissionRequest")
+				}
+				if acr.Request.AdmissionRequest.Object.Object == nil {
+					t.Error("expected object to be sent")
+				}
+				if acr.Request.AdmissionRequest.Options.Object == nil {
+					t.Error("expected options to be sent")
+				}
+			},
 		},
 		// Union decision is serialized into the ACR request and its response is honored.
 		{
@@ -842,8 +999,13 @@ func TestEvaluateConditions(t *testing.T) {
 				acrReviewer = fakeACR
 			}
 
+			data := tc.data
+			if data == nil {
+				data = fakeConditionsData{}
+			}
+
 			wh := newTestWebhookAuthorizer(&fakeSubjectAccessReviewer{}, acrReviewer, tc.decisionOnError)
-			d, reason, err := wh.EvaluateConditions(testCtx, tc.decision, fakeConditionsData{})
+			d, reason, err := wh.EvaluateConditions(testCtx, tc.decision, data)
 
 			var gotErr string
 			if err != nil {
@@ -921,6 +1083,8 @@ func TestConditionsAwareAuthorize_EndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create authorizer: %v", err)
 	}
+	// Conditional decisions are only advertised when they can be evaluated.
+	wh.authorizationConditionsReviewer = &fakeAuthorizationConditionsReviewer{}
 
 	decision := wh.ConditionsAwareAuthorize(testCtx, testAttr)
 
@@ -1172,7 +1336,7 @@ func TestConditionalResponseCaching(t *testing.T) {
 		t.Helper()
 		wh, err := newWithBackoff(sarReviewer, time.Hour, 0, testRetryBackoff,
 			authorizer.DecisionNoOpinion, nil, noopAuthorizerMetrics(),
-			authorizationcel.NewDefaultCompiler(), "test", nil)
+			authorizationcel.NewDefaultCompiler(), "test", &fakeAuthorizationConditionsReviewer{})
 		if err != nil {
 			t.Fatalf("newWithBackoff failed: %v", err)
 		}

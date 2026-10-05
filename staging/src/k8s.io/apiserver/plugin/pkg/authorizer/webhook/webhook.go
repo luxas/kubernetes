@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strconv"
 	"time"
 
@@ -261,12 +262,13 @@ func (w *WebhookAuthorizer) Authorize(ctx context.Context, attr authorizer.Attri
 	switch {
 	case r.Status.Denied && r.Status.Allowed:
 		return authorizer.DecisionDeny, r.Status.Reason, fmt.Errorf("webhook subject access review returned both allow and deny response")
+	// An explicit deny must win over an (unrequested) conditional decision, whose failure decision might only be NoOpinion.
+	case r.Status.Denied:
+		return authorizer.DecisionDeny, r.Status.Reason, nil
 	case r.Status.ConditionalDecision != nil:
 		// Parse the conditional decision so we know how to fail closed, reusing the existing code.
 		gotDecision := apiserverauthorizationv1.ToAuthorizerConditionsAwareDecision(*r.Status.ConditionalDecision, w.conditionsAwareFailureDecision)
 		return gotDecision.FailureDecision(), r.Status.Reason, fmt.Errorf("webhook subject access review returned unrequested conditional decision")
-	case r.Status.Denied:
-		return authorizer.DecisionDeny, r.Status.Reason, nil
 	case r.Status.Allowed:
 		return authorizer.DecisionAllow, r.Status.Reason, nil
 	default:
@@ -284,8 +286,13 @@ func (w *WebhookAuthorizer) ConditionsAwareAuthorize(ctx context.Context, attr a
 			Extra:  convertToSARExtra(user.GetExtra()),
 		}
 	}
-	r.Spec.AuthorizationOptions = &authorizationv1.AuthorizationOptions{
-		HandledDecisionTypes: authorizationv1.ConditionalAuthorizationDecisionTypesList(),
+	// Only advertise conditional decision support if the conditions can later be evaluated through EvaluateConditions;
+	// otherwise every conditional response would just fail closed, while the webhook could have answered unconditionally.
+	handlesConditional := w.authorizationConditionsReviewer != nil
+	if handlesConditional {
+		r.Spec.AuthorizationOptions = &authorizationv1.AuthorizationOptions{
+			HandledDecisionTypes: authorizationv1.ConditionalAuthorizationDecisionTypesList(),
+		}
 	}
 
 	if attr.IsResourceRequest() {
@@ -311,7 +318,7 @@ func (w *WebhookAuthorizer) ConditionsAwareAuthorize(ctx context.Context, attr a
 		return authorizer.ConditionsAwareDecisionNoOpinion("", nil)
 	}
 
-	r.Status, err = w.sendSARWebhook(ctx, r, attr, true)
+	r.Status, err = w.sendSARWebhook(ctx, r, attr, handlesConditional)
 	if err != nil {
 		return w.conditionsAwareFailureDecision(err)
 	}
@@ -443,6 +450,24 @@ func (w *WebhookAuthorizer) EvaluateConditions(ctx context.Context, decisionToEv
 		},
 	}
 
+	// The webhook authorizer cannot convert objects to a versioned form, so they must already carry apiVersion and kind;
+	// otherwise the webhook would receive objects it cannot interpret.
+	for fieldName, obj := range map[string]runtime.Object{
+		"object":    data.GetObject(),
+		"oldObject": data.GetOldObject(),
+	} {
+		if obj == nil {
+			continue
+		}
+		// Callers may hand over typed nil pointers (e.g. no old object on create)
+		if v := reflect.ValueOf(obj); v.Kind() == reflect.Pointer && v.IsNil() {
+			continue
+		}
+		if gvk := obj.GetObjectKind().GroupVersionKind(); len(gvk.Version) == 0 || len(gvk.Kind) == 0 {
+			return decisionToEvaluate.FailureDecision(), "failed closed", fmt.Errorf("%s of type %T must have apiVersion and kind set to be sent to the webhook authorizer", fieldName, obj)
+		}
+	}
+
 	evaluateRequestUUID := uuid.NewUUID()
 
 	var serializedUserInfo authenticationv1.UserInfo
@@ -496,13 +521,13 @@ func (w *WebhookAuthorizer) EvaluateConditions(ctx context.Context, decisionToEv
 		return decisionToEvaluate.FailureDecision(), "failed closed", field.Required(field.NewPath("response"), "must be set in AuthorizationConditionsReview responses")
 	}
 
-	// Verify that the webhook authorizer set UID correctly for the request.
-	if result.Response.UID != evaluateRequestUUID {
-		return decisionToEvaluate.FailureDecision(), "failed closed", field.Invalid(field.NewPath("response", "uid"), result.Response.UID, fmt.Sprintf("mismatch, expected %q that was given in request.uid", evaluateRequestUUID))
+	if errs := authorizationvalidation.CombinedValidateAuthorizationConditionsReviewCreate(ctx, result); len(errs) > 0 {
+		return decisionToEvaluate.FailureDecision(), "failed closed", errs.ToAggregate()
 	}
 
-	if errs := authorizationvalidation.CombinedValidateAuthorizationConditionsReviewCreate(ctx, r); len(errs) > 0 {
-		return decisionToEvaluate.FailureDecision(), "failed closed", errs.ToAggregate()
+	// Verify that the webhook authorizer set UID correctly for the request.
+	if result.Response.UID != evaluateRequestUUID {
+		return decisionToEvaluate.FailureDecision(), "failed closed", field.Invalid(field.NewPath("response", "uid"), result.Response.UID, fmt.Sprintf("mismatch, expected %q that was given in request.admissionRequest.uid", evaluateRequestUUID))
 	}
 
 	switch result.Response.Decision.Type {
