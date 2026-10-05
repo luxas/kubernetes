@@ -415,10 +415,10 @@ type AuthorizationOptions struct {
 	// - [Allow, Deny, NoOpinion] (for conditions-unaware clients) or
 	// - [Allow, Deny, NoOpinion, ConditionsMap, Union, ...] (for conditions-aware clients)
 	// If the authorizer would like to return conditions, but the client does not opt in to handle those here,
-	//   the authorizer must fail closed to a safe unconditional decision using ConditionsAwareDecision.FailureDecision()
+	//   the authorizer must fail closed to a safe unconditional decision
 	//   (Deny if any Deny conditions were present, otherwise NoOpinion).
 	// Order does not matter in this slice; set semantics should be used.
-	// The server should not reject unrecognized decision types (hence the k8s:opaqueType), but focus on whether the client
+	// The server does not reject unrecognized decision types, but focuses on whether the client
 	// supports a mode that the server does. All clients must support "classic", conditions-unaware authorization.
 	// +listType=set
 	// +k8s:listType=set
@@ -483,7 +483,7 @@ type ConditionsMap struct {
 	// +k8s:maxItems=128
 	// +k8s:optional
 	// +optional
-	DenyConditions []Condition `json:"denyConditions" protobuf:"bytes,1,rep,name=denyConditions"`
+	DenyConditions []Condition `json:"denyConditions,omitempty" protobuf:"bytes,1,rep,name=denyConditions"`
 
 	// noOpinionConditions contains the conditions with NoOpinion effect. If any such condition evaluates to
 	// true or error, the ConditionsMap as a whole must evaluate to NoOpinion.
@@ -494,7 +494,7 @@ type ConditionsMap struct {
 	// +k8s:maxItems=128
 	// +k8s:optional
 	// +optional
-	NoOpinionConditions []Condition `json:"noOpinionConditions" protobuf:"bytes,2,rep,name=noOpinionConditions"`
+	NoOpinionConditions []Condition `json:"noOpinionConditions,omitempty" protobuf:"bytes,2,rep,name=noOpinionConditions"`
 
 	// allowConditions contains the conditions with Allow effect. If any such condition evaluates to
 	// true, the ConditionsMap as a whole must evaluate to Allow.
@@ -505,7 +505,7 @@ type ConditionsMap struct {
 	// +k8s:maxItems=128
 	// +k8s:optional
 	// +optional
-	AllowConditions []Condition `json:"allowConditions" protobuf:"bytes,3,rep,name=allowConditions"`
+	AllowConditions []Condition `json:"allowConditions,omitempty" protobuf:"bytes,3,rep,name=allowConditions"`
 }
 
 // ConditionsAwareDecisionType is an enum representing what kind of authorization decision
@@ -606,7 +606,7 @@ type NamedConditionsAwareDecision struct {
 
 	// decision carries the inner decision returned from the authorizer.
 	// +required
-	Decision ConditionsAwareDecision `json:"decision" protobuf:"bytes,2,rep,name=decision"`
+	Decision ConditionsAwareDecision `json:"decision" protobuf:"bytes,2,opt,name=decision"`
 }
 
 // UnconditionalDecision represents the data associated with an unconditional decision.

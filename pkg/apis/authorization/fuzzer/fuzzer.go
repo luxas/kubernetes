@@ -25,12 +25,11 @@ import (
 
 // Funcs returns the fuzzer functions for the authorization api group.
 //
-// The v1beta1 schema dropped Spec.AuthorizationOptions and Status.ConditionalDecision,
-// and the v1 -> v1beta1 conversion functions fail closed on any value the v1beta1
-// schema can't represent (anything but nil AuthorizationOptions with the exact
-// unconditional HandledDecisionTypes, and nil ConditionalDecision). Constrain the
-// fuzzer to only produce values that survive that conversion so cross-version
-// round-trip tests don't spuriously fail. Content-level fuzzing of those fields
+// The v1beta1 schema lacks Spec.AuthorizationOptions and Status.ConditionalDecision,
+// so the conversion to v1beta1 is lossy: AuthorizationOptions is dropped, and a
+// ConditionalDecision is folded into a fail-closed unconditional Allowed/Denied status.
+// Neither survives a round trip, so the fuzzer leaves them nil to keep cross-version
+// round-trip tests from spuriously failing. Content-level fuzzing of those fields
 // is exercised by the dedicated declarative-validation tests.
 var Funcs = func(codecs runtimeserializer.CodecFactory) []interface{} {
 	return []interface{}{
