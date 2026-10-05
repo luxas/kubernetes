@@ -193,6 +193,9 @@ func (r *reloadableAuthorizerResolver) newForConfig(authzConfig *authzconfig.Aut
 						return nil, nil, fmt.Errorf("failed to load conditions review kubeconfig context %q: %w", cr.KubeConfigContextName, err)
 					}
 					conditionsReviewVersion = cr.Version
+					if configuredAuthorizer.Webhook.Timeout.Duration != 0 {
+						conditionsReviewConfig.Timeout = configuredAuthorizer.Webhook.Timeout.Duration
+					}
 				}
 			}
 
