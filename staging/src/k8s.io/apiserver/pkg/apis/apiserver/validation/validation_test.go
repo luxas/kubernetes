@@ -1697,6 +1697,9 @@ type (
 		// that don't touch ConditionsReview leave this at the zero value
 		// (false), matching the gate's own default.
 		conditionalAuthorizationGate bool
+		// checkErrorFields additionally compares each error's full field path.
+		// Older cases only set the leaf name, so this is opt-in.
+		checkErrorFields bool
 	}
 )
 
@@ -2464,7 +2467,7 @@ func TestValidateAuthorizationConfiguration(t *testing.T) {
 			repeatableTypes: sets.New("Webhook"),
 		},
 		{
-			// Verifies the wiring at validation.go:740–741: a valid ConditionsReview
+			// Verifies the ConditionsReview wiring in ValidateAuthorizationConfiguration: a valid ConditionsReview
 			// is silently accepted when the ConditionalAuthorization gate is on.
 			// KubeConfigContextName is only allowed when connectionType=KubeConfigFile,
 			// so this happy-path fixture pairs the two.
@@ -2533,10 +2536,11 @@ func TestValidateAuthorizationConfiguration(t *testing.T) {
 		{
 			// Verifies the gate check propagates through the parent: even an
 			// otherwise-valid ConditionsReview yields Forbidden when the gate
-			// is off. Guards against the nil-check at validation.go:740 being
+			// is off. Guards against the ConditionsReview nil-check being
 			// bypassed if we ever refactor the delegation.
 			name:                         "conditionsReview forbidden when feature gate is off",
 			conditionalAuthorizationGate: false,
+			checkErrorFields:             true,
 			configuration: api.AuthorizationConfiguration{
 				Authorizers: []api.AuthorizerConfiguration{
 					{
@@ -2562,7 +2566,7 @@ func TestValidateAuthorizationConfiguration(t *testing.T) {
 				},
 			},
 			expectedErrList: field.ErrorList{
-				field.Forbidden(field.NewPath("conditionsReview"), ""),
+				field.Forbidden(field.NewPath("authorizers").Index(0).Child("conditionsReview"), ""),
 			},
 			knownTypes:      sets.New("Webhook"),
 			repeatableTypes: sets.New("Webhook"),
@@ -2574,6 +2578,7 @@ func TestValidateAuthorizationConfiguration(t *testing.T) {
 			// with a non-empty KubeConfigContextName.
 			name:                         "conditionsReview kubeConfigContextName forbidden with connectionType=InClusterConfig",
 			conditionalAuthorizationGate: true,
+			checkErrorFields:             true,
 			configuration: api.AuthorizationConfiguration{
 				Authorizers: []api.AuthorizerConfiguration{
 					{
@@ -2598,7 +2603,7 @@ func TestValidateAuthorizationConfiguration(t *testing.T) {
 				},
 			},
 			expectedErrList: field.ErrorList{
-				field.Forbidden(field.NewPath("kubeConfigContextName"), ""),
+				field.Forbidden(field.NewPath("authorizers").Index(0).Child("conditionsReview", "kubeConfigContextName"), ""),
 			},
 			knownTypes:      sets.New("Webhook"),
 			repeatableTypes: sets.New("Webhook"),
@@ -2610,6 +2615,7 @@ func TestValidateAuthorizationConfiguration(t *testing.T) {
 			// the connectionType-linked kubeConfigContextName check.
 			name:                         "conditionsReview leaf errors propagate through parent (forbidden kubeConfigContextName + unsupported version)",
 			conditionalAuthorizationGate: true,
+			checkErrorFields:             true,
 			configuration: api.AuthorizationConfiguration{
 				Authorizers: []api.AuthorizerConfiguration{
 					{
@@ -2634,19 +2640,18 @@ func TestValidateAuthorizationConfiguration(t *testing.T) {
 				},
 			},
 			expectedErrList: field.ErrorList{
-				field.Forbidden(field.NewPath("kubeConfigContextName"), ""),
-				field.NotSupported(field.NewPath("version"), "v99beta1", []string{"v1alpha1"}),
+				field.Forbidden(field.NewPath("authorizers").Index(0).Child("conditionsReview", "kubeConfigContextName"), ""),
+				field.NotSupported(field.NewPath("authorizers").Index(0).Child("conditionsReview", "version"), "v99beta1", []string{"v1alpha1"}),
 			},
 			knownTypes:      sets.New("Webhook"),
 			repeatableTypes: sets.New("Webhook"),
 		},
 		{
-			// Verifies that leaf-level failures under ConditionsReview surface
-			// through ValidateAuthorizationConfiguration, not just when the leaf
-			// function is called directly. Combines "unsupported version" with
-			// the connectionType-linked kubeConfigContextName check.
+			// Conditions reviews are only supported together with SubjectAccessReview v1,
+			// as v1beta1 cannot express conditional decisions.
 			name:                         "conditionsReview can only be set for SAR v1",
 			conditionalAuthorizationGate: true,
+			checkErrorFields:             true,
 			configuration: api.AuthorizationConfiguration{
 				Authorizers: []api.AuthorizerConfiguration{
 					{
@@ -2678,7 +2683,7 @@ func TestValidateAuthorizationConfiguration(t *testing.T) {
 		{
 			// Verifies that a nil ConditionsReview yields no ConditionsReview
 			// errors even when the feature gate is off — the whole check is
-			// gated on `c.ConditionsReview != nil` at validation.go:740, so
+			// gated on `c.ConditionsReview != nil`, so
 			// legacy configs that never set the field must remain valid.
 			name:                         "conditionsReview absent, feature gate off, is valid",
 			conditionalAuthorizationGate: false,
@@ -2725,6 +2730,11 @@ func TestValidateAuthorizationConfiguration(t *testing.T) {
 						t.Errorf("expected bad value '%s', got '%s'",
 							expected.BadValue,
 							errList[i].BadValue)
+					}
+					if test.checkErrorFields && expected.Field != errList[i].Field {
+						t.Errorf("expected err field %s, got %s",
+							expected.Field,
+							errList[i].Field)
 					}
 				}
 			}
