@@ -419,7 +419,7 @@ type ConditionsReviewConfiguration struct {
 	// Required.
 	Version string
 
-	// kubeConfigContextName is the name of the context within the webhook's kubeconfig
+	// kubeConfigContextName is the name of the context within the webhook's
 	// kubeconfig file to use for conditions review requests.
 	// Can only be specified when connectionInfo.type = KubeConfigFile.
 	// If unset and connectionInfo.type = KubeConfigFile, the default kubeconfig
