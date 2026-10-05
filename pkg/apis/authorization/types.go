@@ -511,7 +511,8 @@ type AuthorizationConditionsRequest struct {
 // AuthorizationConditionsResponse describes an authorization conditions response.
 type AuthorizationConditionsResponse struct {
 	// UID is an identifier for the individual request/response.
-	// This must be copied over from the corresponding AuthorizationConditionsRequest.
+	// This must be copied over from request.admissionRequest.uid of the corresponding
+	// AuthorizationConditionsReview.
 	// It is possible that the same request content (except uid) is sent to the
 	// authorizer multiple times.
 	// +required
