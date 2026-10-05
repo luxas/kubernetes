@@ -754,6 +754,35 @@ func TestValidateAuthorizationConditionsReview(t *testing.T) {
 			`response.decision.type: Unsupported value: "SomeFutureType": supported values: "Allow", "ConditionsMap", "Deny", "NoOpinion", "Union"`,
 		},
 	}, {
+		name: "Union request",
+		requestDecision: authorizationv1.ConditionsAwareDecision{
+			Type: authorizationv1.ConditionsAwareDecisionTypeUnion,
+			Union: []authorizationv1.NamedConditionsAwareDecision{{
+				AuthorizerName: "cm",
+				Decision:       conditionsMapDecision,
+			}},
+		},
+		responseDecision: allowDecision,
+	}, {
+		// Unconditional decisions have nothing to evaluate.
+		name:             "unconditional allow request is not supported",
+		requestDecision:  allowDecision,
+		responseDecision: allowDecision,
+		msgs:             []string{`request.decision.type: Invalid value: "Allow": must be a conditional decision`},
+	}, {
+		name:             "unconditional deny request is not supported",
+		requestDecision:  denyDecision,
+		responseDecision: denyDecision,
+		msgs:             []string{`request.decision.type: Invalid value: "Deny": must be a conditional decision`},
+	}, {
+		name:             "unrecognized request type is not supported",
+		requestDecision:  authorizationv1.ConditionsAwareDecision{Type: "SomeFutureType"},
+		responseDecision: allowDecision,
+		msgs: []string{
+			`request.decision.type: Invalid value: "SomeFutureType": must be a conditional decision`,
+			`request.decision.type: Unsupported value: "SomeFutureType": supported values: "Allow", "ConditionsMap", "Deny", "NoOpinion", "Union"`,
+		},
+	}, {
 		// The conditions in the request are reported by declarative validation; the
 		// handwritten validators no longer descend into a decision at all.
 		name: "malformed request conditions are reported by declarative validation",

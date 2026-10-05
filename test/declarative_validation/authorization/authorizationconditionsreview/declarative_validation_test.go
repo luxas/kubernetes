@@ -54,6 +54,8 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 	// response therefore expect this error alongside whatever they are exercising. It has
 	// no declarative counterpart, hence MarkFromImperative.
 	responseNotUnconditionalErr := field.Invalid(field.NewPath("response", "decision", "type"), "", "").MarkFromImperative()
+	// Likewise, request.decision.type must be conditional, as unconditional decisions have nothing to evaluate.
+	requestNotConditionalErr := field.Invalid(field.NewPath("request", "decision", "type"), "", "").MarkFromImperative()
 
 	testCases := map[string]struct {
 		obj          authorization.AuthorizationConditionsReview
@@ -93,7 +95,8 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 			expectedErrs: field.ErrorList{
 				field.NotSupported[authorization.ConditionsAwareDecisionType](field.NewPath("request", "decision", "type"), authorization.ConditionsAwareDecisionType("BogusType"), nil),
 				field.NotSupported[authorization.ConditionsAwareDecisionType](field.NewPath("response", "decision", "type"), authorization.ConditionsAwareDecisionType("BogusType"), nil),
-				// An unrecognized type is not unconditional either.
+				// An unrecognized type is neither conditional nor unconditional.
+				requestNotConditionalErr,
 				responseNotUnconditionalErr,
 			},
 		},
@@ -299,7 +302,7 @@ func mkACR(tweaks ...func(*authorization.AuthorizationConditionsReview)) authori
 	acr := authorization.AuthorizationConditionsReview{
 		ObjectMeta: metav1.ObjectMeta{},
 		Request: &authorization.AuthorizationConditionsRequest{
-			Decision:         validNoOpinionDecision(),
+			Decision:         validConditionsMapDecision(),
 			AdmissionRequest: &admission.AdmissionRequest{UID: "test-uid"},
 		},
 		Response: &authorization.AuthorizationConditionsResponse{
@@ -334,6 +337,17 @@ func clearRequestAdmissionRequest() func(*authorization.AuthorizationConditionsR
 func setResponseDecision(d authorization.ConditionsAwareDecision) func(*authorization.AuthorizationConditionsReview) {
 	return func(acr *authorization.AuthorizationConditionsReview) {
 		acr.Response.Decision = d
+	}
+}
+
+// validConditionsMapDecision returns a minimally-valid conditional decision, as
+// required for request.decision.
+func validConditionsMapDecision() authorization.ConditionsAwareDecision {
+	return authorization.ConditionsAwareDecision{
+		Type: authorization.ConditionsAwareDecisionTypeConditionsMap,
+		ConditionsMap: &authorization.ConditionsMap{
+			AllowConditions: []authorization.Condition{{ID: "example.com/allow"}},
+		},
 	}
 }
 

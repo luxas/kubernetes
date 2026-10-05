@@ -262,7 +262,17 @@ func ValidateAuthorizationConditionsReview(acr *authorizationv1alpha1.Authorizat
 // ErrorList with any errors.
 func ValidateAuthorizationConditionsRequest(req *authorizationv1alpha1.AuthorizationConditionsRequest, fldPath *field.Path) field.ErrorList {
 	var allErrs field.ErrorList
-	// conditionalDecision does not need any handwritten validation.
+
+	// Only conditional decisions need to be evaluated. Declarative validation covers type being required, only validate if set.
+	if len(req.Decision.Type) != 0 {
+		switch req.Decision.Type {
+		case authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
+			authorizationv1.ConditionsAwareDecisionTypeUnion:
+			// ok
+		default:
+			allErrs = append(allErrs, field.Invalid(fldPath.Child("decision", "type"), req.Decision.Type, "must be a conditional decision"))
+		}
+	}
 	// That a ConditionsMap has between 1 and 128 conditions is enforced by authorizer.ConditionsAwareDecisionConditionsMap(...)
 
 	// Note: One could consider validating request.admissionRequest here, either declaratively or manually.
