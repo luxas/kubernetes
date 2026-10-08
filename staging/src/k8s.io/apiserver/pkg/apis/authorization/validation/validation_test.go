@@ -779,7 +779,6 @@ func TestValidateAuthorizationConditionsReview(t *testing.T) {
 		requestDecision:  authorizationv1.ConditionsAwareDecision{Type: "SomeFutureType"},
 		responseDecision: allowDecision,
 		msgs: []string{
-			`request.decision.type: Invalid value: "SomeFutureType": must be a conditional decision`,
 			`request.decision.type: Unsupported value: "SomeFutureType": supported values: "Allow", "ConditionsMap", "Deny", "NoOpinion", "Union"`,
 		},
 	}, {

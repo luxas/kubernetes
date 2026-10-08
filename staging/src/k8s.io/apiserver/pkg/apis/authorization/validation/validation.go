@@ -264,14 +264,16 @@ func ValidateAuthorizationConditionsRequest(req *authorizationv1alpha1.Authoriza
 	var allErrs field.ErrorList
 
 	// Only conditional decisions need to be evaluated. Declarative validation covers type being required, only validate if set.
-	if len(req.Decision.Type) != 0 {
-		switch req.Decision.Type {
-		case authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
-			authorizationv1.ConditionsAwareDecisionTypeUnion:
-			// ok
-		default:
-			allErrs = append(allErrs, field.Invalid(fldPath.Child("decision", "type"), req.Decision.Type, "must be a conditional decision"))
-		}
+	switch req.Decision.Type {
+	case "":
+		// missing, required error handled by DV
+	case authorizationv1.ConditionsAwareDecisionTypeConditionsMap,
+		authorizationv1.ConditionsAwareDecisionTypeUnion:
+		// ok
+	case authorizationv1.ConditionsAwareDecisionTypeAllow, authorizationv1.ConditionsAwareDecisionTypeNoOpinion, authorizationv1.ConditionsAwareDecisionTypeDeny:
+		allErrs = append(allErrs, field.Invalid(fldPath.Child("decision", "type"), req.Decision.Type, "must be a conditional decision"))
+	default:
+		// unknown type, invalid error handled by DV
 	}
 	// That a ConditionsMap has between 1 and 128 conditions is enforced by authorizer.ConditionsAwareDecisionConditionsMap(...)
 
