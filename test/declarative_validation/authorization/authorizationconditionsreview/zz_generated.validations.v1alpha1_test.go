@@ -33,6 +33,12 @@ func init() {
 			"request.admissionRequest": {
 				{ErrorType: "FieldValueRequired"},
 			},
+			"request.decision.allow": {
+				{ErrorType: "FieldValueInvalid", Origin: "union"},
+			},
+			"request.decision.conditionsMap": {
+				{ErrorType: "FieldValueInvalid", Origin: "union"},
+			},
 			"request.decision.conditionsMap.allowConditions": {
 				{ErrorType: "FieldValueTooMany", Origin: "maxItems"},
 			},
@@ -90,9 +96,18 @@ func init() {
 			"request.decision.conditionsMap.noOpinionConditions[*].type": {
 				{ErrorType: "FieldValueInvalid", Origin: "format=k8s-prefixed-label-key"},
 			},
+			"request.decision.deny": {
+				{ErrorType: "FieldValueInvalid", Origin: "union"},
+			},
+			"request.decision.noOpinion": {
+				{ErrorType: "FieldValueInvalid", Origin: "union"},
+			},
 			"request.decision.type": {
 				{ErrorType: "FieldValueNotSupported"},
 				{ErrorType: "FieldValueRequired"},
+			},
+			"request.decision.union": {
+				{ErrorType: "FieldValueInvalid", Origin: "union"},
 			},
 			"request.decision.union[*]": {
 				{ErrorType: "FieldValueDuplicate"},
@@ -100,6 +115,12 @@ func init() {
 			"request.decision.union[*].authorizerName": {
 				{ErrorType: "FieldValueInvalid", Origin: "format=k8s-long-name"},
 				{ErrorType: "FieldValueRequired"},
+			},
+			"response.decision.allow": {
+				{ErrorType: "FieldValueInvalid", Origin: "union"},
+			},
+			"response.decision.conditionsMap": {
+				{ErrorType: "FieldValueInvalid", Origin: "union"},
 			},
 			"response.decision.conditionsMap.allowConditions": {
 				{ErrorType: "FieldValueTooMany", Origin: "maxItems"},
@@ -158,9 +179,18 @@ func init() {
 			"response.decision.conditionsMap.noOpinionConditions[*].type": {
 				{ErrorType: "FieldValueInvalid", Origin: "format=k8s-prefixed-label-key"},
 			},
+			"response.decision.deny": {
+				{ErrorType: "FieldValueInvalid", Origin: "union"},
+			},
+			"response.decision.noOpinion": {
+				{ErrorType: "FieldValueInvalid", Origin: "union"},
+			},
 			"response.decision.type": {
 				{ErrorType: "FieldValueNotSupported"},
 				{ErrorType: "FieldValueRequired"},
+			},
+			"response.decision.union": {
+				{ErrorType: "FieldValueInvalid", Origin: "union"},
 			},
 			"response.decision.union[*]": {
 				{ErrorType: "FieldValueDuplicate"},

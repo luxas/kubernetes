@@ -87,6 +87,61 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 				field.Required(field.NewPath("response", "decision", "type"), ""),
 			},
 		},
+		"decision.type=Allow without allow (request+response)": {
+			obj: mkACR(
+				setRequestDecision(authorization.ConditionsAwareDecision{Type: authorization.ConditionsAwareDecisionTypeAllow}),
+				setResponseDecision(authorization.ConditionsAwareDecision{Type: authorization.ConditionsAwareDecisionTypeAllow}),
+			),
+			expectedErrs: field.ErrorList{
+				requestNotConditionalErr,
+				field.Invalid(field.NewPath("request", "decision", "allow"), "", "").WithOrigin("union"),
+				field.Invalid(field.NewPath("response", "decision", "allow"), "", "").WithOrigin("union"),
+			},
+		},
+		"decision.type=Deny without deny (request+response)": {
+			obj: mkACR(
+				setRequestDecision(authorization.ConditionsAwareDecision{Type: authorization.ConditionsAwareDecisionTypeDeny}),
+				setResponseDecision(authorization.ConditionsAwareDecision{Type: authorization.ConditionsAwareDecisionTypeDeny}),
+			),
+			expectedErrs: field.ErrorList{
+				requestNotConditionalErr,
+				field.Invalid(field.NewPath("request", "decision", "deny"), "", "").WithOrigin("union"),
+				field.Invalid(field.NewPath("response", "decision", "deny"), "", "").WithOrigin("union"),
+			},
+		},
+		"decision.type=NoOpinion without noOpinion (request+response)": {
+			obj: mkACR(
+				setRequestDecision(authorization.ConditionsAwareDecision{Type: authorization.ConditionsAwareDecisionTypeNoOpinion}),
+				setResponseDecision(authorization.ConditionsAwareDecision{Type: authorization.ConditionsAwareDecisionTypeNoOpinion}),
+			),
+			expectedErrs: field.ErrorList{
+				requestNotConditionalErr,
+				field.Invalid(field.NewPath("request", "decision", "noOpinion"), "", "").WithOrigin("union"),
+				field.Invalid(field.NewPath("response", "decision", "noOpinion"), "", "").WithOrigin("union"),
+			},
+		},
+		"decision.type=ConditionsMap without conditionsMap (request+response)": {
+			obj: mkACR(
+				setRequestDecision(authorization.ConditionsAwareDecision{Type: authorization.ConditionsAwareDecisionTypeConditionsMap}),
+				setResponseDecision(authorization.ConditionsAwareDecision{Type: authorization.ConditionsAwareDecisionTypeConditionsMap}),
+			),
+			expectedErrs: field.ErrorList{
+				responseNotUnconditionalErr,
+				field.Invalid(field.NewPath("request", "decision", "conditionsMap"), "", "").WithOrigin("union"),
+				field.Invalid(field.NewPath("response", "decision", "conditionsMap"), "", "").WithOrigin("union"),
+			},
+		},
+		"decision.type=Union without union (request+response)": {
+			obj: mkACR(
+				setRequestDecision(authorization.ConditionsAwareDecision{Type: authorization.ConditionsAwareDecisionTypeUnion}),
+				setResponseDecision(authorization.ConditionsAwareDecision{Type: authorization.ConditionsAwareDecisionTypeUnion}),
+			),
+			expectedErrs: field.ErrorList{
+				responseNotUnconditionalErr,
+				field.Invalid(field.NewPath("request", "decision", "union"), "", "").WithOrigin("union"),
+				field.Invalid(field.NewPath("response", "decision", "union"), "", "").WithOrigin("union"),
+			},
+		},
 		"decision.type not supported (request+response)": {
 			obj: mkACR(
 				setRequestDecision(authorization.ConditionsAwareDecision{Type: "BogusType"}),
@@ -95,8 +150,7 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 			expectedErrs: field.ErrorList{
 				field.NotSupported[authorization.ConditionsAwareDecisionType](field.NewPath("request", "decision", "type"), authorization.ConditionsAwareDecisionType("BogusType"), nil),
 				field.NotSupported[authorization.ConditionsAwareDecisionType](field.NewPath("response", "decision", "type"), authorization.ConditionsAwareDecisionType("BogusType"), nil),
-				// An unrecognized type is neither conditional nor unconditional.
-				requestNotConditionalErr,
+				// An unrecognized type is not unconditional. The request side leaves unknown types to declarative validation.
 				responseNotUnconditionalErr,
 			},
 		},

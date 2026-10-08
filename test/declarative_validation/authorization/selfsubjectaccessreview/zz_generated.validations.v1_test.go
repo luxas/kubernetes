@@ -46,6 +46,12 @@ func init() {
 			"status.conditionalDecision": {
 				{ErrorType: "FieldValueForbidden"},
 			},
+			"status.conditionalDecision.allow": {
+				{ErrorType: "FieldValueInvalid", Origin: "union"},
+			},
+			"status.conditionalDecision.conditionsMap": {
+				{ErrorType: "FieldValueInvalid", Origin: "union"},
+			},
 			"status.conditionalDecision.conditionsMap.allowConditions": {
 				{ErrorType: "FieldValueTooMany", Origin: "maxItems"},
 			},
@@ -103,9 +109,18 @@ func init() {
 			"status.conditionalDecision.conditionsMap.noOpinionConditions[*].type": {
 				{ErrorType: "FieldValueInvalid", Origin: "format=k8s-prefixed-label-key"},
 			},
+			"status.conditionalDecision.deny": {
+				{ErrorType: "FieldValueInvalid", Origin: "union"},
+			},
+			"status.conditionalDecision.noOpinion": {
+				{ErrorType: "FieldValueInvalid", Origin: "union"},
+			},
 			"status.conditionalDecision.type": {
 				{ErrorType: "FieldValueNotSupported"},
 				{ErrorType: "FieldValueRequired"},
+			},
+			"status.conditionalDecision.union": {
+				{ErrorType: "FieldValueInvalid", Origin: "union"},
 			},
 			"status.conditionalDecision.union[*]": {
 				{ErrorType: "FieldValueDuplicate"},

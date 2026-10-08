@@ -168,6 +168,52 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 				field.NotSupported[authorization.ConditionsAwareDecisionType](field.NewPath("status", "conditionalDecision", "type"), authorization.ConditionsAwareDecisionType("BogusType"), nil),
 			},
 		},
+		"status.conditionalDecision.type=Allow without allow": {
+			v1Only:                         true,
+			enableConditionalAuthorization: true,
+			obj:                            mkSAR(setConditionalDecision(&authorization.ConditionsAwareDecision{Type: authorization.ConditionsAwareDecisionTypeAllow})),
+			expectedErrs: field.ErrorList{
+				// Unconditional decisions must be expressed via status.allowed and status.denied.
+				field.Invalid(field.NewPath("status", "conditionalDecision", "type"), "", "").MarkFromImperative(),
+				field.Invalid(field.NewPath("status", "conditionalDecision", "allow"), "", "").WithOrigin("union"),
+			},
+		},
+		"status.conditionalDecision.type=Deny without deny": {
+			v1Only:                         true,
+			enableConditionalAuthorization: true,
+			obj:                            mkSAR(setConditionalDecision(&authorization.ConditionsAwareDecision{Type: authorization.ConditionsAwareDecisionTypeDeny})),
+			expectedErrs: field.ErrorList{
+				// Unconditional decisions must be expressed via status.allowed and status.denied.
+				field.Invalid(field.NewPath("status", "conditionalDecision", "type"), "", "").MarkFromImperative(),
+				field.Invalid(field.NewPath("status", "conditionalDecision", "deny"), "", "").WithOrigin("union"),
+			},
+		},
+		"status.conditionalDecision.type=NoOpinion without noOpinion": {
+			v1Only:                         true,
+			enableConditionalAuthorization: true,
+			obj:                            mkSAR(setConditionalDecision(&authorization.ConditionsAwareDecision{Type: authorization.ConditionsAwareDecisionTypeNoOpinion})),
+			expectedErrs: field.ErrorList{
+				// Unconditional decisions must be expressed via status.allowed and status.denied.
+				field.Invalid(field.NewPath("status", "conditionalDecision", "type"), "", "").MarkFromImperative(),
+				field.Invalid(field.NewPath("status", "conditionalDecision", "noOpinion"), "", "").WithOrigin("union"),
+			},
+		},
+		"status.conditionalDecision.type=ConditionsMap without conditionsMap": {
+			v1Only:                         true,
+			enableConditionalAuthorization: true,
+			obj:                            mkSAR(setConditionalDecision(&authorization.ConditionsAwareDecision{Type: authorization.ConditionsAwareDecisionTypeConditionsMap})),
+			expectedErrs: field.ErrorList{
+				field.Invalid(field.NewPath("status", "conditionalDecision", "conditionsMap"), "", "").WithOrigin("union"),
+			},
+		},
+		"status.conditionalDecision.type=Union without union": {
+			v1Only:                         true,
+			enableConditionalAuthorization: true,
+			obj:                            mkSAR(setConditionalDecision(&authorization.ConditionsAwareDecision{Type: authorization.ConditionsAwareDecisionTypeUnion})),
+			expectedErrs: field.ErrorList{
+				field.Invalid(field.NewPath("status", "conditionalDecision", "union"), "", "").WithOrigin("union"),
+			},
+		},
 		"status.conditionalDecision.conditionsMap[deny|noOpinion|allow]Conditions[*].id required": {
 			v1Only:                         true,
 			enableConditionalAuthorization: true,
