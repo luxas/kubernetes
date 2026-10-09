@@ -288,15 +288,17 @@ func ValidateAuthorizationConditionsResponse(resp *authorizationv1alpha1.Authori
 	var allErrs field.ErrorList
 
 	// Declarative validation covers type being required, only validate if set
-	if len(resp.Decision.Type) != 0 {
-		switch resp.Decision.Type {
-		case authorizationv1.ConditionsAwareDecisionTypeDeny,
-			authorizationv1.ConditionsAwareDecisionTypeNoOpinion,
-			authorizationv1.ConditionsAwareDecisionTypeAllow:
-			// ok
-		default:
-			allErrs = append(allErrs, field.Invalid(fldPath.Child("decision", "type"), resp.Decision.Type, "currently must evaluate to an unconditional decision"))
-		}
+	switch resp.Decision.Type {
+	case "":
+	// missing, required error handled by DV
+	case authorizationv1.ConditionsAwareDecisionTypeDeny,
+		authorizationv1.ConditionsAwareDecisionTypeNoOpinion,
+		authorizationv1.ConditionsAwareDecisionTypeAllow:
+		// ok
+	case authorizationv1.ConditionsAwareDecisionTypeConditionsMap, authorizationv1.ConditionsAwareDecisionTypeUnion:
+		allErrs = append(allErrs, field.Invalid(fldPath.Child("decision", "type"), resp.Decision.Type, "currently must evaluate to an unconditional decision"))
+	default:
+		// unknown type, invalid error handled by DV
 	}
 
 	return allErrs

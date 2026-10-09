@@ -150,9 +150,6 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 			expectedErrs: field.ErrorList{
 				field.NotSupported[authorization.ConditionsAwareDecisionType](field.NewPath("request", "decision", "type"), authorization.ConditionsAwareDecisionType("BogusType"), nil),
 				field.NotSupported[authorization.ConditionsAwareDecisionType](field.NewPath("response", "decision", "type"), authorization.ConditionsAwareDecisionType("BogusType"), nil),
-				// An unrecognized type is neither conditional nor unconditional.
-				requestNotConditionalErr,
-				responseNotUnconditionalErr,
 			},
 		},
 		"decision.conditionsMap[deny|noOpinion|allow]Conditions[*].id required (request+response)": {
