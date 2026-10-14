@@ -101,7 +101,6 @@ func withAuthorization(handler http.Handler, a authorizer.UnconditionalAuthorize
 			if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
 				// Attach the conditionsAwareDecision to the request context
 				var attachErr error
-				// No need to specify an authorizer as there won't be any evaluation.
 				ctx, attachErr = request.WithConditionallyAuthorizedDecision(ctx, liftedAuthorizer, authorizer.ConditionsAwareDecisionAllow(reason, err))
 				if attachErr != nil {
 					responsewriters.InternalError(w, req, attachErr)
