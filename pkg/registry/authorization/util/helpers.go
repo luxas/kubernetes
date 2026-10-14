@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"strings"
 
+	authorizationv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
@@ -29,6 +30,8 @@ import (
 	apiserverauthorizationv1 "k8s.io/apiserver/pkg/apis/authorization/v1"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
+	genericfeatures "k8s.io/apiserver/pkg/features"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	authorizationapi "k8s.io/kubernetes/pkg/apis/authorization"
 	authorizationv1internal "k8s.io/kubernetes/pkg/apis/authorization/v1"
 )
@@ -242,7 +245,23 @@ func BuildEvaluationError(evaluationError error, attrs authorizer.AttributesReco
 	return strings.Join(evaluationErrors, "; ")
 }
 
-// SARStatusFromAuthorize invokes the authorizer as appropriate (with or without conditions support), and encodes the result into SAR status.
+// ResolveAuthorizationOptions returns the versioned form of the client's AuthorizationOptions, and whether conditional and
+// unconditional authorization are supported. Conditional authorization is only supported if both the server (feature gate)
+// and the client (authorizationOptions) support it. A nil versionedAO means the client only handles unconditional decisions.
+func ResolveAuthorizationOptions(authorizationOptions *authorizationapi.AuthorizationOptions) (versionedAO *authorizationv1.AuthorizationOptions, supportsConditionalAuthorization, supportsUnconditionalAuthorization bool, err error) {
+	if !utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) || authorizationOptions == nil {
+		return nil, false, true, nil
+	}
+	versionedAO = &authorizationv1.AuthorizationOptions{}
+	// Call the conversion function directly, as we know it exactly. It is known to be fast as the internal package and v1 is byte-identical.
+	// conversion.Scope is known to be unused in this specific case and thus left nil. We know it in practice never errors.
+	if err := authorizationv1internal.Convert_authorization_AuthorizationOptions_To_v1_AuthorizationOptions(authorizationOptions, versionedAO, nil); err != nil {
+		return nil, false, false, fmt.Errorf("unexpected, could not convert internal AuthorizationOptions to v1: %w", err)
+	}
+	return versionedAO, authorizationv1.SupportsConditionalAuthorization(versionedAO), authorizationv1.SupportsUnconditionalAuthorization(versionedAO), nil
+}
+
+// ConditionsAwareDecisionToSARStatus encodes a ConditionsAwareDecision into SAR status.
 func ConditionsAwareDecisionToSARStatus(ctx context.Context, attrs authorizer.AttributesRecord, decision authorizer.ConditionsAwareDecision) authorizationapi.SubjectAccessReviewStatus {
 	// Allow/Deny/NoOpinion decisions should be serialized as before, on the top-level SAR status.
 	if decision.IsUnconditional() {
