@@ -19,6 +19,7 @@ package subjectaccessreview
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strconv"
 	"testing"
 
@@ -54,6 +55,26 @@ var conditionalDecisionTypes = []authorizationapi.ConditionsAwareDecisionType{
 	authorizationapi.ConditionsAwareDecisionTypeNoOpinion,
 	authorizationapi.ConditionsAwareDecisionTypeConditionsMap,
 	authorizationapi.ConditionsAwareDecisionTypeUnion,
+}
+
+type fakeAuthorizer struct {
+	decision authorizer.Decision
+	reason   string
+	err      error
+}
+
+func (f *fakeAuthorizer) Authorize(ctx context.Context, attrs authorizer.Attributes) (authorizer.Decision, string, error) {
+	return f.decision, f.reason, f.err
+}
+
+// The tests using fakeAuthorizer expect the conditions-unaware Authorize to be called, so the
+// conditions-aware path denies with a distinct reason that the status assertions would catch.
+func (f *fakeAuthorizer) ConditionsAwareAuthorize(_ context.Context, _ authorizer.Attributes) authorizer.ConditionsAwareDecision {
+	return authorizer.ConditionsAwareDecisionDeny("unexpected ConditionsAwareAuthorize call", nil)
+}
+
+func (f *fakeAuthorizer) EvaluateConditions(_ context.Context, _ authorizer.ConditionsAwareDecision, _ authorizer.ConditionsData) (authorizer.Decision, string, error) {
+	return authorizer.DecisionDeny, "", authorizer.ErrorConditionEvaluationNotSupported
 }
 
 // conditionsAwareFakeAuthorizer lets tests inject arbitrary ConditionsAwareDecision

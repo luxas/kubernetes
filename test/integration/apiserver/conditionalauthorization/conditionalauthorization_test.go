@@ -996,8 +996,8 @@ authorizers:
 
 	if featureEnabled {
 		// The internal conditional-allow decision that the test authorizer
-		// returns for configmap SARs. The webhook mock serializes this via
-		// SerializeConditionsAwareDecision on the way out.
+		// returns for configmap SARs. The webhook mock converts this via
+		// FromConditionsAwareDecision on the way out.
 		internalConditionalAllow := authorizer.ConditionsAwareDecisionConditionsMap(
 			nil, nil,
 			[]authorizer.Condition{
@@ -1739,7 +1739,7 @@ func (h *webhookServerHandler) handleSAR(ctx context.Context, w http.ResponseWri
 		return
 	}
 	var decision authorizer.ConditionsAwareDecision
-	if sar.Spec.AuthorizationOptions.SupportsConditionalAuthorization() {
+	if authorizationv1.SupportsConditionalAuthorization(sar.Spec.AuthorizationOptions) {
 		decision = h.getAuthorizer().ConditionsAwareAuthorize(ctx, attrs)
 	} else {
 		decision = authorizer.ConditionsAwareDecisionFromParts(h.getAuthorizer().Authorize(ctx, attrs))
@@ -1771,7 +1771,7 @@ func (h *webhookServerHandler) handleACR(ctx context.Context, w http.ResponseWri
 	// authorizer's EvaluateConditions is the canonical entry point: it can
 	// e.g. dispatch on condition Type, and for the testAuthorizer used here
 	// it routes into ConditionsMap.Evaluate with a CEL-based evaluator.
-	internalDecision := authorizationv1apiserver.DeserializeConditionsAwareDecision(
+	internalDecision := authorizationv1apiserver.ToAuthorizerConditionsAwareDecision(
 		acr.Request.Decision,
 		func(err error) authorizer.ConditionsAwareDecision {
 			return authorizer.ConditionsAwareDecisionDeny("failed closed", err)
@@ -1794,7 +1794,7 @@ func (h *webhookServerHandler) handleACR(ctx context.Context, w http.ResponseWri
 	}
 	acr.Response = &authorizationv1alpha1.AuthorizationConditionsResponse{
 		UID:      uid,
-		Decision: authorizationv1apiserver.SerializeConditionsAwareDecision(evaluated),
+		Decision: authorizationv1apiserver.FromAuthorizerConditionsAwareDecision(evaluated),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -1847,7 +1847,7 @@ func applyDecisionToSAR(sar *authorizationv1.SubjectAccessReview, decision autho
 		sar.Status.Reason = decision.Reason()
 		sar.Status.EvaluationError = errString
 	default: // ConditionsMap / Union
-		sar.Status.ConditionalDecision = new(authorizationv1apiserver.SerializeConditionsAwareDecision(decision))
+		sar.Status.ConditionalDecision = new(authorizationv1apiserver.FromAuthorizerConditionsAwareDecision(decision))
 	}
 }
 

@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 
+	authorizationv1 "k8s.io/api/authorization/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -30,6 +31,7 @@ import (
 	"k8s.io/apiserver/pkg/registry/rest"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	authorizationapi "k8s.io/kubernetes/pkg/apis/authorization"
+	authorizationinternalv1 "k8s.io/kubernetes/pkg/apis/authorization/v1"
 	authorizationvalidation "k8s.io/kubernetes/pkg/apis/authorization/validation"
 	authorizationutil "k8s.io/kubernetes/pkg/registry/authorization/util"
 )
@@ -101,12 +103,28 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		authorizationAttributes = authorizationutil.NonResourceAttributesFrom(userToCheck, *selfSAR.Spec.NonResourceAttributes)
 	}
 
-	// Only activate Conditional Authorization if both the server and client supports it
-	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) && selfSAR.Spec.AuthorizationOptions.SupportsConditionalAuthorization() {
+	supportsConditionalAuthorization := false
+	supportsUnconditionalAuthorization := true
+	var versionedAO *authorizationv1.AuthorizationOptions
+
+	// A nil versionedAO means the client only handles unconditional decisions.
+	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) && selfSAR.Spec.AuthorizationOptions != nil {
+		versionedAO = &authorizationv1.AuthorizationOptions{}
+		// Call the conversion function directly, as we know it exactly. It is known to be fast as the internal package and v1 is byte-identical.
+		// conversion.Scope is known to be unused in this specific case and thus left nil. We know it in practice never errors.
+		if err := authorizationinternalv1.Convert_authorization_AuthorizationOptions_To_v1_AuthorizationOptions(selfSAR.Spec.AuthorizationOptions, versionedAO, nil); err != nil {
+			return nil, fmt.Errorf("unexpected, could not convert internal AuthorizationOptions to v1: %w", err)
+		}
+		// Only activate Conditional Authorization if both the server (feature flag) and client (AuthorizationOptions) supports it
+		supportsConditionalAuthorization = authorizationv1.SupportsConditionalAuthorization(versionedAO)
+		supportsUnconditionalAuthorization = authorizationv1.SupportsUnconditionalAuthorization(versionedAO)
+	}
+
+	if supportsConditionalAuthorization {
 		conditionsAwareDecision := r.authorizer.ConditionsAwareAuthorize(ctx, authorizationAttributes)
 		selfSAR.Status = authorizationutil.ConditionsAwareDecisionToSARStatus(ctx, authorizationAttributes, conditionsAwareDecision)
 
-	} else if selfSAR.Spec.AuthorizationOptions.SupportsUnconditionalAuthorization() {
+	} else if supportsUnconditionalAuthorization {
 		// conditions-unaware flow, feature gate is off or client does not support conditions
 		decision, reason, evaluationErr := r.authorizer.Authorize(ctx, authorizationAttributes)
 
@@ -118,7 +136,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		}
 	} else {
 		// the HandledDecisionTypes was neither [Allow, ConditionsMap, Deny, NoOpinion, Union] or [Allow, Deny, NoOpinion], reject it.
-		return nil, apierrors.NewBadRequest(fmt.Sprintf("unsupported client-handled decision types: %v", sets.List(selfSAR.Spec.AuthorizationOptions.GetHandledDecisionTypes())))
+		return nil, apierrors.NewBadRequest(fmt.Sprintf("unsupported client-handled decision types: %v", sets.List(authorizationv1.GetHandledDecisionTypes(versionedAO))))
 	}
 
 	return selfSAR, nil

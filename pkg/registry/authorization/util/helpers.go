@@ -254,9 +254,9 @@ func ConditionsAwareDecisionToSARStatus(ctx context.Context, attrs authorizer.At
 		}
 	}
 	// ConditionsMap or Union decision should be put under status.conditionalDecision.
-	serializedv1 := apiserverauthorizationv1.SerializeConditionsAwareDecision(decision)
-	serializedinternal := &authorizationapi.ConditionsAwareDecision{}
-	if err := authorizationv1internal.Convert_v1_ConditionsAwareDecision_To_authorization_ConditionsAwareDecision(&serializedv1, serializedinternal, nil); err != nil {
+	versionedConditionsAwareDecision := apiserverauthorizationv1.FromAuthorizerConditionsAwareDecision(decision)
+	internalConditionsAwareDecision := &authorizationapi.ConditionsAwareDecision{}
+	if err := authorizationv1internal.Convert_v1_ConditionsAwareDecision_To_authorization_ConditionsAwareDecision(&versionedConditionsAwareDecision, internalConditionsAwareDecision, nil); err != nil {
 		// This conversion should never fail, but handle the case to be safe.
 		return authorizationapi.SubjectAccessReviewStatus{
 			Allowed:         false,
@@ -266,6 +266,6 @@ func ConditionsAwareDecisionToSARStatus(ctx context.Context, attrs authorizer.At
 		}
 	}
 	return authorizationapi.SubjectAccessReviewStatus{
-		ConditionalDecision: serializedinternal,
+		ConditionalDecision: internalConditionsAwareDecision,
 	}
 }
