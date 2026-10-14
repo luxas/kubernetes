@@ -46,6 +46,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/version"
 	utilwaitgroup "k8s.io/apimachinery/pkg/util/waitgroup"
 	"k8s.io/apiserver/pkg/admission"
+	"k8s.io/apiserver/pkg/admission/plugin/authorizer/conditionsenforcer"
 	"k8s.io/apiserver/pkg/audit"
 	"k8s.io/apiserver/pkg/authentication/authenticator"
 	"k8s.io/apiserver/pkg/authentication/authenticatorfactory"
@@ -1048,6 +1049,11 @@ func DefaultBuildHandlerChain(apiHandler http.Handler, c *Config) http.Handler {
 	} else {
 		handler = genericapifilters.WithAuthorization(handler, c.Authorization.Authorizer, c.Serializer)
 	}
+
+	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) && !c.Authorization.ConditionsEnforcerPluginEnabled {
+		klog.Warningf("ConditionalAuthorization feature gate is on, but the %s admission plugin is disabled", conditionsenforcer.PluginName)
+	}
+
 	handler = filterlatency.TrackStarted(handler, c.TracerProvider, "authorization")
 
 	if c.FlowControl != nil {
