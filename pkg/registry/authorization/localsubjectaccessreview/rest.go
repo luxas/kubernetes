@@ -72,17 +72,6 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	}
 
 	// Clear status so it's not taken into account during input validation.
-	// This is important, as we cannot make validation stricter; in k8s 1.36 and before, the client was able to pass a bogus status without a validation error.
-	localSubjectAccessReview.Status = authorizationapi.SubjectAccessReviewStatus{}
-
-	// Clear the options for opting into conditions-awareness when the feature gate is off.
-	// This means that we fallback to the conditions-unaware Authorize when the feature gate is
-	// off, even though both the client and authorizer might have supported conditions.
-	if !utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
-		localSubjectAccessReview.Spec.AuthorizationOptions = nil
-	}
-
-	// Clear status so it's not taken into account during input validation.
 	// This is important, as we cannot make validation stricter; in k8s 1.37 and before, the client was able to pass a bogus status without a validation error.
 	localSubjectAccessReview.Status = authorizationapi.SubjectAccessReviewStatus{}
 

@@ -33,7 +33,6 @@ import (
 	genericfeatures "k8s.io/apiserver/pkg/features"
 	"k8s.io/component-base/featuregate"
 	"k8s.io/klog/v2"
-	"k8s.io/utils/ptr"
 )
 
 const (
@@ -62,7 +61,7 @@ type conditionsEnforcer struct {
 }
 
 func (c *conditionsEnforcer) InspectFeatureGates(features featuregate.FeatureGate) {
-	c.featureEnabled = ptr.To(features.Enabled(genericfeatures.ConditionalAuthorization))
+	c.featureEnabled = new(features.Enabled(genericfeatures.ConditionalAuthorization))
 }
 
 func (c *conditionsEnforcer) ValidateInitialization() error {
@@ -92,7 +91,7 @@ func (c *conditionsEnforcer) Validate(ctx context.Context, a admission.Attribute
 	// Guard against bad inputs
 	case possiblyConditionalDecision.IsDeny(), possiblyConditionalDecision.IsNoOpinion(), !possiblyConditionalDecision.PossibleDecisions().Has(authorizer.DecisionAllow):
 		audit.AddAuditAnnotation(ctx, filters.ReasonAnnotationKey, filters.ReasonError)
-		return apierrors.NewInternalError(fmt.Errorf("did not expect conditional decision %s to be attached to the RequestInfo context, only Allow or conditional allow", possiblyConditionalDecision.String()))
+		return apierrors.NewInternalError(fmt.Errorf("did not expect decision %s to reach the admission stage, but be rejected at the authorization stage", possiblyConditionalDecision.String()))
 	// If the request was previously unconditionally Allowed, nothing needed here.
 	// WithConditionsAwareAuthorization already sets the allowed audit annotation.
 	case possiblyConditionalDecision.IsAllow():
@@ -101,7 +100,7 @@ func (c *conditionsEnforcer) Validate(ctx context.Context, a admission.Attribute
 		// continue below
 	default:
 		audit.AddAuditAnnotation(ctx, filters.ReasonAnnotationKey, filters.ReasonError)
-		return apierrors.NewInternalError(fmt.Errorf("did not expect conditional decision %s to be attached to the RequestInfo context, only Allow or conditional allow", possiblyConditionalDecision.String()))
+		return apierrors.NewInternalError(fmt.Errorf("did not expect decision %s to be attached to the RequestInfo context, only Allow or conditional allow", possiblyConditionalDecision.String()))
 	}
 
 	versionedAttributes, err := admission.NewVersionedAttributes(a, a.GetKind(), o)
@@ -114,17 +113,22 @@ func (c *conditionsEnforcer) Validate(ctx context.Context, a admission.Attribute
 
 	// Enforce the evaluated decision to only evaluate to something that is beforehand possible
 	if !possiblyConditionalDecision.PossibleDecisions().Has(decision) {
+		// err uses the decision before overwriting it
+		err = fmt.Errorf("authorizer tried to return %s from EvaluateConditions, but the possible outcomes were %v", decision.String(), sets.List(possiblyConditionalDecision.PossibleDecisions()))
+
 		decision = possiblyConditionalDecision.FailureDecision()
 		reason = "failed closed"
-		err = fmt.Errorf("authorizer tried to return %s from EvaluateConditions, but the possible outcomes were %v", decision.String(), sets.List(possiblyConditionalDecision.PossibleDecisions()))
 	}
 
 	// The code flow here should exactly match filters.WithAuthorization.
 	// an authorizer could encounter evaluation errors and still allow the request, so authorizer decision is checked before error here.
 	if decision == authorizer.DecisionAllow {
+		// TODO(luxas): Consider how to reconcile this with the fact that admission might run multiple times, e.g.
+		// during retries or deletecollection. In that case, this provides first-writer-wins semantics.
 		audit.AddAuditAnnotations(ctx,
 			filters.DecisionAnnotationKey, filters.DecisionAllow,
 			filters.ReasonAnnotationKey, reason)
+
 		return nil
 	}
 
@@ -143,5 +147,5 @@ func (c *conditionsEnforcer) Validate(ctx context.Context, a admission.Attribute
 		filters.DecisionAnnotationKey, filters.DecisionForbid,
 		filters.ReasonAnnotationKey, reason)
 
-	return apierrors.NewForbidden(versionedAttributes.GetResource().GroupResource(), versionedAttributes.GetName(), responsewriters.ForbiddenStatusError(authzAttrs, reason))
+	return responsewriters.ForbiddenStatusError(authzAttrs, reason)
 }

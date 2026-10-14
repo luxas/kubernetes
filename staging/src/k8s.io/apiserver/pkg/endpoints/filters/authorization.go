@@ -33,7 +33,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/audit"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
-	"k8s.io/apiserver/pkg/authorization/authorizerfactory"
 	"k8s.io/apiserver/pkg/endpoints/handlers/responsewriters"
 	"k8s.io/apiserver/pkg/endpoints/request"
 )
@@ -69,6 +68,7 @@ func withAuthorization(handler http.Handler, a authorizer.UnconditionalAuthorize
 		klog.Warning("Authorization is disabled")
 		return handler
 	}
+	liftedAuthorizer := authorizer.AuthorizerFunc(a.Authorize)
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		ctx := req.Context()
 		authorizationStart := time.Now()
@@ -101,7 +101,8 @@ func withAuthorization(handler http.Handler, a authorizer.UnconditionalAuthorize
 			if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
 				// Attach the conditionsAwareDecision to the request context
 				var attachErr error
-				ctx, attachErr = request.WithConditionallyAuthorizedDecision(ctx, authorizerfactory.NewAlwaysAllowAuthorizer(), authorizer.ConditionsAwareDecisionAllow(reason, err))
+				// No need to specify an authorizer as there won't be any evaluation.
+				ctx, attachErr = request.WithConditionallyAuthorizedDecision(ctx, liftedAuthorizer, authorizer.ConditionsAwareDecisionAllow(reason, err))
 				if attachErr != nil {
 					responsewriters.InternalError(w, req, attachErr)
 					return
