@@ -19,6 +19,7 @@ package filters
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -108,20 +109,16 @@ func withAuthorization(handler http.Handler, a authorizer.UnconditionalAuthorize
 }
 
 // WithConditionsAwareAuthorization passes all authorized requests on to handler, and returns a forbidden error otherwise.
-// If conditionalAuthzClassifier returns true, it also allows conditionally authorized requests through, as then the classifier
-// guarantees that there is some conditions enforcement later in the request handler chain.
-//
-// When the ConditionalAuthorization feature gate is on AND the AuthorizationConditionsEnforcer admission plugin is enabled,
-// the request always flows through the conditions-aware handler so a ConditionsAwareDecision is attached to the context —
-// the enforcer plugin requires that context value to be present even when the classifier says "no conditional support here"
-// (it then observes an unconditional decision and short-circuits). Only when the gate is off or the plugin is disabled
-// do we fall back to the plain WithAuthorization filter, which is the pre-feature behaviour.
-func WithConditionsAwareAuthorization(hhandler http.Handler, auth authorizer.Authorizer, s runtime.NegotiatedSerializer, conditionsEnforcerEnabled bool, conditionalAuthzClassifier ConditionalAuthorizationRequestClassifier) http.Handler {
-	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) && conditionsEnforcerEnabled && conditionalAuthzClassifier != nil {
+// The ConditionalAuthorization feature gate must be on and classifier non-nil to use this filter.
+// The conditionalAuthzClassifier may only return true if the AuthorizationConditionsEnforcer is enabled.
+// If the classifier returns true, this filter will let conditionally-authorized requests proceed to the admission phase,
+// with the conditional decision in attached to the context.
+func WithConditionsAwareAuthorization(hhandler http.Handler, auth authorizer.Authorizer, s runtime.NegotiatedSerializer, conditionalAuthzClassifier ConditionalAuthorizationRequestClassifier) (http.Handler, error) {
+	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) && conditionalAuthzClassifier != nil {
 		RegisterMetrics()
-		return withConditionsAwareAuthorization(hhandler, auth, s, recordAuthorizationMetrics, conditionalAuthzClassifier)
+		return withConditionsAwareAuthorization(hhandler, auth, s, recordAuthorizationMetrics, conditionalAuthzClassifier), nil
 	}
-	return WithAuthorization(hhandler, auth, s)
+	return nil, fmt.Errorf("WithConditionsAwareAuthorization requires the ConditionalAuthorization feature to be set, and the conditionalAuthzClassifier to be non-nil")
 }
 
 func withConditionsAwareAuthorization(handler http.Handler, a authorizer.Authorizer, s runtime.NegotiatedSerializer, metrics recordAuthorizationMetricsFunc, conditionalAuthzClassifier ConditionalAuthorizationRequestClassifier) http.Handler {
@@ -144,7 +141,7 @@ func withConditionsAwareAuthorization(handler http.Handler, a authorizer.Authori
 
 		// Both branches must set unconditionallyAuthorized, reason, err, and metricsResultLabel properly
 		// Only call ConditionsAwareAuthorize for requests that support conditional authorization.
-		if conditionalAuthzClassifier != nil && conditionalAuthzClassifier(attributes) {
+		if conditionalAuthzClassifier(attributes) {
 			conditionsAwareDecision = a.ConditionsAwareAuthorize(ctx, attributes)
 		} else {
 			conditionsAwareDecision = authorizer.ConditionsAwareDecisionFromParts(a.Authorize(ctx, attributes))

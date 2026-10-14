@@ -496,11 +496,10 @@ func TestWithAuthorization(t *testing.T) {
 					})
 
 					noopMetrics := func(_ context.Context, _ string, _, _ time.Time) {}
-					// Mirror the dispatch that the public WithConditionsAwareAuthorization wrapper does:
-					// use the conditions-aware handler only when the gate is on and the AuthorizationConditionsEnforcer is enabled.
-					// In this test, the admission plugin is always considered present, and thus is the second AND term always true.
+					// Mirror the dispatch in DefaultBuildHandlerChain: use the conditions-aware handler only when the gate is on,
+					// the classifier is non-nil, and the AuthorizationConditionsEnforcer is enabled.
 					var handler http.Handler
-					if mode.gate {
+					if mode.gate && tt.conditionalAuthzClassifier != nil {
 						handler = withConditionsAwareAuthorization(innerHandler, tt.authorizer, negotiatedSerializer, noopMetrics, tt.conditionalAuthzClassifier)
 					} else {
 						handler = withAuthorization(innerHandler, tt.authorizer, negotiatedSerializer, noopMetrics)

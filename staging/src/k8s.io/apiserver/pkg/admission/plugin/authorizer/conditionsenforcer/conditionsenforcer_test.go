@@ -550,10 +550,14 @@ func TestConditionsEnforcerEndToEnd(t *testing.T) {
 					// TODO(luxas): Wire up conditions support for compound authorization for update -> create requests here as well using the real filter.
 
 					// TODO(luxas): Could we use the real BuildHandlerChain here?
-					if mode.gate {
-						// This test is exercising the conditions-enforcer admission plugin, so mark
-						// the enforcer as enabled in the WithConditionsAwareAuthorization dispatch.
-						handler = filters.WithConditionsAwareAuthorization(handler, tt.authorizer, testCodecs.WithoutConversion(), true /* conditionsEnforcerEnabled */, tt.conditionalAuthzClassifier)
+					// Mirror DefaultBuildHandlerChain: the conditions-aware filter is only used with the
+					// feature gate on and a non-nil classifier.
+					if mode.gate && tt.conditionalAuthzClassifier != nil {
+						var err error
+						handler, err = filters.WithConditionsAwareAuthorization(handler, tt.authorizer, testCodecs.WithoutConversion(), tt.conditionalAuthzClassifier)
+						if err != nil {
+							t.Fatal(err)
+						}
 					} else {
 						handler = filters.WithAuthorization(handler, tt.authorizer, testCodecs.WithoutConversion())
 					}

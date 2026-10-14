@@ -1044,8 +1044,14 @@ func DefaultBuildHandlerChain(apiHandler http.Handler, c *Config) http.Handler {
 	handler := apiHandler
 
 	handler = filterlatency.TrackCompleted(handler)
-	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) && c.Authorization.ConditionsEnforcerPluginEnabled {
-		handler = genericapifilters.WithConditionsAwareAuthorization(handler, c.Authorization.Authorizer, c.Serializer, c.Authorization.ConditionsEnforcerPluginEnabled, c.Authorization.ConditionalAuthorizationRequestClassifier)
+	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) && c.Authorization.ConditionalAuthorizationRequestClassifier != nil && c.Authorization.ConditionsEnforcerPluginEnabled {
+		var err error
+		handler, err = genericapifilters.WithConditionsAwareAuthorization(handler, c.Authorization.Authorizer, c.Serializer, c.Authorization.ConditionalAuthorizationRequestClassifier)
+		if err != nil {
+			// An error is only returned if the feature gate is off, or the classifier is nil, but that is never the case in this branch,
+			// so this is in practice unreachable.
+			panic(err)
+		}
 	} else {
 		handler = genericapifilters.WithAuthorization(handler, c.Authorization.Authorizer, c.Serializer)
 	}

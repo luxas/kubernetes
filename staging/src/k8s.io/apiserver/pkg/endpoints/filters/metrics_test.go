@@ -174,9 +174,10 @@ func TestRecordAuthorizationMetricsMetrics(t *testing.T) {
 		"authorization_decision_annotations_total",
 	}
 
-	// authzVariant is one way of reaching a given authorization result. A nil classifier, or one
-	// returning false, uses the conditions-unaware Authorize path, a classifier returning true
-	// uses the conditions-aware path.
+	// authzVariant is one way of reaching a given authorization result. A nil classifier uses the
+	// conditions-unaware WithAuthorization filter, a non-nil one uses WithConditionsAwareAuthorization,
+	// where a classifier returning false falls back to the conditions-unaware Authorize, and one
+	// returning true uses ConditionsAwareAuthorize.
 	type authzVariant struct {
 		authorizer authorizer.Authorizer
 		classifier ConditionalAuthorizationRequestClassifier
@@ -286,9 +287,17 @@ func TestRecordAuthorizationMetricsMetrics(t *testing.T) {
 					defer authorizationAttemptsCounter.Reset()
 
 					audit := &auditinternal.Event{Level: auditinternal.LevelMetadata}
-					// Match the signature of WithConditionsAwareAuthorization: the test enables the enforcer plugin
-					// so that the conditions-aware dispatch is exercised whenever the classifier is non-nil.
-					handler := WithConditionsAwareAuthorization(&fakeHTTPHandler{}, variant.authorizer, negotiatedSerializer, true /* conditionsEnforcerEnabled */, variant.classifier)
+					// Mirror DefaultBuildHandlerChain: the conditions-aware filter is only used with a non-nil classifier.
+					var handler http.Handler
+					if variant.classifier != nil {
+						var err error
+						handler, err = WithConditionsAwareAuthorization(&fakeHTTPHandler{}, variant.authorizer, negotiatedSerializer, variant.classifier)
+						if err != nil {
+							t.Fatal(err)
+						}
+					} else {
+						handler = WithAuthorization(&fakeHTTPHandler{}, variant.authorizer, negotiatedSerializer)
+					}
 					// TODO: fake audit injector
 
 					req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/namespaces/default/pods", nil)
