@@ -98,7 +98,7 @@ func TestConditionsEnforcerContextInvariant(t *testing.T) {
 		for _, enforcer := range []bool{false, true} {
 			for _, newFilter := range []bool{false, true} {
 				// DefaultBuildHandlerChain only uses the new filter with the feature gate and the enforcer on.
-				if newFilter && !(gate && enforcer) {
+				if newFilter && (!gate || !enforcer) {
 					continue
 				}
 				for _, detach := range []bool{false, true} {
