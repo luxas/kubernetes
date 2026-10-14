@@ -33,6 +33,7 @@ import (
 	genericfeatures "k8s.io/apiserver/pkg/features"
 	"k8s.io/component-base/featuregate"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/ptr"
 )
 
 const (
@@ -43,7 +44,7 @@ const (
 // Register registers a plugin
 func Register(plugins *admission.Plugins) {
 	plugins.Register(PluginName, func(config io.Reader) (admission.Interface, error) {
-		return NewConditionalAuthorizationEnforcer(false), nil // Default off, can be overridden by InspectFeatureGates
+		return NewConditionalAuthorizationEnforcer(), nil // Default off, can be overridden by InspectFeatureGates
 	})
 }
 
@@ -52,31 +53,32 @@ var _ admission.ValidationInterface = &conditionsEnforcer{}
 var _ genericadmissioninit.WantsFeatures = &conditionsEnforcer{}
 
 // NewConditionalAuthorizationEnforcer instantiates a new authorization conditions enforcer admission plugin
-func NewConditionalAuthorizationEnforcer(featureEnabled bool) *conditionsEnforcer {
-	return &conditionsEnforcer{
-		featureEnabled: featureEnabled,
-	}
+func NewConditionalAuthorizationEnforcer() *conditionsEnforcer {
+	return &conditionsEnforcer{}
 }
 
 type conditionsEnforcer struct {
-	featureEnabled bool
+	featureEnabled *bool
 }
 
 func (c *conditionsEnforcer) InspectFeatureGates(features featuregate.FeatureGate) {
-	c.featureEnabled = features.Enabled(genericfeatures.ConditionalAuthorization)
+	c.featureEnabled = ptr.To(features.Enabled(genericfeatures.ConditionalAuthorization))
 }
 
 func (c *conditionsEnforcer) ValidateInitialization() error {
+	if c.featureEnabled == nil {
+		return fmt.Errorf("InspectFeatureGates must be called during admission initialization time")
+	}
 	return nil
 }
 
 func (c *conditionsEnforcer) Handles(operation admission.Operation) bool {
-	return c.featureEnabled
+	return c.featureEnabled != nil && *c.featureEnabled
 }
 
 func (c *conditionsEnforcer) Validate(ctx context.Context, a admission.Attributes, o admission.ObjectInterfaces) error {
 	// Safety check, never operate when not enabled.
-	if !c.featureEnabled {
+	if c.featureEnabled == nil || !*c.featureEnabled {
 		return nil
 	}
 
@@ -102,8 +104,7 @@ func (c *conditionsEnforcer) Validate(ctx context.Context, a admission.Attribute
 		return apierrors.NewInternalError(fmt.Errorf("did not expect conditional decision %s to be attached to the RequestInfo context, only Allow or conditional allow", possiblyConditionalDecision.String()))
 	}
 
-	// TODO(luxas): This should be admission.NewVersionedAttributes when it correctly overrides GetOldObject()
-	versionedAttributes, err := newVersionedAttributes(a, a.GetKind(), o)
+	versionedAttributes, err := admission.NewVersionedAttributes(a, a.GetKind(), o)
 	if err != nil {
 		return fmt.Errorf("failed to convert objects to request version: %w", err)
 	}

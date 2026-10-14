@@ -251,12 +251,68 @@ func makeUpdateRequest(t *testing.T) *http.Request {
 func setupConditionsEnforcer(t *testing.T) admission.Interface {
 	t.Helper()
 
-	plugin := NewConditionalAuthorizationEnforcer(false) // Enablement determined by the feature gate
+	plugin := NewConditionalAuthorizationEnforcer() // Enablement determined by the feature gate
 	plugin.InspectFeatureGates(utilfeature.DefaultFeatureGate)
 	if err := plugin.ValidateInitialization(); err != nil {
 		t.Fatalf("ValidateInitialization failed: %v", err)
 	}
 	return plugin
+}
+
+func TestConditionsEnforcerInitialization(t *testing.T) {
+	tests := []struct {
+		name         string
+		inspectGates bool
+		gateEnabled  bool
+		wantInitErr  bool
+		wantHandles  bool
+	}{
+		{
+			name:         "InspectFeatureGates not called",
+			inspectGates: false,
+			wantInitErr:  true,
+			wantHandles:  false,
+		},
+		{
+			name:         "feature gate disabled",
+			inspectGates: true,
+			gateEnabled:  false,
+			wantHandles:  false,
+		},
+		{
+			name:         "feature gate enabled",
+			inspectGates: true,
+			gateEnabled:  true,
+			wantHandles:  true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ConditionalAuthorization, tt.gateEnabled)
+
+			plugin := NewConditionalAuthorizationEnforcer()
+			if tt.inspectGates {
+				plugin.InspectFeatureGates(utilfeature.DefaultFeatureGate)
+			}
+
+			err := plugin.ValidateInitialization()
+			if (err != nil) != tt.wantInitErr {
+				t.Errorf("ValidateInitialization() error = %v, wantErr %v", err, tt.wantInitErr)
+			}
+
+			for _, op := range []admission.Operation{admission.Create, admission.Update, admission.Delete, admission.Connect} {
+				if got := plugin.Handles(op); got != tt.wantHandles {
+					t.Errorf("Handles(%s) = %v, want %v", op, got, tt.wantHandles)
+				}
+			}
+
+			// Without a conditional decision in the context, Validate must be a no-op
+			// regardless of enablement, and must not panic on an uninitialized plugin.
+			if err := plugin.Validate(context.Background(), nil, nil); err != nil {
+				t.Errorf("Validate() with no decision in context = %v, want nil", err)
+			}
+		})
+	}
 }
 
 func TestConditionsEnforcerEndToEnd(t *testing.T) {
