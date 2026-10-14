@@ -1018,6 +1018,12 @@ authorizers:
 		t.Errorf("expected no AuthorizationConditionsReviews to be sent to the webhook, got %d", acrCount)
 	}
 
+	if conditionalAuthorizationActive {
+		t.Run("ValidatingAdmissionPolicy runs before the AuthorizationConditionsEnforcer", func(t *testing.T) {
+			testValidatingAdmissionPolicyRunsBeforeConditionsEnforcer(t, adminClient, server.ClientConfig, webhookServer)
+		})
+	}
+
 	// The SubjectAccessReview endpoints and the fold-down only depend on the feature gate, not on the
 	// admission plugin, so they behave the same whether or not the AuthorizationConditionsEnforcer is enabled.
 	if featureEnabled {

@@ -110,8 +110,8 @@ var AllOrderedPlugins = []string{
 
 	mutatingadmissionpolicy.PluginName,   // MutatingAdmissionPolicy
 	mutatingwebhook.PluginName,           // MutatingAdmissionWebhook
-	conditionsenforcer.PluginName,        // AuthorizationConditionsEnforcer
 	validatingadmissionpolicy.PluginName, // ValidatingAdmissionPolicy
+	conditionsenforcer.PluginName,        // AuthorizationConditionsEnforcer; this is after VAP to avoid having to send webhooks unless needed.
 	validatingwebhook.PluginName,         // ValidatingAdmissionWebhook
 	resourcequota.PluginName,             // ResourceQuota
 	deny.PluginName,                      // AlwaysDeny
