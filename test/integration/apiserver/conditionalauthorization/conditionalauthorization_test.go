@@ -27,6 +27,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/cel-go/cel"
@@ -64,14 +65,23 @@ import (
 // (with conditions) for SubjectAccessReview requests, and then evaluates those
 // conditions via AuthorizationConditionsReview during admission.
 func TestConditionalAuthorizationEnabled(t *testing.T) {
-	runConditionalAuthorizationTests(t, true)
+	runConditionalAuthorizationTests(t, true, true)
 }
 
 // TestConditionalAuthorizationDisabled tests that when the ConditionalAuthorization
 // feature gate is disabled, conditional decisions from webhooks are treated as
 // NoOpinion (falling through to RBAC).
 func TestConditionalAuthorizationDisabled(t *testing.T) {
-	runConditionalAuthorizationTests(t, false)
+	runConditionalAuthorizationTests(t, false, true)
+}
+
+// TestConditionalAuthorizationEnforcerDisabled tests that when the ConditionalAuthorization
+// feature gate is enabled, but the AuthorizationConditionsEnforcer admission plugin is
+// disabled, no conditional authorization happens: nothing would enforce the conditions,
+// so the authorization filter uses the conditions-unaware Authorize, and conditional
+// decisions fold down just like when the feature gate is disabled.
+func TestConditionalAuthorizationEnforcerDisabled(t *testing.T) {
+	runConditionalAuthorizationTests(t, true, false)
 }
 
 type conditionalAuthzTestCase struct {
@@ -100,7 +110,9 @@ type conditionalAuthzTestCase struct {
 	expectAllowedWhenDisabled *bool
 }
 
-func runConditionalAuthorizationTests(t *testing.T, featureEnabled bool) {
+func runConditionalAuthorizationTests(t *testing.T, featureEnabled, conditionsEnforcerEnabled bool) {
+	conditionalAuthorizationActive := featureEnabled && conditionsEnforcerEnabled
+
 	dir := t.TempDir()
 
 	// Start a webhook server that handles both SubjectAccessReview (authorization)
@@ -179,10 +191,14 @@ authorizers:
 	}
 	t.Cleanup(closeConversion)
 
-	server := kubeapiservertesting.StartTestServerOrDie(t, nil, []string{
+	serverFlags := []string{
 		fmt.Sprintf("--feature-gates=ConditionalAuthorization=%v", featureEnabled),
 		"--authorization-config=" + authzConfigPath,
-	}, framework.SharedEtcd())
+	}
+	if !conditionsEnforcerEnabled {
+		serverFlags = append(serverFlags, "--disable-admission-plugins=AuthorizationConditionsEnforcer")
+	}
+	server := kubeapiservertesting.StartTestServerOrDie(t, nil, serverFlags, framework.SharedEtcd())
 	t.Cleanup(server.TearDownFn)
 
 	adminClient := clientset.NewForConfigOrDie(server.ClientConfig)
@@ -976,7 +992,7 @@ authorizers:
 					err := tc.makeRequest(t, userClient, suffix)
 
 					expected := tc.expectAllowed
-					if !featureEnabled && tc.expectAllowedWhenDisabled != nil {
+					if !conditionalAuthorizationActive && tc.expectAllowedWhenDisabled != nil {
 						expected = *tc.expectAllowedWhenDisabled
 					}
 
@@ -994,6 +1010,16 @@ authorizers:
 		})
 	}
 
+	// Conditions are only ever sent to the webhook for evaluation when something enforces them.
+	acrCount := webhookServer.handler.acrCount.Load()
+	if conditionalAuthorizationActive && acrCount == 0 {
+		t.Errorf("expected the webhook to receive AuthorizationConditionsReviews, got none")
+	} else if !conditionalAuthorizationActive && acrCount != 0 {
+		t.Errorf("expected no AuthorizationConditionsReviews to be sent to the webhook, got %d", acrCount)
+	}
+
+	// The SubjectAccessReview endpoints and the fold-down only depend on the feature gate, not on the
+	// admission plugin, so they behave the same whether or not the AuthorizationConditionsEnforcer is enabled.
 	if featureEnabled {
 		// The internal conditional-allow decision that the test authorizer
 		// returns for configmap SARs. The webhook mock converts this via
@@ -1603,6 +1629,9 @@ type webhookServerHandler struct {
 
 	mu    sync.Mutex
 	authz authorizer.Authorizer
+
+	// acrCount is the number of AuthorizationConditionsReviews received.
+	acrCount atomic.Int64
 }
 
 // setAuthorizer swaps in the authorizer to be used by the SAR and ACR handlers
@@ -1714,6 +1743,7 @@ func (h *webhookServerHandler) serveACR(w http.ResponseWriter, req *http.Request
 	}
 	defer func() { _ = req.Body.Close() }()
 
+	h.acrCount.Add(1)
 	h.handleACR(req.Context(), w, body)
 }
 
