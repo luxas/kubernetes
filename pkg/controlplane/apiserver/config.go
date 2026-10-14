@@ -21,7 +21,6 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/http"
-	"slices"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -293,6 +292,8 @@ func BuildAuthorizer(ctx context.Context, s options.CompletedOptions, egressSele
 // the verbs for which admission control applies to in kube-apiserver
 var admissionVerbs = sets.New("create", "update", "patch", "delete", "deletecollection")
 
+var excludedFromAdmission = sets.New(exclusion.Excluded()...)
+
 // conditionalRequestClassifier returns true if admission runs for
 func conditionalRequestClassifier(attrs authorizer.Attributes) bool {
 	// Make sure there is exactly one GVR matched. This _should_ be the case in the HTTP filter, but just to make sure.
@@ -310,7 +311,7 @@ func conditionalRequestClassifier(attrs authorizer.Attributes) bool {
 		Resource: attrs.GetResource(),
 	}
 	// if the GroupResource is excluded from admission, we cannot enforce conditions
-	if slices.Contains(exclusion.Excluded(), gr) {
+	if excludedFromAdmission.Has(gr) {
 		return false
 	}
 	// If the verb is one which is subject to admission, the ConditionsEnforcer will catch the
