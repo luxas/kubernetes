@@ -260,7 +260,7 @@ func ConditionsAwareDecisionToSARStatus(ctx context.Context, attrs authorizer.At
 		// This conversion should never fail, but handle the case to be safe.
 		return authorizationapi.SubjectAccessReviewStatus{
 			Allowed:         false,
-			Denied:          true,
+			Denied:          decision.FailureDecision() == authorizer.DecisionDeny,
 			Reason:          "failed closed",
 			EvaluationError: BuildEvaluationError(err, attrs),
 		}
