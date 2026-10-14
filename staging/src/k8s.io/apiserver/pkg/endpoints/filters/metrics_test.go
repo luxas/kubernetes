@@ -18,6 +18,7 @@ package filters
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -173,144 +174,90 @@ func TestRecordAuthorizationMetricsMetrics(t *testing.T) {
 		"authorization_decision_annotations_total",
 	}
 
-	testCases := []struct {
-		desc       string
+	// authzVariant is one way of reaching a given authorization result. A nil classifier, or one
+	// returning false, uses the conditions-unaware Authorize path, a classifier returning true
+	// uses the conditions-aware path.
+	type authzVariant struct {
 		authorizer authorizer.Authorizer
 		classifier ConditionalAuthorizationRequestClassifier
-		want       string
+	}
+	conditionsUnaware := func(decision authorizer.Decision, reason string, err error) authzVariant {
+		return authzVariant{authorizer: fakeAuthorizer{decision, reason, err}}
+	}
+	// conditionsAware leaves the classifier nil if classifierResult is nil.
+	conditionsAware := func(decision authorizer.ConditionsAwareDecision, classifierResult *bool) authzVariant {
+		v := authzVariant{authorizer: &conditionsAwareFakeAuthorizer{makeDecision: func() authorizer.ConditionsAwareDecision { return decision }}}
+		if classifierResult != nil {
+			v.classifier = func(authorizer.Attributes) bool { return *classifierResult }
+		}
+		return v
+	}
+
+	errUserInfo := errors.New("can't parse user info")
+	conditionalAllow := authorizer.ConditionsAwareDecisionConditionsMap(
+		nil, nil,
+		[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/cond", Condition: "maybe", Type: "example.com/foo-type"}},
+	)
+	conditionalDeny := authorizer.ConditionsAwareDecisionConditionsMap(
+		[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/cond", Condition: "maybe-not", Type: "example.com/foo-type"}},
+		nil, nil,
+	)
+	conditionalNoOpinion := authorizer.ConditionsAwareDecisionConditionsMap(
+		nil,
+		[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/cond", Condition: "maybe", Type: "example.com/foo-type"}},
+		nil,
+	)
+
+	testCases := []struct {
+		wantResult string
+		// variants are the authorizer setups that all must produce wantResult.
+		variants map[string]authzVariant
 	}{
 		{
-			desc: "auth ok",
-			authorizer: fakeAuthorizer{
-				authorizer.DecisionAllow,
-				"RBAC: allowed to patch pod",
-				nil,
+			wantResult: "allowed",
+			variants: map[string]authzVariant{
+				"conditions-unaware allow":            conditionsUnaware(authorizer.DecisionAllow, "RBAC: allowed to patch pod", nil),
+				"conditions-unaware allow with error": conditionsUnaware(authorizer.DecisionAllow, "", errUserInfo),
+				"conditions-aware allow":              conditionsAware(authorizer.ConditionsAwareDecisionAllow("", nil), new(true)),
+				"conditions-aware allow with error":   conditionsAware(authorizer.ConditionsAwareDecisionAllow("", errUserInfo), new(true)),
 			},
-			want: `
-			# HELP authorization_attempts_total [ALPHA] Counter of authorization attempts broken down by result. It can be either 'allowed', 'denied', 'no-opinion', 'conditional' or 'error'.
-			# TYPE authorization_attempts_total counter
-			authorization_attempts_total{result="allowed"} 1
-				`,
 		},
 		{
-			desc: "decision forbid",
-			authorizer: fakeAuthorizer{
-				authorizer.DecisionDeny,
-				"RBAC: not allowed to patch pod",
-				nil,
+			wantResult: "denied",
+			variants: map[string]authzVariant{
+				"conditions-unaware deny": conditionsUnaware(authorizer.DecisionDeny, "RBAC: not allowed to patch pod", nil),
+				"conditions-aware deny":   conditionsAware(authorizer.ConditionsAwareDecisionDeny("", nil), new(true)),
+				// Technically the authorizer did not give the Deny response, but because CanBecomeAllowed() == false,
+				// we practically deny the response, and thus does this go under the "denied" label (not NoOpinion, as the authorizer did have an opinion).
+				"conditional deny, classifier nil":   conditionsAware(conditionalDeny, nil),
+				"conditional deny, classifier false": conditionsAware(conditionalDeny, new(false)),
+				"conditional deny, classifier true":  conditionsAware(conditionalDeny, new(true)),
 			},
-			want: `
-			# HELP authorization_attempts_total [ALPHA] Counter of authorization attempts broken down by result. It can be either 'allowed', 'denied', 'no-opinion', 'conditional' or 'error'.
-			# TYPE authorization_attempts_total counter
-			authorization_attempts_total{result="denied"} 1
-				`,
 		},
 		{
-			desc: "authorizer failed with error",
-			authorizer: fakeAuthorizer{
-				authorizer.DecisionNoOpinion,
-				"",
-				errors.New("can't parse user info"),
+			wantResult: "error",
+			variants: map[string]authzVariant{
+				"conditions-unaware no-opinion with error": conditionsUnaware(authorizer.DecisionNoOpinion, "", errUserInfo),
+				"conditions-aware no-opinion with error":   conditionsAware(authorizer.ConditionsAwareDecisionNoOpinion("", errUserInfo), new(true)),
 			},
-			want: `
-			# HELP authorization_attempts_total [ALPHA] Counter of authorization attempts broken down by result. It can be either 'allowed', 'denied', 'no-opinion', 'conditional' or 'error'.
-			# TYPE authorization_attempts_total counter
-			authorization_attempts_total{result="error"} 1
-				`,
 		},
 		{
-			desc: "authorizer decided allow with error",
-			authorizer: fakeAuthorizer{
-				authorizer.DecisionAllow,
-				"",
-				errors.New("can't parse user info"),
+			wantResult: "no-opinion",
+			variants: map[string]authzVariant{
+				"conditions-unaware no-opinion": conditionsUnaware(authorizer.DecisionNoOpinion, "", nil),
+				"conditions-aware no-opinion":   conditionsAware(authorizer.ConditionsAwareDecisionNoOpinion("", nil), new(true)),
+				// A ConditionsMap with only NoOpinion conditions folds to NoOpinion already when constructed.
+				"conditional no-opinion, classifier true": conditionsAware(conditionalNoOpinion, new(true)),
+				// The request is not subject to conditional authorization, so the conditional decision folds to NoOpinion.
+				"conditional allow, classifier false": conditionsAware(conditionalAllow, new(false)),
+				"conditional allow, classifier nil":   conditionsAware(conditionalAllow, nil),
 			},
-			want: `
-			# HELP authorization_attempts_total [ALPHA] Counter of authorization attempts broken down by result. It can be either 'allowed', 'denied', 'no-opinion', 'conditional' or 'error'.
-			# TYPE authorization_attempts_total counter
-			authorization_attempts_total{result="allowed"} 1
-				`,
 		},
 		{
-			desc: "authorizer failed with error",
-			authorizer: fakeAuthorizer{
-				authorizer.DecisionNoOpinion,
-				"",
-				nil,
+			wantResult: "conditional",
+			variants: map[string]authzVariant{
+				"conditional allow, classifier true": conditionsAware(conditionalAllow, new(true)),
 			},
-			want: `
-			# HELP authorization_attempts_total [ALPHA] Counter of authorization attempts broken down by result. It can be either 'allowed', 'denied', 'no-opinion', 'conditional' or 'error'.
-			# TYPE authorization_attempts_total counter
-			authorization_attempts_total{result="no-opinion"} 1
-				`,
-		},
-		{
-			desc: "conditional allow with error (CanBecomeAllowed() == true and classifier true)",
-			authorizer: &conditionsAwareFakeAuthorizer{
-				makeDecision: func() authorizer.ConditionsAwareDecision {
-					return authorizer.ConditionsAwareDecisionConditionsMap(
-						nil, nil,
-						[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/cond", Condition: "maybe", Type: "example.com/foo-type"}},
-					)
-				},
-			},
-			classifier: func(attrs authorizer.Attributes) bool { return true },
-			want: `
-			# HELP authorization_attempts_total [ALPHA] Counter of authorization attempts broken down by result. It can be either 'allowed', 'denied', 'no-opinion', 'conditional' or 'error'.
-			# TYPE authorization_attempts_total counter
-			authorization_attempts_total{result="conditional"} 1
-				`,
-		},
-		{
-			desc: "conditional allow with error (CanBecomeAllowed() == true and classifier false)",
-			authorizer: &conditionsAwareFakeAuthorizer{
-				makeDecision: func() authorizer.ConditionsAwareDecision {
-					return authorizer.ConditionsAwareDecisionConditionsMap(
-						nil, nil,
-						[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/cond", Condition: "maybe", Type: "example.com/foo-type"}},
-					)
-				},
-			},
-			classifier: func(attrs authorizer.Attributes) bool { return false },
-			want: `
-			# HELP authorization_attempts_total [ALPHA] Counter of authorization attempts broken down by result. It can be either 'allowed', 'denied', 'no-opinion', 'conditional' or 'error'.
-			# TYPE authorization_attempts_total counter
-			authorization_attempts_total{result="no-opinion"} 1
-				`,
-		},
-		{
-			desc: "conditional allow with error (CanBecomeAllowed() == true and classifier nil)",
-			authorizer: &conditionsAwareFakeAuthorizer{
-				makeDecision: func() authorizer.ConditionsAwareDecision {
-					return authorizer.ConditionsAwareDecisionConditionsMap(
-						nil, nil,
-						[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/cond", Condition: "maybe", Type: "example.com/foo-type"}},
-					)
-				},
-			},
-			want: `
-			# HELP authorization_attempts_total [ALPHA] Counter of authorization attempts broken down by result. It can be either 'allowed', 'denied', 'no-opinion', 'conditional' or 'error'.
-			# TYPE authorization_attempts_total counter
-			authorization_attempts_total{result="no-opinion"} 1
-				`,
-		},
-		{
-			desc: "conditional deny (CanBecomeAllowed() == false)",
-			// Technically the authorizer did not give the Deny response, but because CanBecomeAllowed() == false,
-			// we practically deny the response, and thus does this go under the "denied" label (not NoOpinion, as the authorizer did have an opinion).
-			authorizer: &conditionsAwareFakeAuthorizer{
-				makeDecision: func() authorizer.ConditionsAwareDecision {
-					return authorizer.ConditionsAwareDecisionConditionsMap(
-						[]authorizer.Condition{authorizer.GenericCondition{ID: "example.com/cond", Condition: "maybe-not", Type: "example.com/foo-type"}},
-						nil, nil,
-					)
-				},
-			},
-			want: `
-			# HELP authorization_attempts_total [ALPHA] Counter of authorization attempts broken down by result. It can be either 'allowed', 'denied', 'no-opinion', 'conditional' or 'error'.
-			# TYPE authorization_attempts_total counter
-			authorization_attempts_total{result="denied"} 1
-				`,
 		},
 	}
 
@@ -325,24 +272,34 @@ func TestRecordAuthorizationMetricsMetrics(t *testing.T) {
 	// Allow creating conditional decisions in the test
 	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ConditionalAuthorization, true)
 
-	for _, tt := range testCases {
-		t.Run(tt.desc, func(t *testing.T) {
-			ctx := t.Context()
-			defer authorizationAttemptsCounter.Reset()
+	for _, tc := range testCases {
+		t.Run(tc.wantResult, func(t *testing.T) {
+			want := fmt.Sprintf(`
+			# HELP authorization_attempts_total [ALPHA] Counter of authorization attempts broken down by result. It can be either 'allowed', 'denied', 'no-opinion', 'conditional' or 'error'.
+			# TYPE authorization_attempts_total counter
+			authorization_attempts_total{result=%q} 1
+			`, tc.wantResult)
 
-			audit := &auditinternal.Event{Level: auditinternal.LevelMetadata}
-			// Match the signature of WithConditionsAwareAuthorization: the test enables the enforcer plugin
-			// so that the conditions-aware dispatch is exercised whenever the classifier is non-nil.
-			handler := WithConditionsAwareAuthorization(&fakeHTTPHandler{}, tt.authorizer, negotiatedSerializer, true /* conditionsEnforcerEnabled */, tt.classifier)
-			// TODO: fake audit injector
+			for name, variant := range tc.variants {
+				t.Run(name, func(t *testing.T) {
+					ctx := t.Context()
+					defer authorizationAttemptsCounter.Reset()
 
-			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/namespaces/default/pods", nil)
-			req = withTestContext(req, nil, audit)
-			req.RemoteAddr = "127.0.0.1"
-			handler.ServeHTTP(httptest.NewRecorder(), req)
+					audit := &auditinternal.Event{Level: auditinternal.LevelMetadata}
+					// Match the signature of WithConditionsAwareAuthorization: the test enables the enforcer plugin
+					// so that the conditions-aware dispatch is exercised whenever the classifier is non-nil.
+					handler := WithConditionsAwareAuthorization(&fakeHTTPHandler{}, variant.authorizer, negotiatedSerializer, true /* conditionsEnforcerEnabled */, variant.classifier)
+					// TODO: fake audit injector
 
-			if err := testutil.GatherAndCompare(legacyregistry.DefaultGatherer, strings.NewReader(tt.want), metrics...); err != nil {
-				t.Fatal(err)
+					req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/namespaces/default/pods", nil)
+					req = withTestContext(req, nil, audit)
+					req.RemoteAddr = "127.0.0.1"
+					handler.ServeHTTP(httptest.NewRecorder(), req)
+
+					if err := testutil.GatherAndCompare(legacyregistry.DefaultGatherer, strings.NewReader(want), metrics...); err != nil {
+						t.Fatal(err)
+					}
+				})
 			}
 		})
 	}

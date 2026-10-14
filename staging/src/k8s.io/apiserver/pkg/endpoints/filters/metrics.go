@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 
 	"k8s.io/apiserver/pkg/authentication/authenticator"
@@ -128,6 +129,8 @@ func authorizationMetricsLabelForAuthorize(authorized authorizer.Decision, err e
 	return ""
 }
 
+var denyOrNoOpinion = sets.New(authorizer.DecisionNoOpinion, authorizer.DecisionDeny)
+
 func authorizationMetricsLabelForAuthorizeConditionsAware(decision authorizer.ConditionsAwareDecision) string {
 	switch {
 	case decision.IsAllow():
@@ -136,11 +139,15 @@ func authorizationMetricsLabelForAuthorizeConditionsAware(decision authorizer.Co
 		return conditionalLabel
 	case decision.Error() != nil:
 		return errorLabel
+	case decision.IsDeny():
+		return deniedLabel
 	case decision.IsNoOpinion():
 		return noOpinionLabel
-	default:
+	// The only possible remaining case is possible outcomes {Deny, NoOpinion}
+	case decision.PossibleDecisions().Equal(denyOrNoOpinion):
 		return deniedLabel
 	}
+	return "" // should be unreachable, but mirror authorizationMetricsLabelForAuthorize above
 }
 
 func recordAuthorizationMetrics(ctx context.Context, resultLabel string, authStart time.Time, authFinish time.Time) {
