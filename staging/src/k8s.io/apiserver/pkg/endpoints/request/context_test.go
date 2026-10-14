@@ -127,7 +127,10 @@ func TestConditionallyAuthorizedDecisionContext(t *testing.T) {
 		authz := &mockAuthorizer{name: "authz1"}
 		decision := authorizer.ConditionsAwareDecisionAllow("test-reason", nil)
 
-		ctx = WithConditionallyAuthorizedDecision(ctx, authz, decision)
+		ctx, err := WithConditionallyAuthorizedDecision(ctx, authz, decision)
+		if err != nil {
+			t.Fatalf("unexpected error storing a decision: %v", err)
+		}
 
 		gotAuthz, gotDec, ok := ConditionallyAuthorizedDecisionFrom(ctx)
 		if !ok {
@@ -141,8 +144,12 @@ func TestConditionallyAuthorizedDecisionContext(t *testing.T) {
 			t.Error("expected Allow decision")
 		}
 
-		// this should override the value in ctx
-		ctx = WithConditionallyAuthorizedDecision(ctx, authz, authorizer.ConditionsAwareDecisionDeny("deny-reason", nil))
+		// a second decision must not override the first one
+		otherAuthz := &mockAuthorizer{name: "authz2"}
+		ctx, err = WithConditionallyAuthorizedDecision(ctx, otherAuthz, authorizer.ConditionsAwareDecisionDeny("deny-reason", nil))
+		if err == nil {
+			t.Fatal("expected an error when a decision is already set")
+		}
 
 		gotAuthz, gotDec, ok = ConditionallyAuthorizedDecisionFrom(ctx)
 		if !ok {
@@ -150,10 +157,10 @@ func TestConditionallyAuthorizedDecisionContext(t *testing.T) {
 		}
 
 		if gotAuthz != authz {
-			t.Error("authorizer pointer mismatch")
+			t.Error("expected the first authorizer to be kept")
 		}
-		if gotDec.String() != `Deny(reason="deny-reason")` {
-			t.Error("expected Deny decision")
+		if gotDec.String() != `Allow(reason="test-reason")` {
+			t.Error("expected the first, Allow, decision to be kept")
 		}
 	})
 }

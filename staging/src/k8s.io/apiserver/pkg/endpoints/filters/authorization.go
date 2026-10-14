@@ -148,7 +148,11 @@ func withConditionsAwareAuthorization(handler http.Handler, a authorizer.Authori
 		}
 
 		// Attach the conditionsAwareDecision to the request context
-		ctx = request.WithConditionallyAuthorizedDecision(ctx, a, conditionsAwareDecision)
+		ctx, err = request.WithConditionallyAuthorizedDecision(ctx, a, conditionsAwareDecision)
+		if err != nil {
+			responsewriters.InternalError(w, req, err)
+			return
+		}
 		req = req.WithContext(ctx)
 
 		metricsResultLabel := authorizationMetricsLabelForAuthorizeConditionsAware(conditionsAwareDecision)

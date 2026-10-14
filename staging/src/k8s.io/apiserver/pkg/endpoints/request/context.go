@@ -18,6 +18,7 @@ package request
 
 import (
 	"context"
+	"errors"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apiserver/pkg/authentication/user"
@@ -86,13 +87,16 @@ type authorizerDecisionTuple struct {
 	decision   authorizer.ConditionsAwareDecision
 }
 
-// WithConditionallyAllowedDecision returns a copy of parent in which a conditionally authorized decision is stored, along with the authorizer that produced it.
-// Any previous decision in the context is overridden.
-func WithConditionallyAuthorizedDecision(parent context.Context, authorizer authorizer.Authorizer, decision authorizer.ConditionsAwareDecision) context.Context {
+// WithConditionallyAuthorizedDecision returns a copy of parent in which a conditionally authorized decision is stored, along with the authorizer that produced it.
+// An error is returned if a decision already exists in the parent context.
+func WithConditionallyAuthorizedDecision(parent context.Context, authorizer authorizer.Authorizer, decision authorizer.ConditionsAwareDecision) (context.Context, error) {
+	if _, _, ok := ConditionallyAuthorizedDecisionFrom(parent); ok {
+		return parent, errors.New("a conditionally authorized decision is already set in the request context")
+	}
 	return WithValue(parent, conditionallyAuthorizedDecisionKey, authorizerDecisionTuple{
 		authorizer: authorizer,
 		decision:   decision,
-	})
+	}), nil
 }
 
 // ConditionallyAuthorizedDecisionsFrom returns the decision to be enforced, along with the authorizer that produced it (and should be called back)
