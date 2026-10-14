@@ -84,8 +84,8 @@ func (c *conditionsEnforcer) Validate(ctx context.Context, a admission.Attribute
 
 	authz, possiblyConditionalDecision, ok := request.ConditionallyAuthorizedDecisionFrom(ctx)
 	if !ok {
-		// If there no decision in the context, WithConditionsAwareAuthorization was not used, and thus there is nothing to enforce.
-		return nil
+		// Prevent against silent context detaches between WithConditionsAwareAuthorization and this plugin.
+		return fmt.Errorf("when the ConditionalAuthorization feature gate is on, a decision must be part of the context")
 	}
 
 	switch {

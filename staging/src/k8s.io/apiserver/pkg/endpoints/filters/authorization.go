@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/audit"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
+	"k8s.io/apiserver/pkg/authorization/authorizerfactory"
 	"k8s.io/apiserver/pkg/endpoints/handlers/responsewriters"
 	"k8s.io/apiserver/pkg/endpoints/request"
 )
@@ -57,6 +58,7 @@ type ConditionalAuthorizationRequestClassifier func(attrs authorizer.Attributes)
 type recordAuthorizationMetricsFunc func(ctx context.Context, resultLabel string, authStart time.Time, authFinish time.Time)
 
 // WithAuthorization passes all authorized requests on to handler, and returns a forbidden error otherwise.
+// WithAuthorization shouldn't run twice for a given HTTP request.
 func WithAuthorization(hhandler http.Handler, auth authorizer.UnconditionalAuthorizer, s runtime.NegotiatedSerializer) http.Handler {
 	RegisterMetrics()
 	return withAuthorization(hhandler, auth, s, recordAuthorizationMetrics)
@@ -91,6 +93,22 @@ func withAuthorization(handler http.Handler, a authorizer.UnconditionalAuthorize
 			audit.AddAuditAnnotations(ctx,
 				DecisionAnnotationKey, DecisionAllow,
 				ReasonAnnotationKey, reason)
+
+			// When the feature gate is on, the AuthorizationConditionsEnforcer admission plugin might be enabled,
+			// and protect against context detaches for the conditional case.
+			// It is valid to keep the feature gate and admission plugin on (eventually both will be on by default),
+			// but still use the old WithAuthorization filter. Thus register an Allow decision into the context.
+			if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) {
+				// Attach the conditionsAwareDecision to the request context
+				var attachErr error
+				ctx, attachErr = request.WithConditionallyAuthorizedDecision(ctx, authorizerfactory.NewAlwaysAllowAuthorizer(), authorizer.ConditionsAwareDecisionAllow(reason, err))
+				if attachErr != nil {
+					responsewriters.InternalError(w, req, attachErr)
+					return
+				}
+				req = req.WithContext(ctx)
+			}
+
 			handler.ServeHTTP(w, req)
 			return
 		}
@@ -113,6 +131,7 @@ func withAuthorization(handler http.Handler, a authorizer.UnconditionalAuthorize
 // The conditionalAuthzClassifier may only return true if the AuthorizationConditionsEnforcer is enabled.
 // If the classifier returns true, this filter will let conditionally-authorized requests proceed to the admission phase,
 // with the conditional decision in attached to the context.
+// WithConditionsAwareAuthorization shouldn't run twice for a given HTTP request.
 func WithConditionsAwareAuthorization(hhandler http.Handler, auth authorizer.Authorizer, s runtime.NegotiatedSerializer, conditionalAuthzClassifier ConditionalAuthorizationRequestClassifier) (http.Handler, error) {
 	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.ConditionalAuthorization) && conditionalAuthzClassifier != nil {
 		RegisterMetrics()

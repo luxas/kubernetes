@@ -266,6 +266,8 @@ func TestConditionsEnforcerInitialization(t *testing.T) {
 		gateEnabled  bool
 		wantInitErr  bool
 		wantHandles  bool
+		// wantValidateErr is whether Validate errors without a decision in the context.
+		wantValidateErr bool
 	}{
 		{
 			name:         "InspectFeatureGates not called",
@@ -284,6 +286,8 @@ func TestConditionsEnforcerInitialization(t *testing.T) {
 			inspectGates: true,
 			gateEnabled:  true,
 			wantHandles:  true,
+			// The authorization filter must always register a decision when the feature gate is on.
+			wantValidateErr: true,
 		},
 	}
 	for _, tt := range tests {
@@ -306,10 +310,10 @@ func TestConditionsEnforcerInitialization(t *testing.T) {
 				}
 			}
 
-			// Without a conditional decision in the context, Validate must be a no-op
-			// regardless of enablement, and must not panic on an uninitialized plugin.
-			if err := plugin.Validate(context.Background(), nil, nil); err != nil {
-				t.Errorf("Validate() with no decision in context = %v, want nil", err)
+			// Without a decision in the context, Validate must be a no-op when the plugin is not enabled, and
+			// must not panic on an uninitialized plugin. When enabled, a missing decision means the context was detached.
+			if err := plugin.Validate(context.Background(), nil, nil); (err != nil) != tt.wantValidateErr {
+				t.Errorf("Validate() with no decision in context = %v, wantErr %v", err, tt.wantValidateErr)
 			}
 		})
 	}
