@@ -251,12 +251,8 @@ func RunCustomEtcd(logger klog.Logger, dataDir string, customFlags []string) (ur
 	return customURL, stop, nil
 }
 
-// EtcdMain starts an etcd instance before running tests. Callers can pass
-// additional goleak options (e.g. IgnoreTopFunction filters) that will be
-// appended to the ignore list used by the post-test goroutine leak check.
-// This lets a specific test package suppress leaks it knowingly triggers
-// without every other package inheriting the ignore.
-func EtcdMain(tests func() int, extraGoleakOpts ...goleak.Option) {
+// EtcdMain starts an etcd instance before running tests.
+func EtcdMain(tests func() int) {
 	// Bail out early when -help was given as parameter.
 	flag.Parse()
 
@@ -284,7 +280,6 @@ func EtcdMain(tests func() int, extraGoleakOpts ...goleak.Option) {
 		// Ignore this reported leak.
 		goleak.IgnoreTopFunction("github.com/moby/spdystream.(*Connection).shutdown"),
 	)
-	goleakOpts = append(goleakOpts, extraGoleakOpts...)
 
 	stop, err := startEtcd(klog.Background(), false)
 	if err != nil {
