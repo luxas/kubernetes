@@ -1050,7 +1050,7 @@ func DefaultBuildHandlerChain(apiHandler http.Handler, c *Config) http.Handler {
 		if err != nil {
 			// An error is only returned if the feature gate is off, or the classifier is nil, but that is never the case in this branch,
 			// so this is in practice unreachable.
-			panic(err)
+			klog.Fatalf("expected to have satisfied the preconditions for WithConditionsAwareAuthorization: %v", err)
 		}
 	} else {
 		handler = genericapifilters.WithAuthorization(handler, c.Authorization.Authorizer, c.Serializer)
