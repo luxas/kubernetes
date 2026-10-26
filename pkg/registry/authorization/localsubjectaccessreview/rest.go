@@ -102,7 +102,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 
 	versionedAO, supportsConditionalAuthorization, supportsUnconditionalAuthorization, err := authorizationutil.ResolveAuthorizationOptions(localSubjectAccessReview.Spec.AuthorizationOptions)
 	if err != nil {
-		return nil, err
+		return nil, apierrors.NewInternalError(err)
 	}
 
 	switch {
