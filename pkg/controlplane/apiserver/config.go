@@ -294,16 +294,10 @@ var admissionVerbs = sets.New("create", "update", "patch", "delete", "deletecoll
 
 var excludedFromAdmission = sets.New(exclusion.Excluded()...)
 
-// conditionalRequestClassifier returns true if admission runs for
+// conditionalRequestClassifier returns true if admission runs for the given request
 func conditionalRequestClassifier(attrs authorizer.Attributes) bool {
-	// Make sure there is exactly one GVR matched. This _should_ be the case in the HTTP filter, but just to make sure.
-	if len(attrs.GetResource()) == 0 || attrs.GetResource() == "*" {
-		return false
-	}
-	if attrs.GetAPIGroup() == "*" {
-		return false
-	}
-	if len(attrs.GetAPIVersion()) == 0 || attrs.GetAPIVersion() == "*" {
+	// admission only runs for resource requests
+	if !attrs.IsResourceRequest() {
 		return false
 	}
 	gr := schema.GroupResource{

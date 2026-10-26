@@ -18,20 +18,23 @@ package apiserver
 
 import (
 	"context"
-	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	extensionsapiserver "k8s.io/apiextensions-apiserver/pkg/apiserver"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apiserver/pkg/authorization/authorizer"
+	"k8s.io/apimachinery/pkg/util/sets"
+	genericapifilters "k8s.io/apiserver/pkg/endpoints/filters"
+	"k8s.io/apiserver/pkg/endpoints/request"
+	genericapiserver "k8s.io/apiserver/pkg/server"
 	apiserveroptions "k8s.io/apiserver/pkg/server/options"
 	aggregatorscheme "k8s.io/kube-aggregator/pkg/apiserver/scheme"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	"k8s.io/kubernetes/pkg/controlplane/apiserver/options"
 	generatedopenapi "k8s.io/kubernetes/pkg/generated/openapi"
-	"k8s.io/kubernetes/pkg/kubeapiserver/admission/exclusion"
 	netutils "k8s.io/utils/net"
 )
 
@@ -81,178 +84,77 @@ func TestBuildGenericConfig(t *testing.T) {
 }
 
 func TestConditionalRequestClassifier(t *testing.T) {
-	// Pick one excluded resource to use in tests.
-	excludedResources := exclusion.Excluded()
-	if len(excludedResources) == 0 {
-		t.Fatal("expected at least one excluded resource")
-	}
-	excludedGR := excludedResources[0]
+	// Build attributes the same way the authorization filter does: parse the
+	// URL into a RequestInfo, then derive authorizer.Attributes from it. This
+	// keeps the test honest about what the classifier actually sees in the
+	// handler chain, instead of hand-crafting attribute combinations that the
+	// RequestInfo parser would never produce.
+	resolver := genericapiserver.NewRequestInfoResolver(&genericapiserver.Config{
+		LegacyAPIGroupPrefixes: sets.NewString(genericapiserver.DefaultLegacyAPIPrefix),
+	})
 
 	tests := []struct {
-		name     string
-		attrs    authorizer.AttributesRecord
+		method   string
+		url      string
 		expected bool
 	}{
-		{
-			name: "empty resource returns false",
-			attrs: authorizer.AttributesRecord{
-				APIGroup:   "",
-				APIVersion: "v1",
-				Resource:   "",
-				Verb:       "create",
-			},
-			expected: false,
-		},
-		{
-			name: "wildcard resource returns false",
-			attrs: authorizer.AttributesRecord{
-				APIGroup:   "",
-				APIVersion: "v1",
-				Resource:   "*",
-				Verb:       "create",
-			},
-			expected: false,
-		},
-		{
-			name: "wildcard API group returns false",
-			attrs: authorizer.AttributesRecord{
-				APIGroup:   "*",
-				APIVersion: "v1",
-				Resource:   "pods",
-				Verb:       "create",
-			},
-			expected: false,
-		},
-		{
-			name: "empty API version returns false",
-			attrs: authorizer.AttributesRecord{
-				APIGroup:   "",
-				APIVersion: "",
-				Resource:   "pods",
-				Verb:       "create",
-			},
-			expected: false,
-		},
-		{
-			name: "wildcard API version returns false",
-			attrs: authorizer.AttributesRecord{
-				APIGroup:   "",
-				APIVersion: "*",
-				Resource:   "pods",
-				Verb:       "create",
-			},
-			expected: false,
-		},
-		{
-			name: "excluded resource returns false",
-			attrs: authorizer.AttributesRecord{
-				APIGroup:   excludedGR.Group,
-				APIVersion: "v1",
-				Resource:   excludedGR.Resource,
-				Verb:       "create",
-			},
-			expected: false,
-		},
-		{
-			name: "non-admission verb get returns false",
-			attrs: authorizer.AttributesRecord{
-				APIGroup:   "",
-				APIVersion: "v1",
-				Resource:   "pods",
-				Verb:       "get",
-			},
-			expected: false,
-		},
-		{
-			name: "non-admission verb list returns false",
-			attrs: authorizer.AttributesRecord{
-				APIGroup:   "",
-				APIVersion: "v1",
-				Resource:   "pods",
-				Verb:       "list",
-			},
-			expected: false,
-		},
-		{
-			name: "non-admission verb watch returns false",
-			attrs: authorizer.AttributesRecord{
-				APIGroup:   "",
-				APIVersion: "v1",
-				Resource:   "pods",
-				Verb:       "watch",
-			},
-			expected: false,
-		},
-		{
-			name: "admission verb create returns true",
-			attrs: authorizer.AttributesRecord{
-				APIGroup:   "",
-				APIVersion: "v1",
-				Resource:   "pods",
-				Verb:       "create",
-			},
-			expected: true,
-		},
-		{
-			name: "admission verb update returns true",
-			attrs: authorizer.AttributesRecord{
-				APIGroup:   "",
-				APIVersion: "v1",
-				Resource:   "pods",
-				Verb:       "update",
-			},
-			expected: true,
-		},
-		{
-			name: "admission verb patch returns true",
-			attrs: authorizer.AttributesRecord{
-				APIGroup:   "",
-				APIVersion: "v1",
-				Resource:   "pods",
-				Verb:       "patch",
-			},
-			expected: true,
-		},
-		{
-			name: "admission verb delete returns true",
-			attrs: authorizer.AttributesRecord{
-				APIGroup:   "",
-				APIVersion: "v1",
-				Resource:   "pods",
-				Verb:       "delete",
-			},
-			expected: true,
-		},
-		{
-			name: "admission verb deletecollection returns true",
-			attrs: authorizer.AttributesRecord{
-				APIGroup:   "",
-				APIVersion: "v1",
-				Resource:   "pods",
-				Verb:       "deletecollection",
-			},
-			expected: true,
-		},
-		{
-			name: "non-core group admission verb returns true",
-			attrs: authorizer.AttributesRecord{
-				APIGroup:   "apps",
-				APIVersion: "v1",
-				Resource:   "deployments",
-				Verb:       "create",
-			},
-			expected: true,
-		},
+		// Resource requests subject to admission are conditions-aware.
+		{method: http.MethodPost, url: "/api/v1/namespaces/default/pods", expected: true},
+		{method: http.MethodPut, url: "/api/v1/namespaces/default/pods/foo", expected: true},
+		{method: http.MethodPatch, url: "/api/v1/namespaces/default/pods/foo", expected: true},
+		{method: http.MethodDelete, url: "/api/v1/namespaces/default/pods/foo", expected: true},
+		{method: http.MethodDelete, url: "/api/v1/namespaces/default/pods", expected: true},
+		{method: http.MethodPost, url: "/api/v1/namespaces", expected: true},
+		{method: http.MethodPut, url: "/api/v1/namespaces/ns-1/status", expected: true},
+		{method: http.MethodPost, url: "/apis/apps/v1/namespaces/default/deployments", expected: true},
+		{method: http.MethodPut, url: "/apis/example.com/v1/namespaces/default/widgets/foo", expected: true},
+		// A literal "*" path segment is parsed as the resource (or name) "*".
+		// It is still a resource request that goes through admission, so it is
+		// classified like any other resource.
+		{method: http.MethodPost, url: "/api/v1/*", expected: true},
+		{method: http.MethodPut, url: "/api/v1/namespaces/*", expected: true},
+
+		// Read-only verbs do not go through admission.
+		{method: http.MethodGet, url: "/api/v1/namespaces/default/pods/foo"},
+		{method: http.MethodGet, url: "/api/v1/namespaces/default/pods"},
+		{method: http.MethodGet, url: "/api/v1/namespaces/default/pods?watch=true"},
+		{method: http.MethodGet, url: "/api/v1/*"},
+
+		// Resources excluded from admission cannot have conditions enforced.
+		{method: http.MethodPost, url: "/apis/authorization.k8s.io/v1/subjectaccessreviews"},
+		{method: http.MethodPost, url: "/apis/authorization.k8s.io/v1/namespaces/default/localsubjectaccessreviews"},
+		{method: http.MethodPost, url: "/apis/authentication.k8s.io/v1/tokenreviews"},
+
+		// Non-resource requests are never conditions-aware, even for verbs
+		// that would be subject to admission on a resource.
+		{method: http.MethodPost, url: "/"},
+		{method: http.MethodPost, url: "/healthz"},
+		{method: http.MethodPost, url: "/metrics"},
+		{method: http.MethodPost, url: "/version"},
+		{method: http.MethodPost, url: "/openapi/v3"},
+		{method: http.MethodPost, url: "/api"},
+		{method: http.MethodPost, url: "/api/v1"},
+		{method: http.MethodPost, url: "/apis"},
+		{method: http.MethodPost, url: "/apis/apps"},
+		{method: http.MethodPost, url: "/apis/apps/v1"},
+		{method: http.MethodPut, url: "/foo/bar"},
+		{method: http.MethodDelete, url: "/logs/foo"},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := conditionalRequestClassifier(&tt.attrs)
-			if got != tt.expected {
-				t.Errorf("conditionalRequestClassifier(%s) = %v, want %v",
-					fmt.Sprintf("{group=%q, version=%q, resource=%q, verb=%q}",
-						tt.attrs.APIGroup, tt.attrs.APIVersion, tt.attrs.Resource, tt.attrs.Verb),
-					got, tt.expected)
+		t.Run(tt.method+" "+tt.url, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, tt.url, nil)
+			info, err := resolver.NewRequestInfo(req)
+			if err != nil {
+				t.Fatalf("failed to parse request info: %v", err)
+			}
+			attrs, err := genericapifilters.GetAuthorizerAttributes(request.WithRequestInfo(req.Context(), info))
+			if err != nil {
+				t.Fatalf("failed to get authorizer attributes: %v", err)
+			}
+			if got := conditionalRequestClassifier(attrs); got != tt.expected {
+				t.Errorf("conditionalRequestClassifier() = %v, want %v; attributes: resourceRequest=%v group=%q version=%q resource=%q subresource=%q verb=%q",
+					got, tt.expected, attrs.IsResourceRequest(), attrs.GetAPIGroup(), attrs.GetAPIVersion(), attrs.GetResource(), attrs.GetSubresource(), attrs.GetVerb())
 			}
 		})
 	}
