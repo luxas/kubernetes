@@ -109,16 +109,7 @@ func (c *conditionsEnforcer) Validate(ctx context.Context, a admission.Attribute
 	}
 
 	// Call the original authorizer back with the admission data
-	decision, reason, err := authz.EvaluateConditions(ctx, possiblyConditionalDecision, versionedAttributes)
-
-	// Enforce the evaluated decision to only evaluate to something that is beforehand possible
-	if !possiblyConditionalDecision.PossibleDecisions().Has(decision) {
-		// err uses the decision before overwriting it
-		err = fmt.Errorf("authorizer tried to return %s from EvaluateConditions, but the possible outcomes were %v", decision.String(), sets.List(possiblyConditionalDecision.PossibleDecisions()))
-
-		decision = possiblyConditionalDecision.FailureDecision()
-		reason = "failed closed"
-	}
+	decision, reason, err := evaluateWithReturnGuard(ctx, authz, possiblyConditionalDecision, versionedAttributes)
 
 	// The code flow here should exactly match filters.WithAuthorization.
 	// an authorizer could encounter evaluation errors and still allow the request, so authorizer decision is checked before error here.
@@ -148,4 +139,15 @@ func (c *conditionsEnforcer) Validate(ctx context.Context, a admission.Attribute
 		filters.ReasonAnnotationKey, reason)
 
 	return responsewriters.ForbiddenStatusError(authzAttrs, reason)
+}
+
+// Evaluate the conditions, but enforce the evaluated decision to only evaluate to something that is beforehand possible
+func evaluateWithReturnGuard(ctx context.Context, authz authorizer.Authorizer, decisionToEvaluate authorizer.ConditionsAwareDecision, versionedAttributes *admission.VersionedAttributes) (authorizer.Decision, string, error) {
+	decision, reason, err := authz.EvaluateConditions(ctx, decisionToEvaluate, versionedAttributes)
+
+	if !decisionToEvaluate.PossibleDecisions().Has(decision) {
+		return authorizer.DecisionDeny, "failed closed", fmt.Errorf("authorizer tried to return %s from EvaluateConditions, but the possible outcomes were %v", decision.String(), sets.List(decisionToEvaluate.PossibleDecisions()))
+	}
+
+	return decision, reason, err
 }
