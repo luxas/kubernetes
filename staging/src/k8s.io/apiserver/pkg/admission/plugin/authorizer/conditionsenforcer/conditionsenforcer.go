@@ -43,7 +43,7 @@ const (
 // Register registers a plugin
 func Register(plugins *admission.Plugins) {
 	plugins.Register(PluginName, func(config io.Reader) (admission.Interface, error) {
-		return NewConditionalAuthorizationEnforcer(), nil // Default off, can be overridden by InspectFeatureGates
+		return NewConditionalAuthorizationEnforcer(), nil
 	})
 }
 
