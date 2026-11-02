@@ -110,6 +110,10 @@ type conditionalAuthzTestCase struct {
 	// expectAllowedWhenDisabled overrides expectAllowed when the feature is disabled.
 	// If nil, uses expectAllowed.
 	expectAllowedWhenDisabled *bool
+	// webhookEvaluations is the number of AuthorizationConditionsReviews the webhook must receive for
+	// the user of a variant whose conditions cannot be evaluated in-process, when conditional
+	// authorization is active. In all other cases, the webhook must receive none.
+	webhookEvaluations int
 }
 
 func runConditionalAuthorizationTests(t *testing.T, featureEnabled, conditionsEnforcerEnabled bool) {
@@ -301,7 +305,8 @@ authorizers:
 				}, metav1.CreateOptions{})
 				return err
 			},
-			expectAllowed: true,
+			expectAllowed:      true,
+			webhookEvaluations: 1,
 			// When disabled, the conditional decision is treated as NoOpinion,
 			// falling through to RBAC which denies (no RBAC rules for this user).
 			expectAllowedWhenDisabled: new(false),
@@ -336,7 +341,8 @@ authorizers:
 				}, metav1.CreateOptions{})
 				return err
 			},
-			expectAllowed: false,
+			expectAllowed:      false,
+			webhookEvaluations: 1,
 		},
 		{
 			name: "conditional no-opinion falls through to RBAC allow",
@@ -369,6 +375,8 @@ authorizers:
 			},
 			// The conditional response is NoOpinion, so both when enabled and disabled does this fall through to RBAC which allows.
 			expectAllowed: true,
+			// A ConditionsMap with only NoOpinion conditions folds to NoOpinion when constructed, so there is nothing to evaluate.
+			webhookEvaluations: 0,
 		},
 
 		// CEL-based conditional authorization tests.
@@ -399,6 +407,7 @@ authorizers:
 			},
 			expectAllowed:             true,
 			expectAllowedWhenDisabled: new(false),
+			webhookEvaluations:        1,
 		},
 		{
 			name: "cel deny by name pattern mismatch",
@@ -422,7 +431,8 @@ authorizers:
 				}, metav1.CreateOptions{})
 				return err
 			},
-			expectAllowed: false,
+			expectAllowed:      false,
+			webhookEvaluations: 1,
 		},
 		{
 			name: "cel deny by label overrides allow",
@@ -459,7 +469,8 @@ authorizers:
 				}, metav1.CreateOptions{})
 				return err
 			},
-			expectAllowed: false,
+			expectAllowed:      false,
+			webhookEvaluations: 1,
 		},
 		{
 			name: "cel allow by data content",
@@ -488,6 +499,7 @@ authorizers:
 			},
 			expectAllowed:             true,
 			expectAllowedWhenDisabled: new(false),
+			webhookEvaluations:        1,
 		},
 		{
 			name: "cel deny by data content missing",
@@ -514,7 +526,8 @@ authorizers:
 				}, metav1.CreateOptions{})
 				return err
 			},
-			expectAllowed: false,
+			expectAllowed:      false,
+			webhookEvaluations: 1,
 		},
 		{
 			name: "cel operation-aware deny update",
@@ -556,6 +569,7 @@ authorizers:
 			},
 			expectAllowed:             false,
 			expectAllowedWhenDisabled: new(false),
+			webhookEvaluations:        2,
 		},
 		{
 			name: "cel deny overrides allow and noopinion",
@@ -594,7 +608,8 @@ authorizers:
 				}, metav1.CreateOptions{})
 				return err
 			},
-			expectAllowed: false,
+			expectAllowed:      false,
+			webhookEvaluations: 1,
 		},
 		{
 			name: "cel noopinion overrides allow",
@@ -631,7 +646,8 @@ authorizers:
 				}, metav1.CreateOptions{})
 				return err
 			},
-			expectAllowed: false,
+			expectAllowed:      false,
+			webhookEvaluations: 1,
 		},
 
 		// TODO(luxas): Reactivate this when we add support for update/patch -> create conditions.
@@ -967,6 +983,14 @@ authorizers:
 						if !apierrors.IsForbidden(err) {
 							t.Fatalf("expected Forbidden error, got: %v", err)
 						}
+					}
+
+					wantEvaluations := tc.webhookEvaluations
+					if _, inProcessOnly := authz.(inProcessOnlyAuthorizer); inProcessOnly || !conditionalAuthorizationActive {
+						wantEvaluations = 0
+					}
+					if got := webhookServer.handler.acrCountForUser(userName); got != wantEvaluations {
+						t.Errorf("expected %d AuthorizationConditionsReviews for user %q, got %d", wantEvaluations, userName, got)
 					}
 				})
 			}
@@ -1602,6 +1626,8 @@ type webhookServerHandler struct {
 
 	// acrCount is the number of AuthorizationConditionsReviews received.
 	acrCount atomic.Int64
+	// acrCountByUser is the number of AuthorizationConditionsReviews received per requesting user, guarded by mu.
+	acrCountByUser map[string]int
 }
 
 // setAuthorizer swaps in the authorizer to be used by the SAR and ACR handlers
@@ -1625,6 +1651,12 @@ func (h *webhookServerHandler) setAuthorizer(t *testing.T, a authorizer.Authoriz
 		h.authz = prev
 		h.mu.Unlock()
 	})
+}
+
+func (h *webhookServerHandler) acrCountForUser(user string) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.acrCountByUser[user]
 }
 
 // getAuthorizer returns the currently installed authorizer, or the
@@ -1671,7 +1703,7 @@ var noOpinionAuthorizer authorizer.Authorizer = testAuthorizer(func(_ context.Co
 })
 
 func newWebhookServer(t *testing.T) *webhookServer {
-	handler := &webhookServerHandler{t: t}
+	handler := &webhookServerHandler{t: t, acrCountByUser: map[string]int{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/authorize", handler.serveSAR)
 	mux.HandleFunc("/conditionsreview", handler.serveACR)
@@ -1764,6 +1796,11 @@ func (h *webhookServerHandler) handleACR(ctx context.Context, w http.ResponseWri
 		h.t.Errorf("ACR request payload has nil Request")
 		http.Error(w, "nil ACR request", http.StatusBadRequest)
 		return
+	}
+	if acr.Request.AdmissionRequest != nil {
+		h.mu.Lock()
+		h.acrCountByUser[acr.Request.AdmissionRequest.UserInfo.Username]++
+		h.mu.Unlock()
 	}
 
 	// Deserialize the wire decision into the internal ConditionsAwareDecision
