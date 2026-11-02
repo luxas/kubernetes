@@ -343,3 +343,28 @@ type ConditionsData interface {
 	// GetUserInfo is information about the requesting user
 	GetUserInfo() user.Info
 }
+
+// ConditionTypeAuthorizationCEL is a well-known conditions type for the CEL environment of the kube-apiserver,
+// for authorization conditions evaluation.
+// This CEL environment strives to be equal to the ValidationAdmissionPolicy CEL environment.
+const ConditionTypeAuthorizationCEL = "authorizer.kubernetes.io/cel"
+
+// BuiltinConditionsEvaluatorBuilder builds an in-process conditions evaluator for the given data.
+// This means authorizers (e.g. the webhook authorizer) may try cheaper ways of evaluating a condition
+// (e.g. in-process CEL evaluation) before more expensive ways (sending the webhook).
+type BuiltinConditionsEvaluatorBuilder interface {
+	// EvaluatorForData returns a BuiltinConditionsEvaluator from the given ConditionsData,
+	// in order to initialize an evaluation environment only once.
+	// The authorizer which authored the condition is also passed in order to support
+	// compound authorization.
+	EvaluatorForData(ctx context.Context, data ConditionsData, authz Authorizer) (BuiltinConditionsEvaluator, error)
+}
+
+// BuiltinConditionsEvaluator might allow in-process evaluation of a condition of a
+// certain type, in the context of a given ConditionsData.
+// If the condition type is not handled, return ConditionsEvaluationResultUnevaluatable().
+type BuiltinConditionsEvaluator interface {
+	// EvaluateCondition evaluates a single condition in the current ConditionsData context
+	// into a ConditionEvaluationResult if possible, or returns ConditionsEvaluationResultUnevaluatable().
+	EvaluateCondition(ctx context.Context, condition Condition) ConditionEvaluationResult
+}

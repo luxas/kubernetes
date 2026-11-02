@@ -342,6 +342,7 @@ type Condition struct {
 	// Type describes the type of the condition, if there are multiple possibilities.
 	// Should be formatted as a Kubernetes label key.
 	// Any domain of form *.k8s.io or *.kubernetes.io is reserved for Kubernetes use.
+	// authorizer.kubernetes.io/cel is a conditions type for CEL, handled by kube-apiserver.
 	// Optional. Can be omitted if the authorizer already knows how to evaluate the condition.
 	// +optional
 	Type string
