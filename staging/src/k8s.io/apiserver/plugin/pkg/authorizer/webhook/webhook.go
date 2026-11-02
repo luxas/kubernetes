@@ -47,6 +47,7 @@ import (
 	authorizationvalidation "k8s.io/apiserver/pkg/apis/authorization/validation"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
+	"k8s.io/apiserver/pkg/endpoints/request"
 	genericfeatures "k8s.io/apiserver/pkg/features"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/apiserver/pkg/util/webhook"
@@ -946,7 +947,9 @@ func (w *WebhookAuthorizer) tryEvaluateUsingBuiltins(ctx context.Context, uneval
 	if w.builtinConditionsEvaluatorBuilder == nil {
 		return unevaluatedDecision // no simplification possible, perform webhook
 	}
-	builtinConditionsEvaluator, err := w.builtinConditionsEvaluatorBuilder.EvaluatorForData(ctx, data)
+	// The API server's authorizer, as set by WithConditionsAwareAuthorization, not w itself.
+	authz, _, _ := request.ConditionallyAuthorizedDecisionFrom(ctx)
+	builtinConditionsEvaluator, err := w.builtinConditionsEvaluatorBuilder.EvaluatorForData(ctx, data, authz)
 	if err != nil {
 		klog.Warningf("unexpected error from builtinConditionsEvaluatorBuilder.EvaluatorForData: %v", err)
 		return unevaluatedDecision // no simplification possible, perform webhook

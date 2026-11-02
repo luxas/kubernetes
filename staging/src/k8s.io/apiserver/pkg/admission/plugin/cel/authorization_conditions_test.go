@@ -21,10 +21,13 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/admission"
 	celconfig "k8s.io/apiserver/pkg/apis/cel"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
+	"k8s.io/client-go/informers"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 var (
@@ -32,12 +35,30 @@ var (
 	podGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
 )
 
-func newTestAuthorizationConditionsEvaluator() *celAuthorizationConditionsEvaluatorBuilder {
-	return NewAuthorizationConditionsEvaluatorBuilder(nil, nil, nil, celconfig.RuntimeCELCostBudget)
+var defaultNamespace = &corev1.Namespace{
+	ObjectMeta: metav1.ObjectMeta{Name: "default", Labels: map[string]string{"env": "prod"}},
 }
 
-func newTestAuthorizationConditionsEvaluatorWithBudget(budget int64) *celAuthorizationConditionsEvaluatorBuilder {
-	return NewAuthorizationConditionsEvaluatorBuilder(nil, nil, nil, budget)
+// newTestAuthorizationConditionsEvaluatorBuilder serves namespaces from the fake client, as
+// the informers are never started and the namespace matcher falls back to a live GET.
+func newTestAuthorizationConditionsEvaluatorBuilder(t *testing.T, budget int64, namespaces ...runtime.Object) *celAuthorizationConditionsEvaluatorBuilder {
+	t.Helper()
+	client := fake.NewClientset(namespaces...)
+	b, err := NewAuthorizationConditionsEvaluatorBuilder(informers.NewSharedInformerFactory(client, 0), client, budget)
+	if err != nil {
+		t.Fatalf("NewAuthorizationConditionsEvaluatorBuilder failed: %v", err)
+	}
+	return b
+}
+
+func versioned(t *testing.T, attrs admission.Attributes) *admission.VersionedAttributes {
+	t.Helper()
+	// The test objects are already in the requested GVK, so no ObjectInterfaces are needed for conversion.
+	va, err := admission.NewVersionedAttributes(attrs, attrs.GetKind(), nil)
+	if err != nil {
+		t.Fatalf("NewVersionedAttributes failed: %v", err)
+	}
+	return va
 }
 
 // evalResultString converts a ConditionEvaluationResult to a human-readable string
@@ -102,7 +123,7 @@ func podUpdateAttributes() admission.Attributes {
 func celCond(id, expr string) authorizer.GenericCondition {
 	return authorizer.GenericCondition{
 		ID:        id,
-		Type:      ConditionTypeAuthorizationCEL,
+		Type:      authorizer.ConditionTypeAuthorizationCEL,
 		Condition: expr,
 	}
 }
@@ -114,7 +135,8 @@ func TestAuthorizationConditionsEvaluator_EvaluateCondition(t *testing.T) {
 	tests := []struct {
 		name       string
 		condition  authorizer.Condition
-		attrs      admission.Attributes // nil → the ConditionsData is nil
+		attrs      admission.Attributes
+		authz      authorizer.Authorizer
 		costBudget int64
 		wantResult string // "True", "False", "Error", "Unevaluatable"
 	}{
@@ -123,12 +145,6 @@ func TestAuthorizationConditionsEvaluator_EvaluateCondition(t *testing.T) {
 			name:       "nil condition returns Unevaluatable",
 			condition:  nil,
 			attrs:      podCreateAttributes(),
-			wantResult: "Unevaluatable",
-		},
-		{
-			name:       "nil data returns Unevaluatable",
-			condition:  celCond("c", "true"),
-			attrs:      nil,
 			wantResult: "Unevaluatable",
 		},
 		{
@@ -143,7 +159,7 @@ func TestAuthorizationConditionsEvaluator_EvaluateCondition(t *testing.T) {
 		{
 			name: "empty condition string returns Unevaluatable",
 			condition: authorizer.GenericCondition{
-				Type:      ConditionTypeAuthorizationCEL,
+				Type:      authorizer.ConditionTypeAuthorizationCEL,
 				Condition: "",
 			},
 			attrs:      podCreateAttributes(),
@@ -199,6 +215,19 @@ func TestAuthorizationConditionsEvaluator_EvaluateCondition(t *testing.T) {
 			attrs:      podUpdateAttributes(),
 			wantResult: "True",
 		},
+		{
+			name:       "namespaceObject labels are available (true)",
+			condition:  celCond("c", "namespaceObject.metadata.labels.env == 'prod'"),
+			attrs:      podCreateAttributes(),
+			wantResult: "True",
+		},
+		{
+			name:       "authorizer check is allowed (true)",
+			condition:  celCond("c", "authorizer.group('').resource('pods').namespace('default').check('get').allowed()"),
+			attrs:      podCreateAttributes(),
+			authz:      authorizer.AuthorizerFunc(fakeAuthorizer{defaultResult: authorizerResult{decision: authorizer.DecisionAllow}}.Authorize),
+			wantResult: "True",
+		},
 
 		// --- False evaluations ---
 		{
@@ -219,6 +248,13 @@ func TestAuthorizationConditionsEvaluator_EvaluateCondition(t *testing.T) {
 			attrs:      podCreateAttributes(),
 			wantResult: "False",
 		},
+		{
+			name:       "authorizer check is denied (false)",
+			condition:  celCond("c", "authorizer.group('').resource('pods').namespace('default').check('get').allowed()"),
+			attrs:      podCreateAttributes(),
+			authz:      authorizer.AuthorizerFunc(fakeAuthorizer{defaultResult: authorizerResult{decision: authorizer.DecisionDeny}}.Authorize),
+			wantResult: "False",
+		},
 
 		// --- Error cases ---
 		{
@@ -234,6 +270,12 @@ func TestAuthorizationConditionsEvaluator_EvaluateCondition(t *testing.T) {
 			costBudget: 1,
 			wantResult: "Error",
 		},
+		{
+			name:       "authorizer variable is undeclared without an authorizer",
+			condition:  celCond("c", "authorizer.group('').resource('pods').namespace('default').check('get').allowed()"),
+			attrs:      podCreateAttributes(),
+			wantResult: "Error",
+		},
 	}
 
 	for _, tc := range tests {
@@ -243,16 +285,73 @@ func TestAuthorizationConditionsEvaluator_EvaluateCondition(t *testing.T) {
 				budget = celconfig.RuntimeCELCostBudget
 			}
 
-			evaluator := newTestAuthorizationConditionsEvaluatorWithBudget(budget)
-			// Avoid a non-nil interface holding a nil admission.Attributes.
-			var data authorizer.ConditionsData
-			if tc.attrs != nil {
-				data = tc.attrs
+			builder := newTestAuthorizationConditionsEvaluatorBuilder(t, budget, defaultNamespace)
+			evaluator, err := builder.EvaluatorForData(t.Context(), versioned(t, tc.attrs), tc.authz)
+			if err != nil {
+				t.Fatalf("EvaluatorForData failed: %v", err)
 			}
-			result := evaluator.EvaluateCondition(t.Context(), tc.condition, data)
+			result := evaluator.EvaluateCondition(t.Context(), tc.condition)
 
 			if got := evalResultString(result); got != tc.wantResult {
 				t.Errorf("got result %s, want %s (err=%v)", got, tc.wantResult, result.Error())
+			}
+		})
+	}
+}
+
+func TestNewAuthorizationConditionsEvaluatorBuilder(t *testing.T) {
+	client := fake.NewClientset()
+	if _, err := NewAuthorizationConditionsEvaluatorBuilder(nil, client, celconfig.RuntimeCELCostBudget); err == nil {
+		t.Error("expected an error for a nil informer factory")
+	}
+	if _, err := NewAuthorizationConditionsEvaluatorBuilder(informers.NewSharedInformerFactory(client, 0), nil, celconfig.RuntimeCELCostBudget); err == nil {
+		t.Error("expected an error for a nil client")
+	}
+}
+
+func TestAuthorizationConditionsEvaluatorBuilder_EvaluatorForData(t *testing.T) {
+	tests := []struct {
+		name       string
+		data       authorizer.ConditionsData
+		namespaces []runtime.Object
+		wantErr    bool
+	}{
+		{
+			name:    "nil data",
+			data:    nil,
+			wantErr: true,
+		},
+		{
+			name:       "unversioned admission attributes",
+			data:       podCreateAttributes(),
+			namespaces: []runtime.Object{defaultNamespace},
+			wantErr:    true,
+		},
+		{
+			name:    "namespace does not exist",
+			data:    versioned(t, podCreateAttributes()),
+			wantErr: true,
+		},
+		{
+			name:       "versioned admission attributes",
+			data:       versioned(t, podCreateAttributes()),
+			namespaces: []runtime.Object{defaultNamespace},
+		},
+		{
+			name: "cluster-scoped resource needs no namespace",
+			data: versioned(t, admission.NewAttributesRecord(
+				&corev1.Namespace{TypeMeta: metav1.TypeMeta{Kind: "Namespace", APIVersion: "v1"}, ObjectMeta: metav1.ObjectMeta{Name: "new"}},
+				nil, schema.GroupVersionKind{Version: "v1", Kind: "Namespace"}, "", "new",
+				schema.GroupVersionResource{Version: "v1", Resource: "namespaces"}, "", admission.Create, &metav1.CreateOptions{}, false, nil)),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			builder := newTestAuthorizationConditionsEvaluatorBuilder(t, celconfig.RuntimeCELCostBudget, tc.namespaces...)
+			_, err := builder.EvaluatorForData(t.Context(), tc.data, nil)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("got err=%v, wantErr=%v", err, tc.wantErr)
 			}
 		})
 	}

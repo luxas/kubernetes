@@ -65,13 +65,13 @@ type celAuthorizationConditionsEvaluatorBuilder struct {
 	runtimeCELCostBudget int64
 }
 
-func (b *celAuthorizationConditionsEvaluatorBuilder) EvaluatorForData(ctx context.Context, data authorizer.ConditionsData, authz authorizer.Authorizer) (authorizer.BuiltinConditionsEvaluator, error) {
+func (b *celAuthorizationConditionsEvaluatorBuilder) EvaluatorForData(ctx context.Context, data authorizer.ConditionsData, apiServerAuthorizer authorizer.Authorizer) (authorizer.BuiltinConditionsEvaluator, error) {
 	if data == nil {
 		return nil, fmt.Errorf("programmer error: data is required")
 	}
 
 	versionedAttrs, ok := data.(*admission.VersionedAttributes)
-	if ok {
+	if !ok {
 		return nil, fmt.Errorf("in-process conditions evaluation only supported when data is of type *admission.VersionedAttributes")
 	}
 
@@ -85,7 +85,7 @@ func (b *celAuthorizationConditionsEvaluatorBuilder) EvaluatorForData(ctx contex
 	// if this activation supports composition, we will need the compositionCtx. It may be nil.
 	compositionCtx, _ := ctx.(CompositionContext)
 
-	activation, err := newActivation(compositionCtx, versionedAttrs, admissionRequest, OptionalVariableBindings{VersionedParams: nil, Authorizer: authz}, ns)
+	activation, err := newActivation(compositionCtx, versionedAttrs, admissionRequest, OptionalVariableBindings{VersionedParams: nil, Authorizer: apiServerAuthorizer}, ns)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +93,7 @@ func (b *celAuthorizationConditionsEvaluatorBuilder) EvaluatorForData(ctx contex
 	return &celAuthorizationConditionsEvaluator{
 		builder:           b,
 		activation:        activation,
-		optionalVarsDecls: OptionalVariableDeclarations{HasParams: false, HasAuthorizer: authz != nil},
+		optionalVarsDecls: OptionalVariableDeclarations{HasParams: false, HasAuthorizer: apiServerAuthorizer != nil},
 	}, nil
 }
 
@@ -142,7 +142,7 @@ func (e *celAuthorizationConditionsEvaluator) EvaluateCondition(ctx context.Cont
 		return authorizer.ConditionsEvaluationResultUnevaluatable()
 	}
 
-	compiledExpr := e.builder.compiler.CompileCELExpression(validationCondition(condStr), e.builder.optionalVarsDecls, environment.StoredExpressions)
+	compiledExpr := e.builder.compiler.CompileCELExpression(validationCondition(condStr), e.optionalVarsDecls, environment.StoredExpressions)
 
 	// if this activation supports composition, we will need the compositionCtx. It may be nil.
 	compositionCtx, _ := ctx.(CompositionContext)

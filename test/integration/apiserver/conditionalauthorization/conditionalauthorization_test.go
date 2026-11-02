@@ -32,7 +32,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/google/cel-go/cel"
+	"cel.dev/cel-go/cel"
 	"github.com/google/go-cmp/cmp"
 
 	admissionv1 "k8s.io/api/admission/v1"
@@ -374,7 +374,7 @@ authorizers:
 		// CEL-based conditional authorization tests.
 		// These test that CEL expressions flow through the SAR -> Decision -> conditions
 		// evaluation pipeline. The assertions are the same whether conditions are evaluated
-		// in-tree (k8s.io/authorization-cel) or out-of-tree (opaque type via webhook).
+		// in-tree (authorizer.kubernetes.io/cel) or out-of-tree (opaque type via webhook).
 		{
 			name: "cel allow by name pattern",
 			user: "cel-name-user",
@@ -1528,7 +1528,7 @@ func celConditionalAuthorizerVariants(fn decisionFunc) map[string]authorizer.Aut
 		"using-webhook-only": testAuthorizer(func(_ context.Context, a authorizer.Attributes) authorizer.ConditionsAwareDecision {
 			return fn(a, opaqueCELConditionType)
 		}),
-		// When the condition type is k8s.io/authorization-cel, in-tree evaluation handles it,
+		// When the condition type is authorizer.kubernetes.io/cel, in-tree evaluation handles it,
 		// and the webhook must not be called.
 		"in-process-eval-only": inProcessOnlyAuthorizer{testAuthorizer(func(_ context.Context, a authorizer.Attributes) authorizer.ConditionsAwareDecision {
 			return fn(a, builtinCELConditionType)
@@ -1544,7 +1544,7 @@ func celConditionalAuthorizerVariants(fn decisionFunc) map[string]authorizer.Aut
 }
 
 // builtinCELConditionType is the condition type evaluated in-tree by the AuthorizationConditionsEnforcer.
-const builtinCELConditionType = "k8s.io/authorization-cel"
+const builtinCELConditionType = authorizer.ConditionTypeAuthorizationCEL
 
 // unsupportedInTreePrefix makes in-tree CEL compilation fail, as the identifier is unknown.
 const unsupportedInTreePrefix = "unsupported_in_tree && "

@@ -355,9 +355,9 @@ const ConditionTypeAuthorizationCEL = "authorizer.kubernetes.io/cel"
 type BuiltinConditionsEvaluatorBuilder interface {
 	// EvaluatorForData returns a BuiltinConditionsEvaluator from the given ConditionsData,
 	// in order to initialize an evaluation environment only once.
-	// The authorizer which authored the condition is also passed in order to support
-	// compound authorization.
-	EvaluatorForData(ctx context.Context, data ConditionsData, authz Authorizer) (BuiltinConditionsEvaluator, error)
+	// apiServerAuthorizer is the API server's authorizer (not the authorizer that authored the condition), which
+	// conditions may use for compound authorization, like in ValidatingAdmissionPolicy. It may be nil.
+	EvaluatorForData(ctx context.Context, data ConditionsData, apiServerAuthorizer Authorizer) (BuiltinConditionsEvaluator, error)
 }
 
 // BuiltinConditionsEvaluator might allow in-process evaluation of a condition of a
