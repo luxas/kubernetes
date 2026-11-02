@@ -19,12 +19,14 @@ package cel
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	celgo "cel.dev/cel-go/cel"
 	celtypes "cel.dev/cel-go/common/types"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apiserver/pkg/admission"
+	admissionauthorizer "k8s.io/apiserver/pkg/admission/plugin/authorizer"
 	namespacematcher "k8s.io/apiserver/pkg/admission/plugin/webhook/predicates/namespace"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	"k8s.io/apiserver/pkg/cel/environment"
@@ -32,11 +34,23 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+var (
+	lazyAuthorizationConditionsEnvTemplateInit sync.Once
+	lazyAuthorizationConditionsEnvTemplate     *environment.EnvSet
+)
+
+func getAuthorizationConditionsEnvTemplate() *environment.EnvSet {
+	lazyAuthorizationConditionsEnvTemplateInit.Do(func() {
+		lazyAuthorizationConditionsEnvTemplate = environment.MustBaseEnvSet(environment.DefaultCompatibilityVersion())
+	})
+	return lazyAuthorizationConditionsEnvTemplate
+}
+
 // NewAuthorizationConditionsEvaluatorBuilder creates a new authorizer.BuiltinConditionsEvaluatorBuilder that can evaluate
 // authorizer.ConditionTypeAuthorizationCEL-typed conditions.
 // runtimeCELCostBudget was added for testing purpose only. Callers should always use const RuntimeCELCostBudget from k8s.io/apiserver/pkg/apis/cel/config.go as input.
 // TODO(luxas): Right now the budget is per-condition, not per-evaluator. Should we have two knobs or just that one?
-func NewAuthorizationConditionsEvaluatorBuilder(informerFactory informers.SharedInformerFactory, client kubernetes.Interface, runtimeCELCostBudget int64) (*celAuthorizationConditionsEvaluatorBuilder, error) {
+func NewAuthorizationConditionsEvaluatorBuilder(informerFactory informers.SharedInformerFactory, client kubernetes.Interface, runtimeCELCostBudget int64) (authorizer.BuiltinConditionsEvaluatorBuilder, error) {
 	if informerFactory == nil {
 		return nil, fmt.Errorf("NewAuthorizationConditionsEvaluator: informerFactory is required")
 	}
@@ -44,11 +58,8 @@ func NewAuthorizationConditionsEvaluatorBuilder(informerFactory informers.Shared
 		return nil, fmt.Errorf("NewAuthorizationConditionsEvaluator: client is required")
 	}
 
-	compositionEnvTemplateWithStrictCost := environment.MustBaseEnvSet(environment.DefaultCompatibilityVersion())
-
 	return &celAuthorizationConditionsEvaluatorBuilder{
-		compiler: NewCompiler(compositionEnvTemplateWithStrictCost),
-		// TODO: Add unit test for using the authorizer
+		compiler: NewCompiler(getAuthorizationConditionsEnvTemplate()),
 		nsmatcher: &namespacematcher.Matcher{
 			NamespaceLister: informerFactory.Core().V1().Namespaces().Lister(),
 			Client:          client,
@@ -85,7 +96,14 @@ func (b *celAuthorizationConditionsEvaluatorBuilder) EvaluatorForData(ctx contex
 	// if this activation supports composition, we will need the compositionCtx. It may be nil.
 	compositionCtx, _ := ctx.(CompositionContext)
 
-	activation, err := newActivation(compositionCtx, versionedAttrs, admissionRequest, OptionalVariableBindings{VersionedParams: nil, Authorizer: apiServerAuthorizer}, ns)
+	// Like ValidatingAdmissionPolicy, cache authorizer checks for the duration of the request, so that multiple
+	// conditions doing the same check get a consistent answer and don't each run the whole authorizer chain.
+	var authz authorizer.UnconditionalAuthorizer
+	if apiServerAuthorizer != nil {
+		authz = admissionauthorizer.NewCachingAuthorizer(apiServerAuthorizer)
+	}
+
+	activation, err := newActivation(compositionCtx, versionedAttrs, admissionRequest, OptionalVariableBindings{VersionedParams: nil, Authorizer: authz}, ns, useSchemalessTypeRef())
 	if err != nil {
 		return nil, err
 	}

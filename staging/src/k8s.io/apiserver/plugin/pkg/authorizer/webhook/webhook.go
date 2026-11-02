@@ -421,6 +421,11 @@ func (w *WebhookAuthorizer) sendSARWebhook(ctx context.Context, r *authorization
 	}
 }
 
+// EvaluateConditions receives the decision that ConditionsAwareAuthorize authored, but first evaluates as many
+// conditions as possible in-process. If not all conditions could be evaluated, the webhook receives the refined
+// decision, where conditions that evaluated to false are removed. If all Deny conditions evaluated to false, the
+// FailureDecision of the refined decision drops from Deny to NoOpinion, which is fine, as NoOpinion is then the
+// worst possible outcome.
 func (w *WebhookAuthorizer) EvaluateConditions(ctx context.Context, decisionToEvaluate authorizer.ConditionsAwareDecision, data authorizer.ConditionsData) (authorizer.Decision, string, error) {
 	if decisionToEvaluate.IsUnconditional() {
 		return decisionToEvaluate.FailureDecision(), "failed closed", fmt.Errorf("got unconditional decisionToEvaluate in EvaluateConditions")

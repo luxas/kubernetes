@@ -207,7 +207,7 @@ func (r *reloadableAuthorizerResolver) newForConfig(authzConfig *authzconfig.Aut
 						apiscel.RuntimeCELCostBudget,
 					)
 					if err != nil {
-						klog.Warningf("failed to construct in-process CEL authorization conditions evaluator: %v", err)
+						klog.Warningf("failed to construct in-process CEL authorization conditions evaluator, conditions will be evaluated by the webhook: %v", err)
 					}
 				}
 			}
