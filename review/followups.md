@@ -204,6 +204,9 @@ Also, with no ACR configured, `ConditionsAwareAuthorize` is not `FromParts(Autho
   4. When `!handlesConditional`, make `ConditionsAwareAuthorize` return `FromParts(Authorize)`.
   5. Add the equivalence and negative tests.
 
+
+> Correction (Stage 5 blind verification, 2026-11-03): the scope of "constructor-rejected responses bypass `failurePolicy`" is narrower than stated above. `ConditionsAwareAuthorize` runs `CombinedValidateSubjectAccessReviewCreate` (handwritten + declarative validation) on the webhook's status BEFORE decoding, so malformed IDs/types, oversized conditions/descriptions, more than 128 conditions in one list and duplicate IDs within one list are rejected by validation and DO follow `failurePolicy`. Only an empty map, duplicate IDs across lists and more than 128 conditions in total pass validation and reach the constructor's fail-closed rule. The fix for C1 is correspondingly small: align declarative validation with the constructor (total count, cross-list uniqueness, non-empty) or route those three constructor errors through `conditionsAwareFailureDecision`.
+
 ### R-4 Unbounded decision trees; DV vs constructor limit mismatch
 
 `MaxConditionsPerMap=128` applies per map. A Union has no width or depth limit in DV, the decoder, or the builder (`API/v1/types.go:584-593` has no `maxItems`). Decode, DV, `PossibleDecisions`, `String()` and `collectReasonsAndErrors` all recurse without bound (`encoding.go:143-147`, `AZ/conditions.go:271-286`, `AZ/conditionsunion.go:187-208`), and `Add` checks duplicates in O(n²). There is also no webhook body limit (`W:812` TODO). One bad SAR or ACR response therefore costs unbounded CPU and memory on every replica.
@@ -528,12 +531,17 @@ Between `9d011e034bf` (2026-05-08) and `0d50fdfe28b` (2026-07-28), out-of-tree `
 
 ---
 
+### R-21 `conditionsReview` with `connectionInfo.type: InClusterConfig` dereferences a nil kubeconfig path (found during Stage 5)
+
+Validation (`staging/src/k8s.io/apiserver/pkg/apis/apiserver/validation/validation.go` `ValidateConditionsReviewConfiguration`) allows `webhook.conditionsReview` with any `connectionInfo.type`; it only forbids `kubeConfigContextName` outside `KubeConfigFile`. But `pkg/kubeapiserver/authorizer/reload.go:191` unconditionally dereferences `*configuredAuthorizer.Webhook.ConnectionInfo.KubeConfigFile` to load the ACR kubeconfig, and that pointer is nil for `InClusterConfig`. Result: a nil-pointer panic at kube-apiserver startup or on config reload for an otherwise valid configuration. Severity: Important (code). Fix: either reject `conditionsReview` unless `connectionInfo.type == KubeConfigFile`, or derive the ACR client from the in-cluster config. No test covers `conditionsReview` with `InClusterConfig`. Source: Stage 5 chunk-4 rewrite agent, verified by the orchestrator on HEAD.
+
 ## PART 3: Buckets
 
 All clusters are Important, so within each bucket the order is by risk: fail-open first, then wrong-evaluator, then DoS, then audit/observability, then tests. Thread items (mostly Nit) come after the clusters.
 
 ### Must-fix-before-beta
 
+0. **R-21** `conditionsReview` + `InClusterConfig` startup panic (new; trivially fixable, blocks any in-cluster ACR deployment).
 1. **R-1** classifier holes: aggregated APIs, unsafe delete, CONNECT re-check (F-51, F-52). Fail-open once the gate is on.
 2. **R-3** `failurePolicy` bypass and asymmetry; client-triggerable via `fieldSelector==x` (F-47).
 3. **R-11** gate source mismatch (latent fail-open in exported wiring; reachable by default at beta).
