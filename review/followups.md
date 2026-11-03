@@ -303,6 +303,8 @@ The guard property that the filter, enforcer and union depend on is untested: `P
 
 ### R-8 #143024 in-process CEL: cost, compilation, deferral semantics, ACR coupling
 
+> Addendum (Lean `cel` equivalence review, 2026-11-03): both the 1M `PerCallLimit` and the 10M `runtimeCELCostBudget` are reachable in production, because cel-go charges a call's cost only after the call returns; a single `sets.intersects` over two ~3,500-element lists (cost ≈ 12M) overshoots both in one step, and neither limit bounds the CPU spent inside that call. The per-condition TODO at `authorization_conditions.go:52` is therefore live, and a per-request budget alone would not bound a single pathological call.
+
 - **Cost.** Each `EvaluateCondition` gets the full `RuntimeCELCostBudget` and discards the remainder (`CEL:52` TODO, `:168`). One map can spend 128 × 10⁷ cost units per request.
 - **Compilation.** Every call re-parses, re-checks and re-plans the expression (`CEL:163`), and compilation is outside the cost budget.
 - **Deferral.** Every builtin error, runtime or budget included, is deferred to the webhook (`W:963-972`). The ACR carries no `namespaceObject` or `authorizer` handle (`W:494-516`), so outcomes diverge by replica or skew.
