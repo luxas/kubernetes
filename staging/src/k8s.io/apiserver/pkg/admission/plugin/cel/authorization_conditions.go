@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	celgo "cel.dev/cel-go/cel"
 	celtypes "cel.dev/cel-go/common/types"
@@ -121,6 +122,8 @@ func (b *AuthorizationConditionsEvaluatorBuilder) EvaluatorForData(ctx context.C
 		return nil, err
 	}
 
+	remainingBudget := &atomic.Int64{}
+	remainingBudget.Store(b.runtimeCELCostBudget)
 	return &celAuthorizationConditionsEvaluator{
 		builder:    b,
 		activation: activation,
@@ -128,7 +131,7 @@ func (b *AuthorizationConditionsEvaluatorBuilder) EvaluatorForData(ctx context.C
 			HasParams:     false,
 			HasAuthorizer: b.apiServerAuthorizer != nil, // Written in a generic form, but in practice always true as we require it to be non-nil above.
 		},
-		remainingBudget: b.runtimeCELCostBudget,
+		remainingBudget: remainingBudget,
 	}, nil
 }
 
@@ -163,7 +166,7 @@ type celAuthorizationConditionsEvaluator struct {
 	optionalVarsDecls OptionalVariableDeclarations
 	activation        *evaluationActivation
 	// remainingBudget is negative once the budget has been exhausted.
-	remainingBudget int64
+	remainingBudget *atomic.Int64
 }
 
 func (e *celAuthorizationConditionsEvaluator) EvaluateCondition(ctx context.Context, condition authorizer.Condition) authorizer.ConditionEvaluationResult {
@@ -172,7 +175,8 @@ func (e *celAuthorizationConditionsEvaluator) EvaluateCondition(ctx context.Cont
 	}
 
 	// Like ValidatingAdmissionPolicy, don't evaluate further expressions once the budget is exhausted.
-	if e.remainingBudget < 0 {
+	budgetBefore := e.remainingBudget.Load()
+	if budgetBefore < 0 {
 		return authorizer.ConditionEvaluationResultError(&apiservercel.Error{
 			Type:   apiservercel.ErrorTypeInvalid,
 			Detail: "validation failed due to running out of cost budget, no further validation rules will be run",
@@ -186,8 +190,8 @@ func (e *celAuthorizationConditionsEvaluator) EvaluateCondition(ctx context.Cont
 	// if this activation supports composition, we will need the compositionCtx. It may be nil.
 	compositionCtx, _ := ctx.(CompositionContext)
 
-	evalResult, remainingBudget, err := e.activation.Evaluate(ctx, compositionCtx, compiledExpr, e.remainingBudget)
-	e.remainingBudget = remainingBudget
+	evalResult, budgetAfter, err := e.activation.Evaluate(ctx, compositionCtx, compiledExpr, budgetBefore)
+	e.remainingBudget.Add(budgetAfter - budgetBefore)
 	if err != nil {
 		return authorizer.ConditionEvaluationResultError(err)
 	}

@@ -363,7 +363,7 @@ func TestAuthorizationConditionsEvaluator_AggregateCostBudget(t *testing.T) {
 	if got := evalResultString(evaluator.EvaluateCondition(t.Context(), cond)); got != "True" {
 		t.Fatalf("got %s, want True", got)
 	}
-	cost := celconfig.RuntimeCELCostBudget - evaluator.(*celAuthorizationConditionsEvaluator).remainingBudget
+	cost := celconfig.RuntimeCELCostBudget - evaluator.(*celAuthorizationConditionsEvaluator).remainingBudget.Load()
 	if cost <= 0 {
 		t.Fatalf("expected a positive evaluation cost, got %d", cost)
 	}
