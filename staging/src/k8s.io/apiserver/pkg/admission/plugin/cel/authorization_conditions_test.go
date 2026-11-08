@@ -44,7 +44,7 @@ var defaultNamespace = &corev1.Namespace{
 
 // newTestAuthorizationConditionsEvaluatorBuilder serves namespaces from the fake client, as
 // the informers are never started and the namespace matcher falls back to a live GET.
-func newTestAuthorizationConditionsEvaluatorBuilder(t *testing.T, budget int64, authz authorizer.Authorizer, namespaces ...runtime.Object) authorizer.BuiltinConditionsEvaluatorBuilder {
+func newTestAuthorizationConditionsEvaluatorBuilder(t *testing.T, budget int64, authz authorizer.UnconditionalAuthorizer, namespaces ...runtime.Object) authorizer.BuiltinConditionsEvaluatorBuilder {
 	t.Helper()
 	client := fake.NewClientset(namespaces...)
 	b, err := NewAuthorizationConditionsEvaluatorBuilder(informers.NewSharedInformerFactory(client, 0), client, authz, budget)
@@ -363,7 +363,7 @@ func TestAuthorizationConditionsEvaluator_AggregateCostBudget(t *testing.T) {
 	if got := evalResultString(evaluator.EvaluateCondition(t.Context(), cond)); got != "True" {
 		t.Fatalf("got %s, want True", got)
 	}
-	cost := celconfig.RuntimeCELCostBudget - evaluator.(*celAuthorizationConditionsEvaluator).remainingBudget.Load()
+	cost := celconfig.RuntimeCELCostBudget - evaluator.(*celAuthorizationConditionsEvaluator).remainingBudget
 	if cost <= 0 {
 		t.Fatalf("expected a positive evaluation cost, got %d", cost)
 	}

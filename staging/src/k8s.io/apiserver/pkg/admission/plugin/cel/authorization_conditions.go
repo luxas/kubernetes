@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	celgo "cel.dev/cel-go/cel"
@@ -27,6 +28,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apiserver/pkg/admission"
+	admissionauthorizer "k8s.io/apiserver/pkg/admission/plugin/authorizer"
 	namespacematcher "k8s.io/apiserver/pkg/admission/plugin/webhook/predicates/namespace"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	apiservercel "k8s.io/apiserver/pkg/cel"
@@ -39,7 +41,10 @@ import (
 // authorizer.ConditionTypeAuthorizationCEL-typed conditions.
 //
 // apiServerAuthorizer is required, but can be set to nil initially, and then be lazily initialized through the SetAuthorizer function.
-// Only unconditional authorization is supported for compound authorization checks.
+// Only unconditional authorization is supported for compound authorization checks. Like ValidatingAdmissionPolicy,
+// its decisions are cached per evaluator, i.e. per request, so it must not cache across requests itself.
+//
+// The builder and the evaluators it builds are safe for concurrent use.
 //
 // runtimeCELCostBudget is shared by all conditions evaluated by one evaluator from EvaluatorForData, like the
 // per-binding budget of ValidatingAdmissionPolicy.
@@ -54,29 +59,36 @@ func NewAuthorizationConditionsEvaluatorBuilder(informerFactory informers.Shared
 		return nil, fmt.Errorf("NewAuthorizationConditionsEvaluator: client is required")
 	}
 
-	return &AuthorizationConditionsEvaluatorBuilder{
+	b := &AuthorizationConditionsEvaluatorBuilder{
 		compiler: NewCompiler(environment.MustBaseEnvSet(environment.DefaultCompatibilityVersion())),
 		nsmatcher: &namespacematcher.Matcher{
 			NamespaceLister: informerFactory.Core().V1().Namespaces().Lister(),
 			Client:          client,
 		},
-		apiServerAuthorizer:  apiServerAuthorizer,
 		runtimeCELCostBudget: runtimeCELCostBudget,
-	}, nil
+	}
+	b.SetAuthorizer(apiServerAuthorizer)
+	return b, nil
 }
 
 var _ authorizer.BuiltinConditionsEvaluatorBuilder = &AuthorizationConditionsEvaluatorBuilder{}
 
 type AuthorizationConditionsEvaluatorBuilder struct {
-	compiler             Compiler
-	nsmatcher            *namespacematcher.Matcher
-	apiServerAuthorizer  authorizer.UnconditionalAuthorizer
+	compiler  Compiler
+	nsmatcher *namespacematcher.Matcher
+	// apiServerAuthorizer is atomic, as SetAuthorizer may race with EvaluatorForData calls from in-flight requests.
+	apiServerAuthorizer  atomic.Pointer[authorizer.UnconditionalAuthorizer]
 	runtimeCELCostBudget int64
 }
 
-// SetAuthorizer updates the authorizer that is used in EvaluatorForData. It must be non-nil.
+// SetAuthorizer updates the authorizer that is used by subsequent EvaluatorForData calls.
+// Until it is set to a non-nil authorizer, EvaluatorForData fails.
 func (b *AuthorizationConditionsEvaluatorBuilder) SetAuthorizer(apiServerAuthorizer authorizer.UnconditionalAuthorizer) {
-	b.apiServerAuthorizer = apiServerAuthorizer
+	if apiServerAuthorizer == nil {
+		b.apiServerAuthorizer.Store(nil)
+		return
+	}
+	b.apiServerAuthorizer.Store(&apiServerAuthorizer)
 }
 
 // Recognizes returns true for non-empty conditions of type authorizer.ConditionTypeAuthorizationCEL.
@@ -91,7 +103,8 @@ func (b *AuthorizationConditionsEvaluatorBuilder) EvaluatorForData(ctx context.C
 		return nil, fmt.Errorf("programmer error: data is required")
 	}
 
-	if b.apiServerAuthorizer == nil {
+	apiServerAuthorizer := b.apiServerAuthorizer.Load()
+	if apiServerAuthorizer == nil {
 		return nil, fmt.Errorf("AuthorizationConditionsEvaluatorBuilder hasn't yet been initialized with SetAuthorizer")
 	}
 
@@ -115,23 +128,19 @@ func (b *AuthorizationConditionsEvaluatorBuilder) EvaluatorForData(ctx context.C
 
 	// Like ValidatingAdmissionPolicy, cache authorizer checks for the duration of the request, so that multiple
 	// conditions doing the same check get a consistent answer and don't each run the whole authorizer chain.
-	varBindings := OptionalVariableBindings{VersionedParams: nil, Authorizer: b.apiServerAuthorizer}
+	authz := admissionauthorizer.NewCachingAuthorizer(*apiServerAuthorizer)
+	varBindings := OptionalVariableBindings{VersionedParams: nil, Authorizer: authz}
 
 	activation, err := newActivation(compositionCtx, versionedAttrs, admissionRequest, varBindings, ns, useSchemalessTypeRef())
 	if err != nil {
 		return nil, err
 	}
 
-	remainingBudget := &atomic.Int64{}
-	remainingBudget.Store(b.runtimeCELCostBudget)
 	return &celAuthorizationConditionsEvaluator{
-		builder:    b,
-		activation: activation,
-		optionalVarsDecls: OptionalVariableDeclarations{
-			HasParams:     false,
-			HasAuthorizer: b.apiServerAuthorizer != nil, // Written in a generic form, but in practice always true as we require it to be non-nil above.
-		},
-		remainingBudget: remainingBudget,
+		builder:           b,
+		activation:        activation,
+		optionalVarsDecls: OptionalVariableDeclarations{HasParams: false, HasAuthorizer: true},
+		remainingBudget:   b.runtimeCELCostBudget,
 	}, nil
 }
 
@@ -160,13 +169,21 @@ func (b *AuthorizationConditionsEvaluatorBuilder) getNamespace(ctx context.Conte
 	return CreateNamespaceObject(namespace), nil
 }
 
-// celAuthorizationConditionsEvaluator is not safe for concurrent use, as it tracks the remaining cost budget.
+// celAuthorizationConditionsEvaluator is safe for concurrent use, but evaluates one condition at a time.
 type celAuthorizationConditionsEvaluator struct {
 	builder           *AuthorizationConditionsEvaluatorBuilder
 	optionalVarsDecls OptionalVariableDeclarations
-	activation        *evaluationActivation
+
+	// mu serializes evaluations, as the activation is not safe for concurrent use: its CEL values convert and cache
+	// fields lazily (e.g. k8s.io/apiserver/pkg/cel/common.SchemalessTypedToVal), and the per-request
+	// caching authorizer is a plain map. Serializing also makes the shared budget behave exactly like in VAP.
+	// TODO(luxas): If we can, it'd be nice to be able to make this faster in the future. At the very minimum, we'd like
+	// to be able to parallelize the compilation of the conditions, even if evaluation would have to stay sequential.
+	// That'd probably need some slight modifications to this interface though.
+	mu         sync.Mutex
+	activation *evaluationActivation
 	// remainingBudget is negative once the budget has been exhausted.
-	remainingBudget *atomic.Int64
+	remainingBudget int64
 }
 
 func (e *celAuthorizationConditionsEvaluator) EvaluateCondition(ctx context.Context, condition authorizer.Condition) authorizer.ConditionEvaluationResult {
@@ -174,9 +191,11 @@ func (e *celAuthorizationConditionsEvaluator) EvaluateCondition(ctx context.Cont
 		return authorizer.ConditionsEvaluationResultUnevaluatable()
 	}
 
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	// Like ValidatingAdmissionPolicy, don't evaluate further expressions once the budget is exhausted.
-	budgetBefore := e.remainingBudget.Load()
-	if budgetBefore < 0 {
+	if e.remainingBudget < 0 {
 		return authorizer.ConditionEvaluationResultError(&apiservercel.Error{
 			Type:   apiservercel.ErrorTypeInvalid,
 			Detail: "validation failed due to running out of cost budget, no further validation rules will be run",
@@ -187,11 +206,8 @@ func (e *celAuthorizationConditionsEvaluator) EvaluateCondition(ctx context.Cont
 	// TODO(luxas): Add metrics for request-aggregated authorization condition compile and evaluation (both separately).
 	compiledExpr := e.builder.compiler.CompileCELExpression(validationCondition(condition.GetCondition()), e.optionalVarsDecls, environment.StoredExpressions)
 
-	// if this activation supports composition, we will need the compositionCtx. It may be nil.
-	compositionCtx, _ := ctx.(CompositionContext)
-
-	evalResult, budgetAfter, err := e.activation.Evaluate(ctx, compositionCtx, compiledExpr, budgetBefore)
-	e.remainingBudget.Add(budgetAfter - budgetBefore)
+	evalResult, remainingBudget, err := e.activation.Evaluate(ctx, nil, compiledExpr, e.remainingBudget)
+	e.remainingBudget = remainingBudget
 	if err != nil {
 		return authorizer.ConditionEvaluationResultError(err)
 	}
