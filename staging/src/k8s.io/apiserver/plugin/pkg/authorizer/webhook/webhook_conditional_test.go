@@ -1407,7 +1407,6 @@ type fakeBuiltinConditionsEvaluatorBuilder struct {
 	results      map[string]authorizer.ConditionEvaluationResult
 	unrecognized sets.Set[string]
 	err          error
-	authz        authorizer.Authorizer
 	builds       int
 }
 
@@ -1415,9 +1414,8 @@ func (f *fakeBuiltinConditionsEvaluatorBuilder) Recognizes(condition authorizer.
 	return !f.unrecognized.Has(condition.GetID())
 }
 
-func (f *fakeBuiltinConditionsEvaluatorBuilder) EvaluatorForData(_ context.Context, _ authorizer.ConditionsData, authz authorizer.Authorizer) (authorizer.BuiltinConditionsEvaluator, error) {
+func (f *fakeBuiltinConditionsEvaluatorBuilder) EvaluatorForData(_ context.Context, _ authorizer.ConditionsData) (authorizer.BuiltinConditionsEvaluator, error) {
 	f.builds++
-	f.authz = authz
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -1430,9 +1428,6 @@ func (f *fakeBuiltinConditionsEvaluatorBuilder) EvaluateCondition(_ context.Cont
 	}
 	return authorizer.ConditionsEvaluationResultUnevaluatable()
 }
-
-// fakeRootAuthorizer is comparable by pointer, unlike authorizer.AuthorizerFunc.
-type fakeRootAuthorizer struct{ authorizer.AuthorizerFunc }
 
 func TestEvaluateConditions_Builtins(t *testing.T) {
 	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ConditionalAuthorization, true)
@@ -1513,12 +1508,7 @@ func TestEvaluateConditions_Builtins(t *testing.T) {
 				t.Fatalf("newWithBackoff failed: %v", err)
 			}
 
-			rootAuthz := &fakeRootAuthorizer{}
-			ctx, err := genericapirequest.WithConditionallyAuthorizedDecision(testCtx, rootAuthz, decision)
-			if err != nil {
-				t.Fatal(err)
-			}
-			d, _, err := wh.EvaluateConditions(ctx, decision, fakeConditionsData{})
+			d, _, err := wh.EvaluateConditions(testCtx, decision, fakeConditionsData{})
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -1527,9 +1517,6 @@ func TestEvaluateConditions_Builtins(t *testing.T) {
 			}
 			if gotNoBuild := tc.builder.builds == 0; gotNoBuild != tc.wantNoBuild {
 				t.Errorf("evaluator not built: got %v, want %v", gotNoBuild, tc.wantNoBuild)
-			}
-			if !tc.wantNoBuild && tc.builder.authz != rootAuthz {
-				t.Errorf("expected the authorizer from the request context to be passed to the builder, got %v", tc.builder.authz)
 			}
 			if gotWebhook := acr.received != nil; gotWebhook != tc.wantWebhook {
 				t.Fatalf("webhook called: got %v, want %v", gotWebhook, tc.wantWebhook)
@@ -1552,12 +1539,12 @@ func TestEvaluateConditions_Builtins(t *testing.T) {
 	}
 }
 
-func TestEvaluateConditions_BuiltinsWithoutContextAuthorizer(t *testing.T) {
+func TestEvaluateConditions_BuiltinsWithoutConditionsReviewer(t *testing.T) {
 	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ConditionalAuthorization, true)
 
-	// The builder resolves the condition, so the webhook is not called.
+	// Even though the builder could resolve the condition, a webhook without a conditions review client
+	// does not support conditional decisions, so it fails closed without building an evaluator.
 	builder := &fakeBuiltinConditionsEvaluatorBuilder{
-		authz:   &fakeRootAuthorizer{},
 		results: map[string]authorizer.ConditionEvaluationResult{"example.com/allow": authorizer.ConditionEvaluationResultBoolean(true)},
 	}
 	wh, err := newWithBackoff(&fakeSubjectAccessReviewer{}, 0, 0, testRetryBackoff,
@@ -1566,10 +1553,10 @@ func TestEvaluateConditions_BuiltinsWithoutContextAuthorizer(t *testing.T) {
 		t.Fatalf("newWithBackoff failed: %v", err)
 	}
 	decision := authorizer.ConditionsAwareDecisionConditionsMap(nil, nil, []authorizer.Condition{authorizer.GenericCondition{ID: "example.com/allow"}})
-	if d, _, err := wh.EvaluateConditions(testCtx, decision, fakeConditionsData{}); d != authorizer.DecisionAllow || err != nil {
-		t.Fatalf("got decision %s and err %v, want Allow and no error", d, err)
+	if d, _, err := wh.EvaluateConditions(testCtx, decision, fakeConditionsData{}); d != authorizer.DecisionNoOpinion || err == nil {
+		t.Fatalf("got decision %s and err %v, want NoOpinion and an error", d, err)
 	}
-	if builder.authz != nil {
-		t.Errorf("expected a nil authorizer when the request context has none, got %v", builder.authz)
+	if builder.builds != 0 {
+		t.Errorf("expected no evaluator to be built, got %d builds", builder.builds)
 	}
 }
