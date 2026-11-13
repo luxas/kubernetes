@@ -310,7 +310,7 @@ func CouldBenefitFromBuiltinEvaluation(d ConditionsAwareDecision, recognizes fun
 	case len(cm.allowConditions) != 0:
 		return recognizesAny(cm.AllowConditions(), recognizes)
 	default:
-		return false // should be unreachable, as a ConditionsMap always has at least one deny or allow condition, but to b
+		return false // should be unreachable, as a ConditionsMap has at least one deny or allow condition, but to be safe
 	}
 }
 

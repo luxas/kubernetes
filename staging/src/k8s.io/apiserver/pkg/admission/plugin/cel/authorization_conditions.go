@@ -115,15 +115,13 @@ func (b *AuthorizationConditionsEvaluatorBuilder) EvaluatorForData(ctx context.C
 		return nil, err
 	}
 
-	// if this activation supports composition, we will need the compositionCtx. It may be nil.
-	compositionCtx, _ := ctx.(CompositionContext)
-
 	// Like ValidatingAdmissionPolicy, cache authorizer checks for the duration of the request, so that multiple
 	// conditions doing the same check get a consistent answer and don't each run the whole authorizer chain.
 	authz := admissionauthorizer.NewCachingAuthorizer(apiServerAuthorizer)
 	varBindings := OptionalVariableBindings{VersionedParams: nil, Authorizer: authz}
 
-	activation, err := newActivation(compositionCtx, versionedAttrs, admissionRequest, varBindings, ns, useSchemalessTypeRef())
+	// we don't support VAP variables, so no compositionCtx is passed, it is anyways optional
+	activation, err := newActivation(nil, versionedAttrs, admissionRequest, varBindings, ns, useSchemalessTypeRef())
 	if err != nil {
 		return nil, err
 	}
@@ -193,10 +191,8 @@ func (e *celAuthorizationConditionsEvaluator) EvaluateCondition(ctx context.Cont
 	// TODO(luxas): Add metrics for request-aggregated authorization condition compile and evaluation (both separately).
 	compiledExpr := e.builder.compiler.CompileCELExpression(validationCondition(condition.GetCondition()), e.optionalVarsDecls, environment.StoredExpressions)
 
-	// if this activation supports composition, we will need the compositionCtx. It may be nil.
-	compositionCtx, _ := ctx.(CompositionContext)
-
-	evalResult, remainingBudget, err := e.activation.Evaluate(ctx, compositionCtx, compiledExpr, e.remainingBudget)
+	// we don't support VAP variables, so no compositionCtx is passed, it is anyways optional
+	evalResult, remainingBudget, err := e.activation.Evaluate(ctx, nil, compiledExpr, e.remainingBudget)
 	e.remainingBudget = remainingBudget
 	if err != nil {
 		return authorizer.ConditionEvaluationResultError(err)
